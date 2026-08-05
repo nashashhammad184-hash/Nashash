@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AI Production Studio"
+description = "A personal AI Production Studio web app with 8 studio rooms (Project Management, World Engine, Character Department, Writing Room, Directing Room, Production Room, Editing Room, Archive). Features a cinematic Netflix-style dark theme (black & red), mobile-first design, 31 digital actors, 5 cinema worlds, and an Arabic script generation engine."
+version = "1.0.0"
+id = "artifacts/studio"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18425
+
+[services.development]
+run = "pnpm --filter @workspace/studio run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/studio", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/studio/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18425"
+BASE_PATH = "/"

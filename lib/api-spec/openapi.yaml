@@ -3,20 +3,35 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: AI Production Studio API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: actors
+    description: Digital actors
+  - name: worlds
+    description: Cinema worlds
+  - name: projects
+    description: Studio projects
+  - name: scripts
+    description: Cinematic scripts
+  - name: shots
+    description: Shot lists
+  - name: tasks
+    description: Production tasks
+  - name: clips
+    description: Edit room clips
+  - name: studio
+    description: Studio statistics
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +39,855 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /actors:
+    get:
+      operationId: listActors
+      tags: [actors]
+      summary: List all digital actors
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of actors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Actor"
+
+  /worlds:
+    get:
+      operationId: listWorlds
+      tags: [worlds]
+      summary: List all cinema worlds
+      responses:
+        "200":
+          description: List of worlds
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/World"
+
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects
+      parameters:
+        - name: archived
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a project by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      summary: Update a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectPatch"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Delete a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /projects/{id}/archive:
+    patch:
+      operationId: archiveProject
+      tags: [projects]
+      summary: Toggle archive state of a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveToggle"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+
+  /projects/{id}/actors:
+    get:
+      operationId: listProjectActors
+      tags: [projects]
+      summary: List actors assigned to a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of project-actor assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectActor"
+    post:
+      operationId: assignActorToProject
+      tags: [projects]
+      summary: Assign an actor to a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectActorInput"
+      responses:
+        "201":
+          description: Assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectActor"
+
+  /projects/{id}/actors/{actorId}:
+    delete:
+      operationId: removeActorFromProject
+      tags: [projects]
+      summary: Remove actor from project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+        - name: actorId
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Removed
+        "404":
+          description: Not found
+
+  /projects/{id}/scripts:
+    get:
+      operationId: listProjectScripts
+      tags: [scripts]
+      summary: List scripts for a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of scripts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Script"
+
+  /projects/{id}/shots:
+    get:
+      operationId: listProjectShots
+      tags: [shots]
+      summary: List shots for a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of shots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Shot"
+
+  /projects/{id}/tasks:
+    get:
+      operationId: listProjectTasks
+      tags: [tasks]
+      summary: List production tasks for a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProductionTask"
+
+  /projects/{id}/clips:
+    get:
+      operationId: listProjectClips
+      tags: [clips]
+      summary: List editing clips for a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of clips
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EditClip"
+
+  /scripts/generate:
+    post:
+      operationId: generateScript
+      tags: [scripts]
+      summary: Generate a cinematic Arabic script
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScriptGenerateInput"
+      responses:
+        "201":
+          description: Generated script
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Script"
+
+  /shots:
+    post:
+      operationId: createShot
+      tags: [shots]
+      summary: Create a shot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShotInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shot"
+
+  /shots/{id}:
+    patch:
+      operationId: updateShot
+      tags: [shots]
+      summary: Update a shot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShotPatch"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shot"
+    delete:
+      operationId: deleteShot
+      tags: [shots]
+      summary: Delete a shot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted
+
+  /tasks:
+    post:
+      operationId: createTask
+      tags: [tasks]
+      summary: Create a production task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionTask"
+
+  /tasks/{id}:
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      summary: Update a production task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskPatch"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionTask"
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete a production task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted
+
+  /clips:
+    post:
+      operationId: createClip
+      tags: [clips]
+      summary: Create an editing clip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClipInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EditClip"
+
+  /clips/{id}:
+    patch:
+      operationId: updateClip
+      tags: [clips]
+      summary: Update an editing clip
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClipPatch"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EditClip"
+    delete:
+      operationId: deleteClip
+      tags: [clips]
+      summary: Delete a clip
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted
+
+  /studio/stats:
+    get:
+      operationId: getStudioStats
+      tags: [studio]
+      summary: Get overall studio statistics
+      responses:
+        "200":
+          description: Studio stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioStats"
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
 
+    Actor:
+      type: object
+      required: [id, name, type, age, style]
+      properties:
+        id:
+          type: number
+        name:
+          type: string
+        type:
+          type: string
+        age:
+          type: number
+        style:
+          type: string
+
+    World:
+      type: object
+      required: [id, nameAr, nameEn, description]
+      properties:
+        id:
+          type: string
+        nameAr:
+          type: string
+        nameEn:
+          type: string
+        description:
+          type: string
+
+    Project:
+      type: object
+      required: [id, title, worldId, status, createdAt]
+      properties:
+        id:
+          type: number
+        title:
+          type: string
+        worldId:
+          type: string
+        synopsis:
+          type: ["string", "null"]
+        status:
+          type: string
+        isArchived:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: ["string", "null"]
+
+    ProjectInput:
+      type: object
+      required: [title, worldId]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        worldId:
+          type: string
+        synopsis:
+          type: string
+
+    ProjectPatch:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+        worldId:
+          type: string
+        synopsis:
+          type: string
+        status:
+          type: string
+
+    ArchiveToggle:
+      type: object
+      required: [isArchived]
+      properties:
+        isArchived:
+          type: boolean
+
+    ProjectActor:
+      type: object
+      required: [id, projectId, actorId, roleName, createdAt]
+      properties:
+        id:
+          type: number
+        projectId:
+          type: number
+        actorId:
+          type: number
+        roleName:
+          type: string
+        roleType:
+          type: ["string", "null"]
+        actor:
+          $ref: "#/components/schemas/Actor"
+        createdAt:
+          type: string
+
+    ProjectActorInput:
+      type: object
+      required: [actorId, roleName]
+      properties:
+        actorId:
+          type: number
+        roleName:
+          type: string
+        roleType:
+          type: string
+
+    Script:
+      type: object
+      required: [id, projectId, idea, worldId, generatedContent, createdAt]
+      properties:
+        id:
+          type: number
+        projectId:
+          type: number
+        idea:
+          type: string
+        worldId:
+          type: string
+        generatedContent:
+          type: string
+        createdAt:
+          type: string
+
+    ScriptGenerateInput:
+      type: object
+      required: [projectId, idea, worldId]
+      properties:
+        projectId:
+          type: number
+        idea:
+          type: string
+          minLength: 1
+        worldId:
+          type: string
+        actors:
+          type: array
+          items:
+            type: string
+
+    Shot:
+      type: object
+      required: [id, projectId, sceneNumber, description, cameraMovement, durationSeconds, createdAt]
+      properties:
+        id:
+          type: number
+        projectId:
+          type: number
+        scriptId:
+          type: ["integer", "null"]
+        sceneNumber:
+          type: number
+        description:
+          type: string
+        cameraMovement:
+          type: string
+        durationSeconds:
+          type: number
+        dialogue:
+          type: ["string", "null"]
+        audioNote:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    ShotInput:
+      type: object
+      required: [projectId, sceneNumber, description, cameraMovement]
+      properties:
+        projectId:
+          type: number
+        scriptId:
+          type: number
+        sceneNumber:
+          type: number
+        description:
+          type: string
+        cameraMovement:
+          type: string
+        durationSeconds:
+          type: number
+        dialogue:
+          type: string
+        audioNote:
+          type: string
+
+    ShotPatch:
+      type: object
+      properties:
+        sceneNumber:
+          type: number
+        description:
+          type: string
+        cameraMovement:
+          type: string
+        durationSeconds:
+          type: number
+        dialogue:
+          type: string
+        audioNote:
+          type: string
+
+    ProductionTask:
+      type: object
+      required: [id, projectId, title, status, createdAt]
+      properties:
+        id:
+          type: number
+        projectId:
+          type: number
+        title:
+          type: string
+        status:
+          type: string
+        assignedActorId:
+          type: ["integer", "null"]
+        dueDate:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    TaskInput:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId:
+          type: number
+        title:
+          type: string
+          minLength: 1
+        status:
+          type: string
+        assignedActorId:
+          type: number
+        dueDate:
+          type: string
+
+    TaskPatch:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+        assignedActorId:
+          type: number
+        dueDate:
+          type: string
+
+    EditClip:
+      type: object
+      required: [id, projectId, title, clipOrder, createdAt]
+      properties:
+        id:
+          type: number
+        projectId:
+          type: number
+        title:
+          type: string
+        durationSeconds:
+          type: ["integer", "null"]
+        notes:
+          type: ["string", "null"]
+        clipOrder:
+          type: number
+        createdAt:
+          type: string
+
+    ClipInput:
+      type: object
+      required: [projectId, title, clipOrder]
+      properties:
+        projectId:
+          type: number
+        title:
+          type: string
+          minLength: 1
+        durationSeconds:
+          type: number
+        notes:
+          type: string
+        clipOrder:
+          type: number
+
+    ClipPatch:
+      type: object
+      properties:
+        title:
+          type: string
+        durationSeconds:
+          type: number
+        notes:
+          type: string
+        clipOrder:
+          type: number
+
+    StudioStats:
+      type: object
+      required: [totalProjects, activeProjects, archivedProjects, totalScripts, totalActors, totalShots, projectsByWorld]
+      properties:
+        totalProjects:
+          type: number
+        activeProjects:
+          type: number
+        archivedProjects:
+          type: number
+        totalScripts:
+          type: number
+        totalActors:
+          type: number
+        totalShots:
+          type: number
+        projectsByWorld:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorldCount"
+
+    WorldCount:
+      type: object
+      required: [worldId, count]
+      properties:
+        worldId:
+          type: string
+        count:
+          type: number

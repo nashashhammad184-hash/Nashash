@@ -1,0 +1,86 @@
+import { ReactNode } from "react";
+import { Link, useLocation } from "wouter";
+import { Film, Clapperboard, Users, Archive, LayoutDashboard } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+
+export function StudioLayout({ children }: { children: ReactNode }) {
+  const [location] = useLocation();
+
+  const navigation = [
+    { name: "لوحة التحكم", href: "/", icon: LayoutDashboard },
+    { name: "إدارة المشاريع", href: "/projects", icon: Film },
+    { name: "قسم الشخصيات", href: "/actors", icon: Users },
+    { name: "الأرشيف", href: "/archive", icon: Archive },
+  ];
+
+  return (
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden" dir="rtl">
+      {/* Sidebar */}
+      <aside className="w-64 flex flex-col border-l border-border bg-sidebar z-10 shrink-0">
+        <div className="h-16 flex items-center px-6 border-b border-sidebar-border shrink-0">
+          <Link href="/" className="flex items-center gap-3 text-sidebar-foreground hover:text-primary transition-colors cursor-pointer w-full">
+            <div className="bg-primary/10 p-2 rounded-md">
+              <Clapperboard className="w-5 h-5 text-primary" />
+            </div>
+            <span className="font-bold text-lg tracking-wide">ستوديو الذكاء الاصطناعي</span>
+          </Link>
+        </div>
+        
+        <ScrollArea className="flex-1 py-4">
+          <nav className="flex flex-col gap-2 px-3">
+            <div className="text-xs font-semibold text-sidebar-foreground/50 mb-2 px-3 uppercase tracking-wider">
+              الاستوديو
+            </div>
+            {navigation.map((item) => {
+              const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+              
+              return (
+                <Link key={item.name} href={item.href}>
+                  <Button
+                    variant={isActive ? "secondary" : "ghost"}
+                    className={cn(
+                      "w-full justify-start gap-3 h-11 px-3 font-medium transition-all duration-200",
+                      isActive 
+                        ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary" 
+                        : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    )}
+                  >
+                    <item.icon className={cn("w-5 h-5", isActive ? "text-primary" : "text-sidebar-foreground/50")} />
+                    {item.name}
+                  </Button>
+                </Link>
+              );
+            })}
+          </nav>
+        </ScrollArea>
+
+        <div className="p-4 border-t border-sidebar-border">
+          <div className="flex items-center gap-3 px-2">
+            <div className="w-8 h-8 rounded-full bg-sidebar-accent border border-sidebar-border flex items-center justify-center shrink-0">
+              <span className="text-xs font-bold text-sidebar-foreground">م.</span>
+            </div>
+            <div className="flex flex-col overflow-hidden">
+              <span className="text-sm font-semibold text-sidebar-foreground truncate">المخرج</span>
+              <span className="text-xs text-sidebar-foreground/50 truncate">متصل الآن</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col relative h-full overflow-hidden">
+        {/* Background ambient gradient for cinematic feel */}
+        <div className="absolute top-0 left-0 right-0 h-[30vh] bg-gradient-to-b from-primary/5 to-transparent pointer-events-none -z-10" />
+        
+        <ScrollArea className="flex-1 h-full">
+          <div className="p-6 md:p-8 w-full max-w-[1400px] mx-auto min-h-full">
+            {children}
+          </div>
+        </ScrollArea>
+      </main>
+    </div>
+  );
+}

@@ -1,0 +1,62 @@
+Please build a complete Python Flask web application for my personal **AI Production Studio**. The front-end must have a sleek, cinematic, dark-themed Netflix style (Black & Red) tailored perfectly for mobile screens.
+
+Ensure all 8 Studio Rooms are integrated as separate tabs or clearly structured sections in the user interface:
+1. Project Management (إدارة المشاريع)
+2. World Engine (محرك العالم)
+3. Character Department (قسم الشخصيات)
+4. Writing Room (غرفة الكتابة)
+5. Directing Room (غرفة الإخراج)
+6. Production Room (غرفة الإنتاج)
+7. Editing Room (غرفة المونتاج)
+8. Archive (الأرشيف)
+
+Populate the 5 Cinema Worlds in the drop-down menu selection:
+- Noir (عالم الغموض والتحقيق)
+- Sci-Fi (العالم المستقبلي)
+- History (العالم التاريخي والقديم)
+- Fantasy (العالم الأسطوري والفانتازيا)
+- Drama (العالم الواقعي والدراما الاجتماعية)
+
+Update the database inside `main.py` to include the complete list of 31 permanent digital actors exactly as follows:
+STUDIO_DATA['actors'] = [
+    # === فئة النساء ===
+    {"id": 1, "name": "ليلى (ياسمين صبري)", "type": "نساء", "age": 32, "style": "شرقية أرستقراطية"},
+    {"id": 2, "name": "قمر (هيفاء وهبي)", "type": "نساء", "age": 35, "style": "حادة وجاذبية سينمائية"},
+    {"id": 3, "name": "ديالا (أنجلينا جولي)", "type": "نساء", "age": 42, "style": "درامية قوية وعظام فك بارزة"},
+    {"id": 4, "name": "سحر (ميجان فوكس)", "type": "نساء", "age": 38, "style": "عيون ثعلبية متمردة"},
+    {"id": 5, "name": "نادين (سكارليت جوهانسون)", "type": "نساء", "age": 36, "style": "كلاسيكية مناسبة للأكشن"},
+    {"id": 6, "name": "سميرة (غابرييلي يونيون)", "type": "نساء", "age": 48, "style": "بشرة سمراء داكنة وقوية"},
+    {"id": 7, "name": "كارينا (آنا لينيكوفا)", "type": "نساء", "age": 28, "style": "أوروبية باردة وعيون زرقاء"},
+    {"id": 8, "name": "مايا (كارما آر إكس)", "type": "نساء", "age": 30, "style": "حادة مناسبة لعالم الغموض"},
+    {"id": 9, "name": "أمل (عاليا حديد)", "type": "نساء", "age": 33, "style": "شرق أوسطية غامضة"},
+    {"id": 10, "name": "ريما (ثاندي نيوتن)", "type": "نساء", "age": 46, "style": "أفرو-أوروبية ذكية ودقيقة"},
+    {"id": 11, "name": "سلمى (كاميرون دياز)", "type": "نساء", "age": 52, "style": "حيوية، غربية شقراء"},
+    {"id": 12, "name": "فرح (ميشيل هانتر)", "type": "نساء", "age": 31, "style": "عصرية مناسبة للدراما والواقعية"},
+    {"id": 13, "name": "هاندا (هاندا أرتشيل)", "type": "نساء", "age": 29, "style": "تركية جذابة وناعمة"},
+    # === فئة الرجال ===
+    {"id": 14, "name": "صقر (أرطغرل)", "type": "رجال", "age": 40, "style": "بنية عريضة، قائد تاريخي صارم"},
+    {"id": 15, "name": "منذر (منذر رياحنة)", "type": "رجال", "age": 45, "style": "ملامح بدوية حادة، عمق شرقي"},
+    {"id": 16, "name": "فارس (جيرالت من ريفيا)", "type": "رجال", "age": 39, "style": "بنية جبلية ضخمة للأساطير"},
+    {"id": 17, "name": "سيف (براد بيت)", "type": "رجال", "age": 50, "style": "وسامة كلاسيكية ورشاقة حركية"},
+    {"id": 18, "name": "حكيم (توم هانكس)", "type": "رجال", "age": 58, "style": "ملامح دافئة وقدرات درامية عالية"},
+    {"id": 19, "name": "طارق (جورج كلوني)", "type": "رجال", "age": 55, "style": "كاريزما أرستقراطية وثقة"},
+    {"id": 20, "name": "إدريس (إدريس إلبا)", "type": "رجال", "age": 48, "style": "بشرة سمراء، بنية ضخمة وصوت جهوري"},
+    {"id": 21, "name": "بوراق (بوراق أوزجيفيت)", "type": "رجال", "age": 36, "style": "تركية حادة ولحية كثيفة"},
+    {"id": 22, "name": "كريم (آصف مندفي)", "type": "رجال", "age": 42, "style": "شرق أوسطية مألوفة للتحقيق"},
+    # === فئة المراهقين ===
+    {"id": 23, "name": "زينة (سادي سينك)", "type": "مراهقين", "age": 18, "style": "شعر أحمر نمش متمردة"},
+    {"id": 24, "name": "خالد (تيموثي شالاميه)", "type": "مراهقين", "age": 19, "style": "مراهق شرقي نحيف وذكي"},
+    {"id": 25, "name": "لوران (كالب ماكلوغلين)", "type": "مراهقين", "age": 17, "style": "شاب أسمر مفعم بالحيوية"},
+    # === فئة الأطفال ===
+    {"id": 26, "name": "يوسف (طفل شرق أوسطي)", "type": "أطفال", "age": 10, "style": "بريء وذكي"},
+    {"id": 27, "name": "تالا (طفلة أفريقية)", "type": "أطفال", "age": 8, "style": "حيوية ومرحة كيرلي"},
+    {"id": 28, "name": "مراد الصغير (طفل تركي)", "type": "أطفال", "age": 11, "style": "مناسب للفلاش باك"},
+    # === فئة كبار السن ===
+    {"id": 29, "name": "باسل (مورغان فريمان)", "type": "كبار سن", "age": 75, "style": "حكيم أسمر، تجاعيد عميقة وصوت مؤثر"},
+    {"id": 30, "name": "نعمان (غسان مسعود)", "type": "كبار سن", "age": 72, "style": "ملامح تاريخية حكيمة وهيبة عربية"},
+    {"id": 31, "name": "خديجة (منى واصف)", "type": "كبار سن", "age": 68, "style": "الأم والجدة الشرقية الصارمة"}
+]
+
+Make the Script Generation Engine ('غرفة الكتابة') fully functional by embedding an advanced structured Arabic creative-writing algorithm. When I input an idea and select a world, it must output a formatted cinematic Arabic script containing: Scene Description, Camera Movements (optimized for AI: 5-second short clips, close-up shots for romance/drama to bypass merging issues), Character Dialogue, and Audio/Music cues.
+
+Configure the correct run command on host 0.0.0.0 and port 8
