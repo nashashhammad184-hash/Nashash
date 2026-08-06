@@ -15,6 +15,7 @@ export interface Actor {
   type: string;
   age: number;
   style: string;
+  imageUrl?: string | null;
 }
 
 export interface World {

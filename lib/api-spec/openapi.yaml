@@ -576,6 +576,9 @@ components:
           type: number
         style:
           type: string
+        imageUrl:
+          type: string
+          nullable: true
 
     World:
       type: object

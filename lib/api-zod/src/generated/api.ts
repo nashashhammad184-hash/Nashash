@@ -28,7 +28,8 @@ export const ListActorsResponseItem = zod.object({
   "name": zod.string(),
   "type": zod.string(),
   "age": zod.number(),
-  "style": zod.string()
+  "style": zod.string(),
+  "imageUrl": zod.string().nullish()
 })
 export const ListActorsResponse = zod.array(ListActorsResponseItem)
 
@@ -188,7 +189,8 @@ export const ListProjectActorsResponseItem = zod.object({
   "name": zod.string(),
   "type": zod.string(),
   "age": zod.number(),
-  "style": zod.string()
+  "style": zod.string(),
+  "imageUrl": zod.string().nullish()
 }).optional(),
   "createdAt": zod.string()
 })
@@ -219,7 +221,8 @@ export const AssignActorToProjectResponse = zod.object({
   "name": zod.string(),
   "type": zod.string(),
   "age": zod.number(),
-  "style": zod.string()
+  "style": zod.string(),
+  "imageUrl": zod.string().nullish()
 }).optional(),
   "createdAt": zod.string()
 })

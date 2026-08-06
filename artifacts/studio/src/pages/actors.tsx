@@ -34,8 +34,8 @@ function getTypeIcon(type: string): string {
   return icons[type] ?? "◎";
 }
 
-// Placeholder image URL using DiceBear for cinematic silhouettes
-function getPlaceholderImage(id: number, type: string): string {
+// Fallback placeholder when no real portrait is available
+function getPlaceholderImage(id: number): string {
   const seed = `actor-${id}-kayan`;
   return `https://api.dicebear.com/8.x/personas/svg?seed=${seed}&backgroundColor=0a0a0a&radius=0`;
 }

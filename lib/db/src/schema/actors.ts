@@ -8,6 +8,7 @@ export const actorsTable = pgTable("actors", {
   type: text("type").notNull(), // نساء | رجال | مراهقين | أطفال | كبار سن
   age: integer("age").notNull(),
   style: text("style").notNull(),
+  imageUrl: text("image_url"),
 });
 
 export const insertActorSchema = createInsertSchema(actorsTable).omit({ id: true });
