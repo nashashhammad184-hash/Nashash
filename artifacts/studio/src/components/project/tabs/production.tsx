@@ -1,26 +1,205 @@
 import { useState } from "react";
-import { 
+import {
   Project, useListProjectTasks, useCreateTask, useUpdateTask, useDeleteTask, useListProjectActors,
   getListProjectTasksQueryKey, getListProjectActorsQueryKey
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Plus, CheckCircle2, Circle, Trash2, Calendar, User } from "lucide-react";
+import {
+  Loader2, Plus, CheckCircle2, Circle, Trash2, Calendar, User,
+  PlayCircle, Settings, ChevronDown, ChevronUp, Eye, EyeOff, Mic2, Clapperboard
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+// ── API Config Panel ──────────────────────────────────────────────────────────
+function ApiConfigPanel() {
+  const [open, setOpen] = useState(false);
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+
+  const fields = [
+    { id: "openai",    label: "OpenAI API Key",        placeholder: "sk-..." },
+    { id: "elevenlabs",label: "ElevenLabs API Key",    placeholder: "el-..." },
+    { id: "runway",    label: "Runway / Kling API Key", placeholder: "rw-..." },
+  ];
+
+  const toggleShow = (id: string) => setShowKeys(s => ({ ...s, [id]: !s[id] }));
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-black/40 overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold text-white/70 hover:text-white/90 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <Settings className="w-4 h-4 text-primary/70" />
+          إعدادات مفاتيح API الخارجية
+          <span className="text-[10px] font-mono text-muted-foreground/50 bg-white/5 px-2 py-0.5 rounded">OpenAI · ElevenLabs · Runway</span>
+        </span>
+        {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="overflow-hidden"
+          >
+            <div className="px-5 pb-5 space-y-3 border-t border-white/5 pt-4">
+              <p className="text-xs text-muted-foreground/70 mb-4">
+                هذه المفاتيح مخزنة محلياً في جلستك فقط ولا تُرسل إلى الخادم. تُستخدم للتكامل مع خدمات توليد الفيديو والصوت.
+              </p>
+              {fields.map(f => (
+                <div key={f.id} className="space-y-1.5">
+                  <label className="text-xs font-mono text-primary/70 uppercase tracking-wider">{f.label}</label>
+                  <div className="relative">
+                    <Input
+                      type={showKeys[f.id] ? "text" : "password"}
+                      placeholder={f.placeholder}
+                      className="bg-background/40 border-white/10 pr-10 font-mono text-sm focus:border-primary/50"
+                      autoComplete="off"
+                      data-api-key={f.id}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => toggleShow(f.id)}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                    >
+                      {showKeys[f.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <Button size="sm" className="mt-2 bg-primary/20 border border-primary/40 text-primary hover:bg-primary/30 text-xs">
+                حفظ المفاتيح محلياً
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Dark HTML5 Video Player ───────────────────────────────────────────────────
+function VideoPlayerPanel({ microExpression }: { microExpression: string }) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-black/60 overflow-hidden">
+      {/* Player header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-black/40">
+        <div className="flex items-center gap-2 text-sm font-semibold text-white/80">
+          <Clapperboard className="w-4 h-4 text-primary" />
+          غرفة الإنتاج والإخراج
+        </div>
+        {microExpression && (
+          <span className="text-[10px] font-mono bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded-full">
+            {microExpression}
+          </span>
+        )}
+      </div>
+
+      {/* Viewport */}
+      <div className="relative aspect-video bg-black/80 flex items-center justify-center overflow-hidden">
+        {/* Scan-line overlay */}
+        <div
+          className="absolute inset-0 pointer-events-none opacity-10"
+          style={{
+            backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
+
+        {/* Render loading overlay */}
+        <AnimatePresence>
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10"
+            >
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+                <div className="w-10 h-10 rounded-full border-2 border-primary/20 border-b-primary animate-spin absolute inset-3" style={{ animationDirection: "reverse" }} />
+              </div>
+              <div className="text-center">
+                <p className="text-primary font-semibold text-sm">جاري توليد المشهد...</p>
+                <p className="text-muted-foreground text-xs mt-1 font-mono">Rendering via AI Engine</p>
+              </div>
+              <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-primary rounded-full"
+                  initial={{ width: "0%" }}
+                  animate={{ width: "100%" }}
+                  transition={{ duration: 4, ease: "linear" }}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Placeholder state */}
+        {!isLoading && (
+          <div className="flex flex-col items-center gap-4 text-center px-8">
+            <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+              <PlayCircle className="w-8 h-8 text-white/20" />
+            </div>
+            <div>
+              <p className="text-white/30 text-sm font-semibold">جاهز للتوليد</p>
+              <p className="text-white/15 text-xs mt-1 font-mono">Connect API keys → Generate Scene</p>
+            </div>
+          </div>
+        )}
+
+        {/* Corner watermarks */}
+        <div className="absolute top-3 right-3 text-[9px] font-mono text-white/20 select-none">
+          KAYAN AI PRODUCTIONS
+        </div>
+        <div className="absolute bottom-3 left-3 text-[9px] font-mono text-primary/30 select-none">
+          ● REC &nbsp; 00:00:00
+        </div>
+      </div>
+
+      {/* Player controls bar */}
+      <div className="flex items-center gap-3 px-4 py-3 bg-black/60 border-t border-white/5">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-8 w-8 rounded-full text-white/60 hover:text-white hover:bg-white/10"
+          onClick={() => { setIsLoading(true); setTimeout(() => setIsLoading(false), 4500); }}
+        >
+          <PlayCircle className="w-5 h-5" />
+        </Button>
+        {/* Timeline scrubber */}
+        <div className="flex-1 h-1.5 bg-white/10 rounded-full relative cursor-pointer group">
+          <div className="absolute inset-y-0 left-0 w-0 bg-primary rounded-full group-hover:w-1/4 transition-all duration-300" />
+          <div className="absolute top-1/2 left-0 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-primary scale-0 group-hover:scale-100 transition-transform" />
+        </div>
+        <span className="text-[11px] font-mono text-muted-foreground/60">00:05 / 00:05</span>
+        <Mic2 className="w-4 h-4 text-muted-foreground/40" />
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 export default function ProductionTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [assignedActorId, setAssignedActorId] = useState("unassigned");
+  const [microExpression, setMicroExpression] = useState("");
 
   const { data: tasks, isLoading } = useListProjectTasks(project.id, {
     query: { enabled: !!project.id, queryKey: getListProjectTasksQueryKey(project.id) }
   });
-  
+
   const { data: projectActors } = useListProjectActors(project.id, {
     query: { enabled: !!project.id, queryKey: getListProjectActorsQueryKey(project.id) }
   });
@@ -32,14 +211,13 @@ export default function ProductionTab({ project }: { project: Project }) {
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
-
-    createTask.mutate({ 
-      data: { 
-        projectId: project.id, 
+    createTask.mutate({
+      data: {
+        projectId: project.id,
         title,
         status: "pending",
         assignedActorId: assignedActorId !== "unassigned" ? parseInt(assignedActorId, 10) : undefined
-      } 
+      }
     }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) });
@@ -53,17 +231,13 @@ export default function ProductionTab({ project }: { project: Project }) {
   const toggleStatus = (taskId: number, currentStatus: string) => {
     const newStatus = currentStatus === "completed" ? "pending" : "completed";
     updateTask.mutate({ id: taskId, data: { status: newStatus } }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) });
-      }
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) })
     });
   };
 
   const handleDelete = (id: number) => {
     deleteTask.mutate({ id }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) });
-      }
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) })
     });
   };
 
@@ -71,18 +245,59 @@ export default function ProductionTab({ project }: { project: Project }) {
     return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
-  const getActorName = (id: number) => {
-    return projectActors?.find(pa => pa.actorId === id)?.actor?.name || "غير معروف";
-  };
+  const getActorName = (id: number) =>
+    projectActors?.find(pa => pa.actorId === id)?.actor?.name?.split("(")[0]?.trim() || "غير معروف";
 
   const completedCount = tasks?.filter(t => t.status === "completed").length || 0;
   const totalCount = tasks?.length || 0;
   const progress = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
 
+  const microExpressions = [
+    { value: "غضب_مكتوم",      label: "غضب مكتوم",           en: "Suppressed Rage" },
+    { value: "نظرة_حب_دافئة", label: "نظرة حب دافئة",       en: "Warm Loving Gaze" },
+    { value: "صدمة",            label: "صدمة",                en: "Shock" },
+    { value: "شك",              label: "شك",                  en: "Suspicion" },
+    { value: "ابتسامة_حذرة",   label: "ابتسامة حذرة",        en: "Cautious Smile" },
+  ];
+
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-4xl mx-auto">
+
+      {/* Micro-Expression + Video Player section */}
+      <div className="space-y-4">
+        {/* Micro-Expression selector */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 rounded-xl bg-card/20 border border-white/5">
+          <div className="shrink-0 space-y-0.5">
+            <p className="text-sm font-bold text-white/80">نوع التعبير الحركي</p>
+            <p className="text-xs text-muted-foreground">(Micro-Expression)</p>
+          </div>
+          <Select value={microExpression} onValueChange={setMicroExpression}>
+            <SelectTrigger className="flex-1 h-11 bg-background/50 border-white/10 focus:border-primary/50">
+              <SelectValue placeholder="اختر نوع التعبير الوجهي للمشهد..." />
+            </SelectTrigger>
+            <SelectContent>
+              {microExpressions.map(expr => (
+                <SelectItem key={expr.value} value={expr.value}>
+                  <span>{expr.label}</span>
+                  <span className="mr-2 text-xs text-muted-foreground font-mono">— {expr.en}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Video Player */}
+        <VideoPlayerPanel microExpression={
+          microExpressions.find(e => e.value === microExpression)?.label ?? ""
+        } />
+
+        {/* API Config */}
+        <ApiConfigPanel />
+      </div>
+
+      {/* Progress card */}
       <div className="bg-card/20 p-6 rounded-xl border border-white/5 space-y-4">
-        <div className="flex justify-between items-end mb-2">
+        <div className="flex justify-between items-end">
           <div>
             <h2 className="text-2xl font-bold">مهام الإنتاج</h2>
             <p className="text-muted-foreground mt-1">قائمة المراجعة لضمان جاهزية كل شيء.</p>
@@ -92,24 +307,27 @@ export default function ProductionTab({ project }: { project: Project }) {
             <div className="text-xs text-muted-foreground">مكتمل</div>
           </div>
         </div>
-        
         <div className="w-full h-2 bg-background rounded-full overflow-hidden">
-          <motion.div 
+          <motion.div
             className="h-full bg-primary"
             initial={{ width: 0 }}
             animate={{ width: `${progress}%` }}
             transition={{ duration: 0.5 }}
           />
         </div>
+        <div className="text-xs text-muted-foreground font-mono">
+          {completedCount} / {totalCount} مهمة مكتملة
+        </div>
       </div>
 
+      {/* Task list */}
       <Card className="bg-card/40 border-white/5 overflow-hidden">
         <CardContent className="p-0">
           <form onSubmit={handleAdd} className="flex flex-col md:flex-row gap-3 p-4 border-b border-white/10 bg-black/20">
-            <Input 
-              value={title} 
-              onChange={e => setTitle(e.target.value)} 
-              placeholder="إضافة مهمة جديدة..." 
+            <Input
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="إضافة مهمة جديدة..."
               className="flex-1 bg-background/50 border-white/10 h-12"
             />
             <Select value={assignedActorId} onValueChange={setAssignedActorId}>
@@ -120,7 +338,7 @@ export default function ProductionTab({ project }: { project: Project }) {
                 <SelectItem value="unassigned">غير مكلف بممثل</SelectItem>
                 {projectActors?.map(pa => (
                   <SelectItem key={pa.actorId} value={pa.actorId.toString()}>
-                    {pa.actor?.name} ({pa.roleName})
+                    {pa.actor?.name?.split("(")[0]?.trim()} ({pa.roleName})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -140,11 +358,9 @@ export default function ProductionTab({ project }: { project: Project }) {
                 <div key={task.id} className="flex items-center justify-between p-4 border-b border-white/5 hover:bg-white/5 transition-colors group">
                   <div className="flex items-center gap-4 flex-1">
                     <button onClick={() => toggleStatus(task.id, task.status)} className="shrink-0 transition-transform hover:scale-110">
-                      {task.status === "completed" ? (
-                        <CheckCircle2 className="w-6 h-6 text-primary" />
-                      ) : (
-                        <Circle className="w-6 h-6 text-muted-foreground" />
-                      )}
+                      {task.status === "completed"
+                        ? <CheckCircle2 className="w-6 h-6 text-primary" />
+                        : <Circle className="w-6 h-6 text-muted-foreground" />}
                     </button>
                     <div className={`flex-1 transition-all ${task.status === "completed" ? "opacity-50 line-through" : ""}`}>
                       <p className="text-lg font-medium text-white/90">{task.title}</p>
@@ -155,15 +371,14 @@ export default function ProductionTab({ project }: { project: Project }) {
                       )}
                     </div>
                   </div>
-                  
                   <div className="flex items-center gap-4">
                     {task.dueDate && (
                       <span className="text-xs text-muted-foreground flex items-center gap-1 bg-white/5 px-2 py-1 rounded">
                         <Calendar className="w-3 h-3" /> {new Date(task.dueDate).toLocaleDateString()}
                       </span>
                     )}
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="icon"
                       className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
                       onClick={() => handleDelete(task.id)}

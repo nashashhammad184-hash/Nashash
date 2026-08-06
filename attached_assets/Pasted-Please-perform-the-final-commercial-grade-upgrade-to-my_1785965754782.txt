@@ -1,0 +1,19 @@
+Please perform the final commercial-grade upgrade to my live AI Production Studio. Update `main.py` and modify the interface with these exact capabilities tailored for my official company "Kayan AI Productions":
+
+1. CHARACTER DEPARTMENT CARDS (قسم الشخصيات):
+- Redesign this section to display all 31 actors as beautiful interactive cinematic cards inside a responsive grid layout. Each card must include an `<img>` placeholder tagged with `STUDIO_DATA['actors'][id]['image_url']` (set with valid placeholder image paths for now), displaying their studio name, real-world reference name, and performance style elegantly underneath. 
+- IMPORTANT: You MUST keep and preserve the full database array of all 31 permanent digital actors with their specific Arabic names and attributes unchanged in the Python backend.
+
+2. VIDEO & AUDIO ROOM ENGINE (غرفة الإنتاج والإخراج):
+- In 'غرفة الإنتاج', embed a sleek dark HTML5 video player layout component with custom loading/rendering CSS overlays.
+- Add secure hidden configuration inputs for external API keys (OpenAI, ElevenLabs, and Runway/Kling).
+- Update the UI to include a new dropdown for Micro-Expressions (نوع التعبير الحركي) with options: [غضب مكتوم، نظرة حب دافئة، صدمة، شك، ابتسامة حذرة].
+
+3. PRODUCTION BRANDING & DUAL-LANGUAGE SUBTITLES (العلامة التجارية والترجمة):
+- In 'غرفة المونتاج', add logic to automatically burn a transparent overlay watermark stating "Produced by Kayan AI Productions" onto the top corner of the generated mockup clip area.
+- Modify the structured Arabic script engine so that when generating an Arabic cinematic script, it automatically generates a synchronized English translation container below it for English Subtitles (الترجمة المدمجة).
+
+4. AUDIO & MUSIC API WORKFLOW (محرك الصوت والموسيقى):
+- Integrate sound logic hooks inside the script generator. When a scene prompt is parsed, it must automatically inject dynamic tags for: Backing Scores (الموسيقى التصويرية) from Udio/Suno style prompts, and Ambient Environmental SFX (المؤثرات الصوتية المحيطية مثل صوت المطر، خطوات الأقدام) based on the chosen World Engine.
+
+Please update the architecture, ensure the root route ('/') serves the web layout correctly, test all routing parameters on host 0.0.0.0 and port 8080, and redeploy/republish the updated application code automatically.
