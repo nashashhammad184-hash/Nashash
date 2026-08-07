@@ -31,17 +31,32 @@ function isVideoUrl(value: string): boolean {
   }
 }
 
-function findVideoUrl(value: unknown, depth = 0): string | undefined {
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function findVideoUrl(
+  value: unknown,
+  depth = 0,
+  allowSignedVideoUrl = false,
+): string | undefined {
   if (depth > 5 || value === null || value === undefined) return undefined;
 
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return isVideoUrl(trimmed) ? trimmed : undefined;
+    return (allowSignedVideoUrl ? isHttpUrl(trimmed) : isVideoUrl(trimmed))
+      ? trimmed
+      : undefined;
   }
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      const found = findVideoUrl(item, depth + 1);
+      const found = findVideoUrl(item, depth + 1, allowSignedVideoUrl);
       if (found) return found;
     }
     return undefined;
@@ -63,7 +78,16 @@ function findVideoUrl(value: unknown, depth = 0): string | undefined {
   );
   if (explicit && isVideoUrl(explicit)) return explicit;
 
-  for (const child of Object.values(record)) {
+  // Runway/Kling-style providers commonly return signed CDN URLs without an
+  // .mp4 suffix (for example, a long query-string URL) under output/result.
+  // Only trust these flexible fields, never arbitrary status URLs.
+  for (const key of ["output", "video", "result", "data"]) {
+    const found = findVideoUrl(record[key], depth + 1, true);
+    if (found) return found;
+  }
+
+  for (const [key, child] of Object.entries(record)) {
+    if (["output", "video", "result", "data"].includes(key)) continue;
     const found = findVideoUrl(child, depth + 1);
     if (found) return found;
   }

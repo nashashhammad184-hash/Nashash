@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Project, useListProjectTasks, useCreateTask, useUpdateTask, useDeleteTask, useListProjectActors,
   getListProjectTasksQueryKey, getListProjectActorsQueryKey, useGenerateVideo
@@ -99,7 +99,19 @@ function VideoPlayerPanel({
 }) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const generateVideo = useGenerateVideo();
+
+  useEffect(() => {
+    if (!videoUrl || !videoRef.current) return;
+
+    // Muted autoplay is allowed by browsers; the user can enable audio from
+    // the native controls after the completed MP4 is visible.
+    videoRef.current.load();
+    void videoRef.current.play().catch(() => {
+      // Autoplay may be blocked by browser policy. Controls remain available.
+    });
+  }, [videoUrl]);
 
   const handleGenerate = () => {
     setVideoUrl(null);
@@ -184,11 +196,20 @@ function VideoPlayerPanel({
         {videoUrl && !generateVideo.isPending && (
           <video
             key={videoUrl}
+            ref={videoRef}
             className="absolute inset-0 h-full w-full object-contain bg-black"
             src={videoUrl}
             controls
+            autoPlay
+            muted
             playsInline
-            preload="metadata"
+            preload="auto"
+            onLoadedData={() => setVideoError(null)}
+            onCanPlay={() => {
+              void videoRef.current?.play().catch(() => {
+                // The native play control remains available if autoplay is blocked.
+              });
+            }}
             onError={() => {
               setVideoUrl(null);
               setVideoError("تعذر تشغيل ملف MP4 الذي أعاده محرك الفيديو.");
