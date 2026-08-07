@@ -369,6 +369,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/Script"
 
+  /video/generate:
+    post:
+      operationId: generateVideo
+      tags: [studio]
+      summary: Generate a cinematic MP4 clip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoGenerateInput"
+      responses:
+        "200":
+          description: Completed video URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoGenerateResponse"
+        "502":
+          description: Video provider failed or timed out
+
   /shots:
     post:
       operationId: createShot
@@ -708,6 +729,35 @@ components:
           type: array
           items:
             type: string
+
+    VideoGenerateInput:
+      type: object
+      required: [projectId, prompt, worldId]
+      properties:
+        projectId:
+          type: number
+        prompt:
+          type: string
+          minLength: 1
+        worldId:
+          type: string
+        microExpression:
+          type: string
+
+    VideoGenerateResponse:
+      type: object
+      required: [videoUrl, status, provider]
+      properties:
+        videoUrl:
+          type: string
+        status:
+          type: string
+          enum: [completed]
+        provider:
+          type: string
+        jobId:
+          type: string
+          nullable: true
 
     Shot:
       type: object

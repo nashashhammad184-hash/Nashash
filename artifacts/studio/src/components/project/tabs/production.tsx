@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Project, useListProjectTasks, useCreateTask, useUpdateTask, useDeleteTask, useListProjectActors,
-  getListProjectTasksQueryKey, getListProjectActorsQueryKey
+  getListProjectTasksQueryKey, getListProjectActorsQueryKey, useGenerateVideo
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,8 +88,50 @@ function ApiConfigPanel() {
 }
 
 // ── Dark HTML5 Video Player ───────────────────────────────────────────────────
-function VideoPlayerPanel({ microExpression }: { microExpression: string }) {
-  const [isLoading, setIsLoading] = useState(false);
+function VideoPlayerPanel({
+  project,
+  microExpression,
+  prompt,
+}: {
+  project: Project;
+  microExpression: string;
+  prompt: string;
+}) {
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const generateVideo = useGenerateVideo();
+
+  const handleGenerate = () => {
+    setVideoUrl(null);
+    setVideoError(null);
+    generateVideo.mutate(
+      {
+        data: {
+          projectId: project.id,
+          prompt: prompt.trim() || `مشهد سينمائي من مشروع ${project.title}`,
+          worldId: project.worldId,
+          microExpression: microExpression || undefined,
+        },
+      },
+      {
+        onSuccess: (result) => {
+          if (!result.videoUrl) {
+            setVideoError("لم يُرجع محرك الفيديو رابط MP4 صالحاً.");
+            return;
+          }
+          setVideoUrl(result.videoUrl);
+          toast.success("اكتمل توليد الفيديو — يمكنك تشغيله الآن");
+        },
+        onError: (error) => {
+          setVideoError(
+            error instanceof Error
+              ? error.message
+              : "تعذر الاتصال بمحرك الفيديو. حاول مرة أخرى.",
+          );
+        },
+      },
+    );
+  };
 
   return (
     <div className="rounded-xl border border-white/8 bg-black/60 overflow-hidden">
@@ -116,9 +158,9 @@ function VideoPlayerPanel({ microExpression }: { microExpression: string }) {
           }}
         />
 
-        {/* Render loading overlay */}
+        {/* Render loading overlay: this is tied to the real mutation, not a timer */}
         <AnimatePresence>
-          {isLoading && (
+          {generateVideo.isPending && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -131,29 +173,46 @@ function VideoPlayerPanel({ microExpression }: { microExpression: string }) {
               </div>
               <div className="text-center">
                 <p className="text-primary font-semibold text-sm">جاري توليد المشهد...</p>
-                <p className="text-muted-foreground text-xs mt-1 font-mono">Rendering via AI Engine</p>
-              </div>
-              <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden">
-                <motion.div
-                  className="h-full bg-primary rounded-full"
-                  initial={{ width: "0%" }}
-                  animate={{ width: "100%" }}
-                  transition={{ duration: 4, ease: "linear" }}
-                />
+                <p className="text-muted-foreground text-xs mt-1 font-mono">Waiting for completed MP4</p>
+                <p className="text-muted-foreground/60 text-[10px] mt-2">لن يبقى الطلب في حلقة لا نهائية</p>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Placeholder state */}
-        {!isLoading && (
+        {/* Completed video: only mount after the server returns a URL */}
+        {videoUrl && !generateVideo.isPending && (
+          <video
+            key={videoUrl}
+            className="absolute inset-0 h-full w-full object-contain bg-black"
+            src={videoUrl}
+            controls
+            playsInline
+            preload="metadata"
+            onError={() => {
+              setVideoUrl(null);
+              setVideoError("تعذر تشغيل ملف MP4 الذي أعاده محرك الفيديو.");
+            }}
+          />
+        )}
+
+        {/* Empty / error state */}
+        {!videoUrl && !generateVideo.isPending && (
           <div className="flex flex-col items-center gap-4 text-center px-8">
             <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-              <PlayCircle className="w-8 h-8 text-white/20" />
+              {videoError ? (
+                <span className="text-primary text-2xl">!</span>
+              ) : (
+                <PlayCircle className="w-8 h-8 text-white/20" />
+              )}
             </div>
             <div>
-              <p className="text-white/30 text-sm font-semibold">جاهز للتوليد</p>
-              <p className="text-white/15 text-xs mt-1 font-mono">Connect API keys → Generate Scene</p>
+              <p className={videoError ? "text-primary/80 text-sm font-semibold" : "text-white/30 text-sm font-semibold"}>
+                {videoError ? "فشل تشغيل الفيديو" : "جاهز للتوليد"}
+              </p>
+              <p className="text-white/15 text-xs mt-1 font-mono">
+                {videoError ?? "اضغط توليد الفيديو لبدء المشهد"}
+              </p>
             </div>
           </div>
         )}
@@ -170,19 +229,27 @@ function VideoPlayerPanel({ microExpression }: { microExpression: string }) {
       {/* Player controls bar */}
       <div className="flex items-center gap-3 px-4 py-3 bg-black/60 border-t border-white/5">
         <Button
-          size="icon"
+          size="sm"
           variant="ghost"
-          className="h-8 w-8 rounded-full text-white/60 hover:text-white hover:bg-white/10"
-          onClick={() => { setIsLoading(true); setTimeout(() => setIsLoading(false), 4500); }}
+          className="h-8 gap-2 text-white/60 hover:text-white hover:bg-white/10"
+          onClick={handleGenerate}
+          disabled={generateVideo.isPending}
         >
-          <PlayCircle className="w-5 h-5" />
+          {generateVideo.isPending ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <PlayCircle className="w-4 h-4" />
+          )}
+          {generateVideo.isPending ? "جاري التوليد" : "توليد الفيديو"}
         </Button>
         {/* Timeline scrubber */}
         <div className="flex-1 h-1.5 bg-white/10 rounded-full relative cursor-pointer group">
           <div className="absolute inset-y-0 left-0 w-0 bg-primary rounded-full group-hover:w-1/4 transition-all duration-300" />
           <div className="absolute top-1/2 left-0 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-primary scale-0 group-hover:scale-100 transition-transform" />
         </div>
-        <span className="text-[11px] font-mono text-muted-foreground/60">00:05 / 00:05</span>
+        <span className="text-[11px] font-mono text-muted-foreground/60">
+          {videoUrl ? "MP4 READY" : "00:00 / 00:05"}
+        </span>
         <Mic2 className="w-4 h-4 text-muted-foreground/40" />
       </div>
     </div>
@@ -195,6 +262,7 @@ export default function ProductionTab({ project }: { project: Project }) {
   const [title, setTitle] = useState("");
   const [assignedActorId, setAssignedActorId] = useState("unassigned");
   const [microExpression, setMicroExpression] = useState("");
+  const [scenePrompt, setScenePrompt] = useState("");
 
   const { data: tasks, isLoading } = useListProjectTasks(project.id, {
     query: { enabled: !!project.id, queryKey: getListProjectTasksQueryKey(project.id) }
@@ -286,10 +354,19 @@ export default function ProductionTab({ project }: { project: Project }) {
           </Select>
         </div>
 
-        {/* Video Player */}
+        {/* Scene prompt + Video Player */}
+        <div className="rounded-xl border border-white/8 bg-card/20 p-4 space-y-2">
+          <label className="text-sm font-semibold text-white/80">وصف المشهد المراد توليده</label>
+          <Input
+            value={scenePrompt}
+            onChange={(event) => setScenePrompt(event.target.value)}
+            placeholder={`مشهد سينمائي من مشروع ${project.title}...`}
+            className="h-11 bg-background/50 border-white/10"
+          />
+        </div>
         <VideoPlayerPanel microExpression={
           microExpressions.find(e => e.value === microExpression)?.label ?? ""
-        } />
+        } project={project} prompt={scenePrompt} />
 
         {/* API Config */}
         <ApiConfigPanel />

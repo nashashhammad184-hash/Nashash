@@ -1,2 +1,3 @@
 - [Orval Zod v3 codegen fix](orval-zod-fix.md) — after every codegen run, must sed `zod.int()` → `zod.number()` on generated Zod schemas.
 - [Script engine separator](script-engine.md) — English subtitle block appended after `---ENGLISH_SUBTITLES---` sentinel; writing.tsx splits on it.
+- [Video generation lifecycle](video-generation.md) — video UI calls one bounded server job; only mount the native player after a validated completed MP4 URL.

@@ -28,5 +28,8 @@ export * from './shotPatch';
 export * from './studioStats';
 export * from './taskInput';
 export * from './taskPatch';
+export * from './videoGenerateInput';
+export * from './videoGenerateResponse';
+export * from './videoGenerateResponseStatus';
 export * from './world';
 export * from './worldCount';

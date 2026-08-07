@@ -91,6 +91,28 @@ export interface ScriptGenerateInput {
   actors?: string[];
 }
 
+export interface VideoGenerateInput {
+  projectId: number;
+  /** @minLength 1 */
+  prompt: string;
+  worldId: string;
+  microExpression?: string;
+}
+
+export type VideoGenerateResponseStatus = typeof VideoGenerateResponseStatus[keyof typeof VideoGenerateResponseStatus];
+
+
+export const VideoGenerateResponseStatus = {
+  completed: 'completed',
+} as const;
+
+export interface VideoGenerateResponse {
+  videoUrl: string;
+  status: VideoGenerateResponseStatus;
+  provider: string;
+  jobId?: string | null;
+}
+
 export interface Shot {
   id: number;
   projectId: number;

@@ -341,6 +341,27 @@ export const GenerateScriptResponse = zod.object({
 
 
 /**
+ * @summary Generate a cinematic MP4 clip
+ */
+
+
+
+export const GenerateVideoBody = zod.object({
+  "projectId": zod.number(),
+  "prompt": zod.string().min(1),
+  "worldId": zod.string(),
+  "microExpression": zod.string().optional()
+})
+
+export const GenerateVideoResponse = zod.object({
+  "videoUrl": zod.string(),
+  "status": zod.enum(['completed']),
+  "provider": zod.string(),
+  "jobId": zod.string().nullish()
+})
+
+
+/**
  * @summary Create a shot
  */
 export const CreateShotBody = zod.object({

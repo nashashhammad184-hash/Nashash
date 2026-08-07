@@ -1,0 +1,46 @@
+Please perform the final professional-grade database and layout injection to my live AI Production Studio for "Kayan AI Productions". Update `main.py` to synchronize the exact direct image URLs for the core casting database as verified:
+
+STUDIO_DATA['actors'] = [
+    # === فئة النساء ===
+    {"id": 1, "name": "ليلى (ياسمين صبري)", "type": "نساء", "age": 32, "style": "شرقية أرستقراطية", "image_url": "https://ibb.co"},
+    {"id": 2, "name": "قمر (هيفاء وهبي)", "type": "نساء", "age": 35, "style": "حادة وجاذبية سينمائية", "image_url": "https://ibb.co"},
+    {"id": 3, "name": "ديالا (أنجلينا جولي)", "type": "نساء", "age": 42, "style": "درامية قوية وعظام فك بارزة", "image_url": "https://ibb.co"},
+    {"id": 4, "name": "سحر (ميجان فوكس)", "type": "نساء", "age": 38, "style": "عيون ثعلبية متمردة", "image_url": "https://ibb.co"},
+    {"id": 5, "name": "نادين (سكارليت جوهانسون)", "type": "نساء", "age": 36, "style": "كلاسيكية مناسبة للأكشن", "image_url": "https://ibb.co"},
+    {"id": 6, "name": "سميرة (غابرييلي يونيون)", "type": "نساء", "age": 48, "style": "بشرة سمراء داكنة وقوية", "image_url": "https://ibb.co"},
+    {"id": 7, "name": "كارينا (آنا لينيكوفا)", "type": "نساء", "age": 28, "style": "أوروبية باردة وعيون زرقاء", "image_url": "https://ibb.co"},
+    {"id": 8, "name": "مايا (كارما آر إكس)", "type": "نساء", "age": 30, "style": "حادة مناسبة لعالم الغموض", "image_url": "https://ibb.co"},
+    {"id": 9, "name": "أمل (عاليا حديد)", "type": "نساء", "age": 33, "style": "شرق أوسطية غامضة", "image_url": "https://ibb.co"},
+    {"id": 10, "name": "ريما (ثاندي نيوتن)", "type": "نساء", "age": 46, "style": "أفرو-أوروبية ذكية ودقيقة", "image_url": "https://ibb.co"},
+    {"id": 11, "name": "سلمى (كاميرون دياز)", "type": "نساء", "age": 52, "style": "حيوية، غربية شقراء", "image_url": "https://ibb.co"},
+    {"id": 12, "name": "فرح (ميشيل هانتر)", "type": "نساء", "age": 31, "style": "عصرية مناسبة للدراما والواقعية", "image_url": "https://ibb.co"},
+    {"id": 13, "name": "هاندا (هاندا أرتشيل)", "type": "نساء", "age": 29, "style": "تركية جذابة وناعمة", "image_url": "https://ibb.co"},
+
+    # === فئة الرجال ===
+    {"id": 14, "name": "صقر (أرطغرل)", "type": "رجال", "age": 40, "style": "بنية عريضة، قائد تاريخي صارم", "image_url": "https://ibb.co"},
+    {"id": 15, "name": "منذر (منذر رياحنة)", "type": "رجال", "age": 45, "style": "ملامح بدوية حادة، عمق شرقي", "image_url": "https://ibb.co"},
+    {"id": 16, "name": "فارس (جيرالت من ريفيا)", "type": "رجال", "age": 39, "style": "بنية جبلية ضخمة للأساطير", "image_url": "https://ibb.co"},
+    {"id": 17, "name": "سيف (براد بيت)", "type": "رجال", "age": 50, "style": "وسامة كلاسيكية ورشاقة حركية", "image_url": "https://ibb.co"},
+    {"id": 18, "name": "حكيم (توم هانكس)", "type": "رجال", "age": 58, "style": "ملامح دافئة وقدرات درامية عالية", "image_url": "https://ibb.co"},
+    {"id": 19, "name": "طارق (جورج كلوني)", "type": "رجال", "age": 55, "style": "كاريزما أرستقراطية وثقة", "image_url": "https://ibb.co"},
+    {"id": 20, "name": "إدريس (إدريس إلبا)", "type": "رجال", "age": 48, "style": "بشرة سمراء، بنية ضخمة وصوت جهوري", "image_url": "https://ibb.co"},
+    {"id": 21, "name": "بوراق (بوراق أوزجيفيت)", "type": "رجال", "age": 36, "style": "تركية حادة ولحية كثيفة", "image_url": "https://ibb.co"},
+    {"id": 22, "name": "كريم (آصف مندفي)", "type": "رجال", "age": 42, "style": "شرق أوسطية مألوفة للتحقيق", "image_url": "https://ibb.co"},
+
+    # === فئة المراهقين والأطفال وكبار السن ===
+    {"id": 23, "name": "زينة (سادي سينك)", "type": "مراهقين", "age": 18, "style": "شعر أحمر نمش متمردة", "image_url": "https://ibb.co"},
+    {"id": 24, "name": "خالد (تيموثي شالاميه)", "type": "مراهقين", "age": 19, "style": "مراهق شرقي نحيف وذكي", "image_url": "https://ibb.co"},
+    {"id": 25, "name": "لوران (كالب ماكلوغلين)", "type": "مراهقين", "age": 17, "style": "شاب أسمر مفعم بالحيوية", "image_url": "https://ibb.co"},
+    {"id": 26, "name": "يوسف (طفل شرق أوسطي)", "type": "أطفال", "age": 10, "style": "بريء وذكي", "image_url": "https://ibb.co"},
+    {"id": 27, "name": "تالا (طفلة أفريقية)", "type": "أطفال", "age": 8, "style": "حيوية ومرحة كيرلي", "image_url": ""},
+    {"id": 28, "name": "مراد الصغير (طفل تركي)", "type": "أطفال", "age": 11, "style": "مناسب للفلاش باك", "image_url": ""},
+    {"id": 29, "name": "باسل (مورغان فريمان)", "type": "كبار سن", "age": 75, "style": "حكيم أسمر، تجاعيد عميقة وصوت مؤثر", "image_url": ""},
+    {"id": 30, "name": "نعمان (غسان مسعود)", "type": "كبار سن", "age": 72, "style": "ملامح تاريخية حكيمة وهيبة عربية", "image_url": "https://ibb.co"},
+    {"id": 31, "name": "خديجة (منى واصف)", "type": "كبار سن", "age": 68, "style": "الأم والجدة الشرقية الصارمة", "image_url": "https://ibb.co"}
+]
+
+Please update the grid layout in the HTML interface under 'قسم الشخصيات' to properly fetch and render these specific `.png` and `.jpg` image sources inside the cards.
+
+Also, complete the core engine components for Kayan AI Productions:
+1. In 'غرفة الإنتاج', embed the HTML5 Cinematic Video Player.
+2. In 'غرف

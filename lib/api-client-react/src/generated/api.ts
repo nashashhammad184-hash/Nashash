@@ -42,6 +42,8 @@ import type {
   StudioStats,
   TaskInput,
   TaskPatch,
+  VideoGenerateInput,
+  VideoGenerateResponse,
   World
 } from './api.schemas';
 
@@ -1356,6 +1358,77 @@ export const useGenerateScript = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getGenerateScriptMutationOptions(options));
+    }
+
+export const getGenerateVideoUrl = () => {
+
+
+
+
+  return `/api/video/generate`
+}
+
+/**
+ * @summary Generate a cinematic MP4 clip
+ */
+export const generateVideo = async (videoGenerateInput: VideoGenerateInput, options?: Parameters<typeof customFetch>[1]): Promise<VideoGenerateResponse> => {
+
+  return customFetch<VideoGenerateResponse>(getGenerateVideoUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(videoGenerateInput)
+  }
+);}
+
+
+
+
+
+export const getGenerateVideoMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateVideo>>, TError,{data: BodyType<VideoGenerateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof generateVideo>>, TError,{data: BodyType<VideoGenerateInput>}, TContext> => {
+
+const mutationKey = ['generateVideo'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof generateVideo>>, {data: BodyType<VideoGenerateInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  generateVideo(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GenerateVideoMutationResult = NonNullable<Awaited<ReturnType<typeof generateVideo>>>
+    export type GenerateVideoMutationBody = BodyType<VideoGenerateInput>
+    export type GenerateVideoMutationError = ErrorType<void>
+
+    /**
+ * @summary Generate a cinematic MP4 clip
+ */
+export const useGenerateVideo = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateVideo>>, TError,{data: BodyType<VideoGenerateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof generateVideo>>,
+        TError,
+        {data: BodyType<VideoGenerateInput>},
+        TContext
+      > => {
+      return useMutation(getGenerateVideoMutationOptions(options));
     }
 
 export const getCreateShotUrl = () => {

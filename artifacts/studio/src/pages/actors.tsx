@@ -114,7 +114,7 @@ export default function Actors() {
           {actors?.map((actor, idx) => {
             const { studioName, referenceName } = parseActorName(actor.name);
             const gradient = getActorGradient(actor.type, actor.id);
-            const imageUrl = getPlaceholderImage(actor.id, actor.type);
+            const imageUrl = getPlaceholderImage(actor.id);
 
             return (
               <motion.div

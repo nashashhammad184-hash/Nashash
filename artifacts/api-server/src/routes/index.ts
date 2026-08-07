@@ -8,6 +8,7 @@ import shotsRouter from "./shots";
 import tasksRouter from "./tasks";
 import clipsRouter from "./clips";
 import studioRouter from "./studio";
+import videoRouter from "./video";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(shotsRouter);
 router.use(tasksRouter);
 router.use(clipsRouter);
 router.use(studioRouter);
+router.use(videoRouter);
 
 export default router;
