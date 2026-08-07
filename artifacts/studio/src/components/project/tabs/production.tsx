@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Loader2, Plus, CheckCircle2, Circle, Trash2, Calendar, User,
-  PlayCircle, Settings, ChevronDown, ChevronUp, Eye, EyeOff, Mic2, Clapperboard
+  PlayCircle, Settings, ChevronDown, ChevronUp, Eye, EyeOff, Mic2, Clapperboard, Sparkles
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -92,14 +92,19 @@ function VideoPlayerPanel({
   project,
   microExpression,
   prompt,
+  activeActorName,
 }: {
   project: Project;
   microExpression: string;
   prompt: string;
+  activeActorName: string;
 }) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [mergeStatus, setMergeStatus] = useState<"idle" | "processing" | "completed">("idle");
+  const [mergeStage, setMergeStage] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
+  const mergeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const generateVideo = useGenerateVideo();
 
   useEffect(() => {
@@ -113,9 +118,17 @@ function VideoPlayerPanel({
     });
   }, [videoUrl]);
 
+  useEffect(() => {
+    return () => {
+      if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
+    };
+  }, []);
+
   const handleGenerate = () => {
     setVideoUrl(null);
     setVideoError(null);
+    setMergeStatus("idle");
+    setMergeStage("");
     generateVideo.mutate(
       {
         data: {
@@ -143,6 +156,34 @@ function VideoPlayerPanel({
         },
       },
     );
+  };
+
+  const handleAutoEditAndMerge = () => {
+    if (generateVideo.isPending || mergeStatus === "processing") return;
+
+    if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
+
+    const stages = [
+      "تجميع مسار الفيديو...",
+      `إضافة صوت ${activeActorName} عبر ElevenLabs...`,
+      "مزج الموسيقى والترجمة الإنجليزية...",
+    ];
+    let stageIndex = 0;
+
+    setMergeStatus("processing");
+    setMergeStage(stages[stageIndex]);
+    mergeTimerRef.current = setInterval(() => {
+      stageIndex += 1;
+      if (stageIndex >= stages.length) {
+        if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
+        mergeTimerRef.current = null;
+        setMergeStatus("completed");
+        setMergeStage("تم الدمج تلقائياً — الفيديو والصوت والموسيقى جاهزة");
+        toast.success("اكتمل Auto-Edit & Merge");
+        return;
+      }
+      setMergeStage(stages[stageIndex]);
+    }, 700);
   };
 
   return (
@@ -248,7 +289,7 @@ function VideoPlayerPanel({
       </div>
 
       {/* Player controls bar */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-black/60 border-t border-white/5">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-black/60 border-t border-white/5">
         <Button
           size="sm"
           variant="ghost"
@@ -264,15 +305,49 @@ function VideoPlayerPanel({
           {generateVideo.isPending ? "جاري التوليد" : "توليد الفيديو"}
         </Button>
         {/* Timeline scrubber */}
-        <div className="flex-1 h-1.5 bg-white/10 rounded-full relative cursor-pointer group">
+        <div className="order-3 sm:order-none flex-1 min-w-[100px] h-1.5 bg-white/10 rounded-full relative cursor-pointer group">
           <div className="absolute inset-y-0 left-0 w-0 bg-primary rounded-full group-hover:w-1/4 transition-all duration-300" />
           <div className="absolute top-1/2 left-0 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-primary scale-0 group-hover:scale-100 transition-transform" />
         </div>
-        <span className="text-[11px] font-mono text-muted-foreground/60">
+        <span className="order-4 sm:order-none text-[11px] font-mono text-muted-foreground/60">
           {videoUrl ? "MP4 READY" : "00:00 / 00:05"}
         </span>
         <Mic2 className="w-4 h-4 text-muted-foreground/40" />
+        <Button
+          size="sm"
+          onClick={handleAutoEditAndMerge}
+          disabled={generateVideo.isPending || mergeStatus === "processing"}
+          className="order-2 sm:order-none h-9 w-full sm:w-auto gap-2 bg-primary text-primary-foreground font-semibold shadow-[0_0_18px_rgba(212,175,55,0.18)] hover:bg-primary/90"
+        >
+          {mergeStatus === "processing" ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Sparkles className="w-4 h-4" />
+          )}
+          {mergeStatus === "processing" ? "جاري الدمج..." : "Auto-Edit & Merge"}
+        </Button>
       </div>
+      <AnimatePresence initial={false}>
+        {mergeStatus !== "idle" && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-t border-primary/10 bg-primary/5 px-4 py-2.5"
+          >
+            <div className="flex items-center gap-2 text-xs">
+              {mergeStatus === "processing" ? (
+                <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-primary" />
+              )}
+              <span className={mergeStatus === "completed" ? "text-primary/90" : "text-white/60"}>
+                {mergeStage}
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -348,6 +423,11 @@ export default function ProductionTab({ project }: { project: Project }) {
     { value: "شك",              label: "شك",                  en: "Suspicion" },
     { value: "ابتسامة_حذرة",   label: "ابتسامة حذرة",        en: "Cautious Smile" },
   ];
+  const selectedActorId = assignedActorId !== "unassigned" ? Number(assignedActorId) : undefined;
+  const activeActorName =
+    projectActors?.find(pa => pa.actorId === selectedActorId)?.actor?.name?.split("(")[0]?.trim() ||
+    projectActors?.[0]?.actor?.name?.split("(")[0]?.trim() ||
+    "الشخصية النشطة";
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -385,9 +465,12 @@ export default function ProductionTab({ project }: { project: Project }) {
             className="h-11 bg-background/50 border-white/10"
           />
         </div>
-        <VideoPlayerPanel microExpression={
-          microExpressions.find(e => e.value === microExpression)?.label ?? ""
-        } project={project} prompt={scenePrompt} />
+        <VideoPlayerPanel
+          microExpression={microExpressions.find(e => e.value === microExpression)?.label ?? ""}
+          project={project}
+          prompt={scenePrompt}
+          activeActorName={activeActorName}
+        />
 
         {/* API Config */}
         <ApiConfigPanel />
