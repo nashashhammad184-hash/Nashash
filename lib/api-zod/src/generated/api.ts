@@ -280,6 +280,19 @@ export const ListProjectShotsResponse = zod.array(ListProjectShotsResponseItem)
 
 
 /**
+ * @summary Build an English production prompt from director shots
+ */
+export const GetProductionPromptParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetProductionPromptResponse = zod.object({
+  "prompt": zod.string(),
+  "source": zod.enum(['director', 'fallback'])
+})
+
+
+/**
  * @summary List production tasks for a project
  */
 export const ListProjectTasksParams = zod.object({
@@ -355,10 +368,32 @@ export const GenerateVideoBody = zod.object({
 
 export const GenerateVideoResponse = zod.object({
   "videoUrl": zod.string(),
+  "downloadUrl": zod.string(),
+  "streamUrl": zod.string().optional(),
   "status": zod.enum(['completed']),
   "provider": zod.string(),
   "jobId": zod.string().nullish()
 })
+
+
+/**
+ * @summary Stream a generated video through the studio
+ */
+export const StreamVideoQueryParams = zod.object({
+  "url": zod.string().url()
+})
+
+export const StreamVideoResponse = zod.unknown()
+
+
+/**
+ * @summary Download a generated video
+ */
+export const DownloadVideoQueryParams = zod.object({
+  "url": zod.string().url()
+})
+
+export const DownloadVideoResponse = zod.unknown()
 
 
 /**

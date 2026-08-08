@@ -19,7 +19,7 @@ export function StudioLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen w-full bg-background text-foreground overflow-hidden" dir="rtl">
       {/* Sidebar */}
-      <aside className="w-64 flex flex-col border-l border-border bg-sidebar z-10 shrink-0">
+      <aside className="hidden md:flex w-64 flex-col border-l border-border bg-sidebar z-10 shrink-0">
         <div className="h-16 flex items-center px-6 border-b border-sidebar-border shrink-0">
           <Link href="/" className="flex items-center gap-3 text-sidebar-foreground hover:text-primary transition-colors cursor-pointer w-full">
             <div className="bg-primary/10 p-2 rounded-md">
@@ -76,7 +76,16 @@ export function StudioLayout({ children }: { children: ReactNode }) {
         <div className="absolute top-0 left-0 right-0 h-[30vh] bg-gradient-to-b from-primary/5 to-transparent pointer-events-none -z-10" />
         
         <ScrollArea className="flex-1 h-full">
-          <div className="p-6 md:p-8 w-full max-w-[1400px] mx-auto min-h-full">
+          <div className="p-4 md:p-8 w-full max-w-[1400px] mx-auto min-h-full min-w-0">
+            <div className="md:hidden flex items-center justify-between mb-5 pb-3 border-b border-border">
+              <Link href="/projects" className="flex items-center gap-2 text-sidebar-foreground">
+                <div className="bg-primary/10 p-1.5 rounded-md">
+                  <Clapperboard className="w-4 h-4 text-primary" />
+                </div>
+                <span className="text-sm font-bold">Kayan AI Productions</span>
+              </Link>
+              <span className="text-[10px] font-mono text-muted-foreground/60">MOBILE STUDIO</span>
+            </div>
             {children}
           </div>
         </ScrollArea>

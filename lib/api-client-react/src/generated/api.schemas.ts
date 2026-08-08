@@ -108,9 +108,24 @@ export const VideoGenerateResponseStatus = {
 
 export interface VideoGenerateResponse {
   videoUrl: string;
+  downloadUrl: string;
+  streamUrl?: string;
   status: VideoGenerateResponseStatus;
   provider: string;
   jobId?: string | null;
+}
+
+export type ProductionPromptSource = typeof ProductionPromptSource[keyof typeof ProductionPromptSource];
+
+
+export const ProductionPromptSource = {
+  director: 'director',
+  fallback: 'fallback',
+} as const;
+
+export interface ProductionPrompt {
+  prompt: string;
+  source: ProductionPromptSource;
 }
 
 export interface Shot {
@@ -226,5 +241,13 @@ type?: string;
 
 export type ListProjectsParams = {
 archived?: boolean;
+};
+
+export type StreamVideoParams = {
+url: string;
+};
+
+export type DownloadVideoParams = {
+url: string;
 };
 

@@ -1,91 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Project, useListProjectTasks, useCreateTask, useUpdateTask, useDeleteTask, useListProjectActors,
-  getListProjectTasksQueryKey, getListProjectActorsQueryKey, useGenerateVideo
+  getListProjectTasksQueryKey, getListProjectActorsQueryKey, useGenerateVideo,
+  useGetProductionPrompt, getGetProductionPromptQueryKey
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Loader2, Plus, CheckCircle2, Circle, Trash2, Calendar, User,
-  PlayCircle, Settings, ChevronDown, ChevronUp, Eye, EyeOff, Mic2, Clapperboard, Sparkles
+  PlayCircle, Mic2, Clapperboard, Sparkles, Download
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// ── API Config Panel ──────────────────────────────────────────────────────────
-function ApiConfigPanel() {
-  const [open, setOpen] = useState(false);
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
-
-  const fields = [
-    { id: "openai",    label: "OpenAI API Key",        placeholder: "sk-..." },
-    { id: "elevenlabs",label: "ElevenLabs API Key",    placeholder: "el-..." },
-    { id: "runway",    label: "Runway / Kling API Key", placeholder: "rw-..." },
-  ];
-
-  const toggleShow = (id: string) => setShowKeys(s => ({ ...s, [id]: !s[id] }));
-
-  return (
-    <div className="rounded-xl border border-white/8 bg-black/40 overflow-hidden">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold text-white/70 hover:text-white/90 transition-colors"
-      >
-        <span className="flex items-center gap-2">
-          <Settings className="w-4 h-4 text-primary/70" />
-          إعدادات مفاتيح API الخارجية
-          <span className="text-[10px] font-mono text-muted-foreground/50 bg-white/5 px-2 py-0.5 rounded">OpenAI · ElevenLabs · Runway</span>
-        </span>
-        {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            className="overflow-hidden"
-          >
-            <div className="px-5 pb-5 space-y-3 border-t border-white/5 pt-4">
-              <p className="text-xs text-muted-foreground/70 mb-4">
-                هذه المفاتيح مخزنة محلياً في جلستك فقط ولا تُرسل إلى الخادم. تُستخدم للتكامل مع خدمات توليد الفيديو والصوت.
-              </p>
-              {fields.map(f => (
-                <div key={f.id} className="space-y-1.5">
-                  <label className="text-xs font-mono text-primary/70 uppercase tracking-wider">{f.label}</label>
-                  <div className="relative">
-                    <Input
-                      type={showKeys[f.id] ? "text" : "password"}
-                      placeholder={f.placeholder}
-                      className="bg-background/40 border-white/10 pr-10 font-mono text-sm focus:border-primary/50"
-                      autoComplete="off"
-                      data-api-key={f.id}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => toggleShow(f.id)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-                    >
-                      {showKeys[f.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-              ))}
-              <Button size="sm" className="mt-2 bg-primary/20 border border-primary/40 text-primary hover:bg-primary/30 text-xs">
-                حفظ المفاتيح محلياً
-              </Button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 // ── Dark HTML5 Video Player ───────────────────────────────────────────────────
 function VideoPlayerPanel({
@@ -100,6 +29,7 @@ function VideoPlayerPanel({
   activeActorName: string;
 }) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [mergeStatus, setMergeStatus] = useState<"idle" | "processing" | "completed">("idle");
   const [mergeStage, setMergeStage] = useState("");
@@ -144,7 +74,9 @@ function VideoPlayerPanel({
             setVideoError("لم يُرجع محرك الفيديو رابط MP4 صالحاً.");
             return;
           }
-          setVideoUrl(result.videoUrl);
+          const playbackUrl = result.streamUrl || result.videoUrl;
+          setVideoUrl(playbackUrl);
+          setDownloadUrl(result.downloadUrl || null);
           toast.success("اكتمل توليد الفيديو — يمكنك تشغيله الآن");
         },
         onError: (error) => {
@@ -326,6 +258,16 @@ function VideoPlayerPanel({
           )}
           {mergeStatus === "processing" ? "جاري الدمج..." : "Auto-Edit & Merge"}
         </Button>
+        {downloadUrl && (
+          <a
+            href={downloadUrl}
+            download="kayan-production.mp4"
+            className="order-1 sm:order-none inline-flex h-9 w-full sm:w-auto items-center justify-center gap-2 rounded-md border border-white/10 px-3 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            <Download className="w-4 h-4" />
+            Download Video
+          </a>
+        )}
       </div>
       <AnimatePresence initial={false}>
         {mergeStatus !== "idle" && (
@@ -367,6 +309,21 @@ export default function ProductionTab({ project }: { project: Project }) {
   const { data: projectActors } = useListProjectActors(project.id, {
     query: { enabled: !!project.id, queryKey: getListProjectActorsQueryKey(project.id) }
   });
+
+  const { data: productionPrompt } = useGetProductionPrompt(project.id, {
+    query: {
+      enabled: !!project.id,
+      queryKey: getGetProductionPromptQueryKey(project.id),
+      staleTime: 0,
+      refetchOnMount: true,
+    },
+  });
+
+  useEffect(() => {
+    if (productionPrompt?.prompt) {
+      setScenePrompt(productionPrompt.prompt);
+    }
+  }, [productionPrompt?.prompt]);
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -472,8 +429,6 @@ export default function ProductionTab({ project }: { project: Project }) {
           activeActorName={activeActorName}
         />
 
-        {/* API Config */}
-        <ApiConfigPanel />
       </div>
 
       {/* Progress card */}

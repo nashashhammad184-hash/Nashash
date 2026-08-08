@@ -308,6 +308,25 @@ paths:
                 items:
                   $ref: "#/components/schemas/Shot"
 
+  /projects/{id}/production-prompt:
+    get:
+      operationId: getProductionPrompt
+      tags: [studio]
+      summary: Build an English production prompt from director shots
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Production prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionPrompt"
+
   /projects/{id}/tasks:
     get:
       operationId: listProjectTasks
@@ -389,6 +408,56 @@ paths:
                 $ref: "#/components/schemas/VideoGenerateResponse"
         "502":
           description: Video provider failed or timed out
+
+  /video/stream:
+    get:
+      operationId: streamVideo
+      tags: [studio]
+      summary: Stream a generated video through the studio
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: Video stream
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid video URL
+        "502":
+          description: Video stream unavailable
+
+  /video/download:
+    get:
+      operationId: downloadVideo
+      tags: [studio]
+      summary: Download a generated video
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: Downloadable MP4
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid video URL
+        "502":
+          description: Video download unavailable
 
   /shots:
     post:
@@ -746,9 +815,13 @@ components:
 
     VideoGenerateResponse:
       type: object
-      required: [videoUrl, status, provider]
+      required: [videoUrl, downloadUrl, status, provider]
       properties:
         videoUrl:
+          type: string
+        downloadUrl:
+          type: string
+        streamUrl:
           type: string
         status:
           type: string
@@ -758,6 +831,16 @@ components:
         jobId:
           type: string
           nullable: true
+
+    ProductionPrompt:
+      type: object
+      required: [prompt, source]
+      properties:
+        prompt:
+          type: string
+        source:
+          type: string
+          enum: [director, fallback]
 
     Shot:
       type: object

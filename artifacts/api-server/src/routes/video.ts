@@ -1,5 +1,6 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { GenerateVideoBody, GenerateVideoResponse } from "@workspace/api-zod";
+import { Readable } from "node:stream";
 
 const router: IRouter = Router();
 
@@ -35,6 +36,41 @@ function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    const hostname = url.hostname.toLowerCase();
+    return !(
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0" ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("169.254.") ||
+      hostname.startsWith("172.16.") ||
+      hostname.startsWith("172.17.") ||
+      hostname.startsWith("172.18.") ||
+      hostname.startsWith("172.19.") ||
+      hostname.startsWith("172.20.") ||
+      hostname.startsWith("172.21.") ||
+      hostname.startsWith("172.22.") ||
+      hostname.startsWith("172.23.") ||
+      hostname.startsWith("172.24.") ||
+      hostname.startsWith("172.25.") ||
+      hostname.startsWith("172.26.") ||
+      hostname.startsWith("172.27.") ||
+      hostname.startsWith("172.28.") ||
+      hostname.startsWith("172.29.") ||
+      hostname.startsWith("172.30.") ||
+      hostname.startsWith("172.31.")
+    );
   } catch {
     return false;
   }
@@ -147,13 +183,58 @@ async function providerFetch(url: string, init: RequestInit): Promise<unknown> {
 }
 
 function getProviderConfig(): { endpoint: string; apiKey?: string; statusTemplate?: string } | null {
-  const endpoint = process.env["VIDEO_ENGINE_API_URL"]?.trim();
+  const endpoint =
+    process.env["VIDEO_ENGINE_API_URL"]?.trim() ||
+    process.env["HF_INFERENCE_URL"]?.trim();
   if (!endpoint) return null;
   return {
     endpoint,
     apiKey: process.env["VIDEO_ENGINE_API_KEY"]?.trim(),
     statusTemplate: process.env["VIDEO_ENGINE_STATUS_URL_TEMPLATE"]?.trim(),
   };
+}
+
+function getDownloadUrl(videoUrl: string): string {
+  return `/api/video/download?url=${encodeURIComponent(videoUrl)}`;
+}
+
+async function proxyVideo(req: Request, res: Response, asDownload: boolean) {
+  const requestedUrl = typeof req.query.url === "string" ? req.query.url : "";
+  if (!isPublicHttpUrl(requestedUrl)) {
+    res.status(400).json({ error: "A public HTTPS video URL is required." });
+    return;
+  }
+
+  try {
+    const range = typeof req.headers.range === "string" ? req.headers.range : undefined;
+    const upstream = await fetch(requestedUrl, {
+      headers: range ? { range } : undefined,
+      signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).json({ error: "Video source is unavailable." });
+      return;
+    }
+
+    res.status(upstream.status === 206 ? 206 : 200);
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+    const contentLength = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+    if (contentRange) res.setHeader("Content-Range", contentRange);
+    res.setHeader("Accept-Ranges", "bytes");
+    if (asDownload) {
+      res.setHeader("Content-Disposition", 'attachment; filename="kayan-production.mp4"');
+    }
+
+    Readable.fromWeb(upstream.body as any).pipe(res);
+  } catch (error) {
+    req.log?.error?.({ err: error }, "Video proxy failed");
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Video source could not be reached." });
+    }
+  }
 }
 
 async function generateFromProvider(input: {
@@ -231,6 +312,8 @@ router.post("/video/generate", async (req, res): Promise<void> => {
     res.json(
       GenerateVideoResponse.parse({
         videoUrl: result.videoUrl,
+        downloadUrl: getDownloadUrl(result.videoUrl),
+        streamUrl: `/api/video/stream?url=${encodeURIComponent(result.videoUrl)}`,
         status: "completed",
         provider: getProviderConfig() ? "configured-engine" : "demo-preview",
         jobId: result.jobId ?? null,
@@ -243,6 +326,14 @@ router.post("/video/generate", async (req, res): Promise<void> => {
       message: error instanceof Error ? error.message : "Unknown provider error",
     });
   }
+});
+
+router.get("/video/stream", async (req, res): Promise<void> => {
+  await proxyVideo(req, res, false);
+});
+
+router.get("/video/download", async (req, res): Promise<void> => {
+  await proxyVideo(req, res, true);
 });
 
 export default router;

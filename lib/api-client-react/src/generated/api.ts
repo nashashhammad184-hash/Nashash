@@ -24,10 +24,12 @@ import type {
   ArchiveToggle,
   ClipInput,
   ClipPatch,
+  DownloadVideoParams,
   EditClip,
   HealthStatus,
   ListActorsParams,
   ListProjectsParams,
+  ProductionPrompt,
   ProductionTask,
   Project,
   ProjectActor,
@@ -39,6 +41,7 @@ import type {
   Shot,
   ShotInput,
   ShotPatch,
+  StreamVideoParams,
   StudioStats,
   TaskInput,
   TaskPatch,
@@ -1135,6 +1138,83 @@ export function useListProjectShots<TData = Awaited<ReturnType<typeof listProjec
 
 
 
+export const getGetProductionPromptUrl = (id: number,) => {
+
+
+
+
+  return `/api/projects/${id}/production-prompt`
+}
+
+/**
+ * @summary Build an English production prompt from director shots
+ */
+export const getProductionPrompt = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ProductionPrompt> => {
+
+  return customFetch<ProductionPrompt>(getGetProductionPromptUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetProductionPromptQueryKey = (id: number,) => {
+    return [
+    `/api/projects/${id}/production-prompt`
+    ] as const;
+    }
+
+
+export const getGetProductionPromptQueryOptions = <TData = Awaited<ReturnType<typeof getProductionPrompt>>, TError = ErrorType<unknown>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getProductionPrompt>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetProductionPromptQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getProductionPrompt>>> = ({ signal }) => getProductionPrompt(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getProductionPrompt>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetProductionPromptQueryResult = NonNullable<Awaited<ReturnType<typeof getProductionPrompt>>>
+export type GetProductionPromptQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Build an English production prompt from director shots
+ */
+
+export function useGetProductionPrompt<TData = Awaited<ReturnType<typeof getProductionPrompt>>, TError = ErrorType<unknown>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getProductionPrompt>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetProductionPromptQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
 export const getListProjectTasksUrl = (id: number,) => {
 
 
@@ -1430,6 +1510,174 @@ export const useGenerateVideo = <TError = ErrorType<void>,
       > => {
       return useMutation(getGenerateVideoMutationOptions(options));
     }
+
+export const getStreamVideoUrl = (params: StreamVideoParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/video/stream?${stringifiedParams}` : `/api/video/stream`
+}
+
+/**
+ * @summary Stream a generated video through the studio
+ */
+export const streamVideo = async (params: StreamVideoParams, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getStreamVideoUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getStreamVideoQueryKey = (params?: StreamVideoParams,) => {
+    return [
+    `/api/video/stream`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getStreamVideoQueryOptions = <TData = Awaited<ReturnType<typeof streamVideo>>, TError = ErrorType<void>>(params: StreamVideoParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamVideo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamVideoQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamVideo>>> = ({ signal }) => streamVideo(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamVideo>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StreamVideoQueryResult = NonNullable<Awaited<ReturnType<typeof streamVideo>>>
+export type StreamVideoQueryError = ErrorType<void>
+
+
+/**
+ * @summary Stream a generated video through the studio
+ */
+
+export function useStreamVideo<TData = Awaited<ReturnType<typeof streamVideo>>, TError = ErrorType<void>>(
+ params: StreamVideoParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamVideo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStreamVideoQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getDownloadVideoUrl = (params: DownloadVideoParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/video/download?${stringifiedParams}` : `/api/video/download`
+}
+
+/**
+ * @summary Download a generated video
+ */
+export const downloadVideo = async (params: DownloadVideoParams, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getDownloadVideoUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getDownloadVideoQueryKey = (params?: DownloadVideoParams,) => {
+    return [
+    `/api/video/download`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getDownloadVideoQueryOptions = <TData = Awaited<ReturnType<typeof downloadVideo>>, TError = ErrorType<void>>(params: DownloadVideoParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadVideo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getDownloadVideoQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadVideo>>> = ({ signal }) => downloadVideo(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof downloadVideo>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type DownloadVideoQueryResult = NonNullable<Awaited<ReturnType<typeof downloadVideo>>>
+export type DownloadVideoQueryError = ErrorType<void>
+
+
+/**
+ * @summary Download a generated video
+ */
+
+export function useDownloadVideo<TData = Awaited<ReturnType<typeof downloadVideo>>, TError = ErrorType<void>>(
+ params: DownloadVideoParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadVideo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getDownloadVideoQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getCreateShotUrl = () => {
 

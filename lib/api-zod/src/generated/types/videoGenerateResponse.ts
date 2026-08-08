@@ -9,6 +9,8 @@ import type { VideoGenerateResponseStatus } from './videoGenerateResponseStatus'
 
 export interface VideoGenerateResponse {
   videoUrl: string;
+  downloadUrl: string;
+  streamUrl?: string;
   status: VideoGenerateResponseStatus;
   provider: string;
   jobId?: string | null;
