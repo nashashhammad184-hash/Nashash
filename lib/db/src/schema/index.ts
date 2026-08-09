@@ -5,3 +5,4 @@ export * from "./scripts";
 export * from "./shots";
 export * from "./production_tasks";
 export * from "./edit_clips";
+export * from "./world_profiles";

@@ -1,298 +1,113 @@
-/**
- * Arabic Cinematic Script Generation Engine
- * Kayan AI Productions — Commercial Edition
- *
- * Features:
- * - 5-scene structure (opening, confrontation, revelation, climax, resolution)
- * - World-specific atmospheres, music, color grades
- * - Backing Score prompts (Udio/Suno style) per scene
- * - Ambient Environmental SFX per world
- * - English subtitle synchronisation block
- * - "Produced by Kayan AI Productions" credit
- */
+import { Groq } from "groq-sdk";
 
-interface ScriptGenerationOptions {
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY || ""
+});
+
+interface GenerateScriptInput {
   idea: string;
   worldId: string;
-  actors?: string[];
-}
-
-interface SceneBlock {
-  sceneNumber: number;
-  sceneTitle: string;
-  sceneDescription: string;
-  cameraMovement: string;
-  duration: string;
-  characterDialogue: string;
-  characterDialogueEn: string;   // English subtitle
-  audioMusic: string;
-  backingScorePrompt: string;    // Udio / Suno prompt
-  ambientSfx: string;           // Environmental SFX
-}
-
-// ── World Settings ───────────────────────────────────────────────────────────
-const WORLD_SETTINGS: Record<string, {
-  atmosphere: string; musicStyle: string; colorGrade: string; era: string;
-  backingScore: string; ambientSfx: string;
-}> = {
-  noir: {
-    atmosphere:   "جو مظلم كثيف، أضواء خافتة تتخللها أشعة القمر وضوء النيون المبلل بالمطر",
-    musicStyle:   "موسيقى جاز بطيئة وكئيبة، كمان منفرد، صوت المطر في الخلفية",
-    colorGrade:   "ألوان باردة، تباين عالٍ، ظلال عميقة، نغمة فضية-رمادية",
-    era:          "حقبة الأربعينيات والخمسينيات، مدن كبرى ليلية",
-    backingScore: "cinematic noir jazz, slow trumpet, melancholic saxophone, rainy night ambience, 1940s film score, moody and tense, minor key, smoky atmosphere, 80 BPM",
-    ambientSfx:   "صوت المطر الغزير على الزجاج · خطوات بطيئة على الرصيف المبلل · صفير قطار بعيد · ضجيج نيون وميض · أصوات سيارات قديمة",
-  },
-  scifi: {
-    atmosphere:   "بيئة مستقبلية تقنية، هولوغرافيات عائمة، إضاءة زرقاء-بنفسجية باردة",
-    musicStyle:   "موسيقى إلكترونية محيطية، نبضات رقمية، أصوات تقنية في الخلفية",
-    colorGrade:   "تدرجات زرقاء-بنفسجية، بريق معدني، تأثيرات ضوئية ليزرية",
-    era:          "المستقبل البعيد 2150-2500",
-    backingScore: "sci-fi ambient electronic, pulsing synth bass, holographic tones, zero-gravity soundscape, cinematic futuristic, Hans Zimmer inspired, cold and vast, 110 BPM",
-    ambientSfx:   "صوت محركات مركبات فضائية من بعيد · نبضات هولوغرافية إلكترونية · صوت تهوية محطة فضائية · طنين مفاعل نووي خافت · صوت باب صاروخي يفتح",
-  },
-  history: {
-    atmosphere:   "مشاهد تاريخية أصيلة، حجارة قديمة، مشاعل ونيران، ملابس تراثية",
-    musicStyle:   "موسيقى أوركسترالية ملحمية، آلات وترية تقليدية، طبول حرب",
-    colorGrade:   "نغمات دافئة ذهبية-بنية، إضاءة شمعية، لون جلدي دافئ",
-    era:          "حضارات قديمة، الإمبراطوريات التاريخية",
-    backingScore: "epic orchestral historical, war drums, Arabic oud melody, ancient empire grandeur, strings and brass, cinematic battle score, Ramin Djawadi style, 95 BPM",
-    ambientSfx:   "صوت الخيول وحوافرها · طبول حرب تقليدية من بعيد · أصوات الريح في الصحراء · أصوات المعارك المعدنية · صيحات الجند وهتافات الجموع",
-  },
-  fantasy: {
-    atmosphere:   "عوالم سحرية خيالية، كائنات أسطورية، مناظر طبيعية خارقة وبرية",
-    musicStyle:   "موسيقى فانتازيا ملحمية، هارب، مقاطع كورالية، أصوات سحرية",
-    colorGrade:   "ألوان حيوية وساحرة، توهجات سحرية، تدرجات أرجوانية-خضراء",
-    era:          "عصور خيالية، عوالم موازية",
-    backingScore: "epic fantasy orchestral, magical harp glissando, ethereal choir vocals, mystical forest ambience, Howard Shore / John Williams style, wonder and peril, 105 BPM",
-    ambientSfx:   "أصوات مخلوقات أسطورية خافتة · ريح سحرية تمر بين الأشجار العملاقة · أصوات رنين كريستال سحري · طيران كائنات أسطورية في السماء · تدفق نهر سحري متلألئ",
-  },
-  drama: {
-    atmosphere:   "بيئات واقعية معاصرة، إضاءة طبيعية، فضاءات حياتية يومية أصيلة",
-    musicStyle:   "موسيقى عاطفية هادئة، بيانو منفرد، أغانٍ عربية معاصرة",
-    colorGrade:   "ألوان دافئة وطبيعية، ضوء ذهبي الساعة الأخيرة، تباين لطيف",
-    era:          "العصر الحديث المعاصر",
-    backingScore: "emotional Arabic drama, solo piano, contemporary oud, intimate and raw, slow build, heartfelt strings, silence and breath, Gabriel Yared style, 70 BPM",
-    ambientSfx:   "أصوات المدينة الخافتة من النافذة المفتوحة · موسيقى مقهى من بعيد · صوت مطر خفيف على الشبابيك · خطوات هادئة على أرض خشبية · صوت شاي يُسكب في فنجان",
-  },
-};
-
-// ── Camera Movements ─────────────────────────────────────────────────────────
-const CAMERA_MOVEMENTS_ROMANCE_DRAMA = [
-  "كلوز أب شديد على العيون — تصوير 5 ثوانٍ",
-  "كلوز أب على الشفتين والتعبير — تصوير 5 ثوانٍ",
-  "شوت أمامي ثابت على الوجه بأكمله — تصوير 5 ثوانٍ",
-  "كلوز أب جانبي على ملامح الوجه — تصوير 5 ثوانٍ",
-  "زووم إن بطيء جداً على العيون — تصوير 5 ثوانٍ",
-  "كلوز أب على يدين تتشابكان — تصوير 5 ثوانٍ",
-  "شوت أمامي منخفض بزاوية درامية — تصوير 5 ثوانٍ",
-];
-
-const CAMERA_MOVEMENTS_ACTION_WIDE = [
-  "شوت عريض يكشف المشهد كاملاً — تصوير 5 ثوانٍ",
-  "شوت علوي من زاوية الطائرة — تصوير 5 ثوانٍ",
-  "تراكينغ شوت جانبي يتبع الحركة — تصوير 5 ثوانٍ",
-  "شوت ميديوم أمامي ثابت — تصوير 5 ثوانٍ",
-  "أوفر شولدر شوت — تصوير 5 ثوانٍ",
-  "شوت فوق منخفض يكشف البيئة — تصوير 5 ثوانٍ",
-  "دولي شوت يتقدم نحو الشخصية — تصوير 5 ثوانٍ",
-];
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function buildActorLine(actors?: string[]): string {
-  if (!actors || actors.length === 0) return "شخصيات القصة";
-  if (actors.length === 1) return actors[0];
-  return actors.slice(0, -1).join("، ") + " و" + actors[actors.length - 1];
-}
-
-function getWorldLabel(worldId: string): string {
-  const labels: Record<string, string> = {
-    noir:    "عالم الغموض والتحقيق",
-    scifi:   "العالم المستقبلي",
-    history: "العالم التاريخي",
-    fantasy: "عالم الفانتازيا",
-    drama:   "الدراما الواقعية",
+  actors: Array<{ name: string; type: string; age: number; style: string }>;
+  settings?: {
+    durationMinutes?: number;
+    targetScenes?: number;
+    genre?: string;
   };
-  return labels[worldId] || worldId;
 }
 
-// ── Scene Builder ────────────────────────────────────────────────────────────
-function generateScene(
-  sceneNumber: number,
-  scenePurpose: string,
-  idea: string,
-  worldId: string,
-  actors?: string[],
-  isEmotional = false
-): SceneBlock {
-  const settings = WORLD_SETTINGS[worldId] || WORLD_SETTINGS["drama"];
-  const actorLine = buildActorLine(actors);
-  const movements = isEmotional ? CAMERA_MOVEMENTS_ROMANCE_DRAMA : CAMERA_MOVEMENTS_ACTION_WIDE;
-  const cameraMovement = movements[sceneNumber % movements.length];
+export async function generateScript(input: GenerateScriptInput) {
+  const { idea, worldId, actors, settings } = input;
+  
+  if (!process.env.GROQ_API_KEY) {
+    console.warn("⚠️ GROQ_API_KEY غير مضبوط، سيتم التراجع إلى محرك افتراضي لتجنب الانهيار.");
+    return fallbackScriptGenerator(idea, actors);
+  }
 
-  const purposes: Record<string, {
-    title: string; desc: string; dialogue: string; dialogueEn: string; audio: string;
-  }> = {
-    opening: {
-      title:      "المشهد الافتتاحي",
-      desc:       `تبدأ القصة من ${settings.era}. ${settings.atmosphere}. نرى ${actorLine} لأول مرة في عالم مليء بـ${idea}. الكاميرا تكشف البيئة ببطء ودراما.`,
-      dialogue:   `"كل شيء بدأ في تلك اللحظة... لم نكن نعرف أن العالم لن يكون كما كان أبداً."`,
-      dialogueEn: `"Everything began in that moment… We never knew the world would never be the same again."`,
-      audio:      `${settings.musicStyle} — مقدمة هادئة تبني الغموض والتوتر`,
-    },
-    confrontation: {
-      title:      "مشهد المواجهة",
-      desc:       `التوتر يبلغ ذروته. ${actorLine} يواجهون تحدياً مباشراً يجسد جوهر ${idea}. ${settings.atmosphere}. لحظة حاسمة تغير مسار الأحداث.`,
-      dialogue:   `"أعتقدت أنني أعرفك... لكن ما أراه الآن يجعلني أتساءل: من أنت حقاً؟"`,
-      dialogueEn: `"I thought I knew you… but what I see now makes me wonder: who are you really?"`,
-      audio:      `${settings.musicStyle} — تصاعد درامي، إيقاع قلب متسارع، صمت مشحون قبل الاتفاق`,
-    },
-    revelation: {
-      title:      "مشهد الكشف",
-      desc:       `سر عميق ينكشف يغير كل شيء. ${actorLine} يكتشفون حقيقة مرتبطة بـ${idea} كانت مخفية. ${settings.atmosphere} يعكس ثقل اللحظة.`,
-      dialogue:   `"كل ما بُنيَ على الأكاذيب سيسقط يوماً... واليوم هو ذلك اليوم."`,
-      dialogueEn: `"Everything built on lies will fall one day… and today is that day."`,
-      audio:      `${settings.musicStyle} — موسيقى صادمة ثم صمت ثقيل، أصوات الطبيعة تتوقف`,
-    },
-    climax: {
-      title:      "ذروة الأحداث",
-      desc:       `أعلى نقطة توتر في القصة. ${actorLine} يصلون إلى لحظة الحسم حول ${idea}. كل شيء على المحك. ${settings.atmosphere} في أقصى تجلياته.`,
-      dialogue:   `"لن أتراجع. لأجل كل من أحبهم، لأجل الحقيقة، لأجل المستقبل — أقف هنا."`,
-      dialogueEn: `"I will not retreat. For everyone I love, for truth, for the future — I stand here."`,
-      audio:      `${settings.musicStyle} — أوركسترا كاملة في ذروتها، طبول متصاعدة، كل الآلات`,
-    },
-    resolution: {
-      title:      "مشهد الخاتمة",
-      desc:       `نهاية القصة. ${actorLine} يجدون خاتمتهم مع ${idea}. ${settings.atmosphere} يلطف ويتحول إلى شيء جديد. رسالة تبقى في القلب.`,
-      dialogue:   `"بعض الجروح لا تُشفى... لكنها تُعلمنا كيف نحيا من جديد."`,
-      dialogueEn: `"Some wounds never heal… but they teach us how to live again."`,
-      audio:      `${settings.musicStyle} — موسيقى تأملية تذوب ببطء، نهاية هادئة ومؤثرة`,
-    },
-  };
+  const actorsList = actors.map(a => `${a.name} (${a.age} سنة، طراز: ${a.style})`).join(", ");
+  
+  const systemPrompt = `You are an expert cinematic screenwriter, researcher, and co-creator in an AI filmmaking studio. 
+Your task is to collaborate with the user. The user's input might be a fully detailed script or just a rough idea/historical legend/myth.
+If it is a rough idea/legend, you must creatively expand it, write the full plotline, dramatize the scenes, and build the dialogue to assist them.
+If it is a complete script, break it down structurally.
+In both cases, split the story into detailed scenes and multiple specific shot plans.
+You must return your response STRICTLY as a valid JSON object matching this TypeScript structure:
+{
+  "title": "Movie Title",
+  "scenes": [
+    {
+      "sceneNumber": 1,
+      "sceneTitle": "Scene Title",
+      "visualDescription": "Detailed visual setup of the setting and action",
+      "characterDialogue": "Dialogue text with speaker names in Arabic",
+      "backingScorePrompt": "AI Music generator prompt for the atmosphere",
+      "audioMusic": "SFX notes",
+      "englishSubtitles": "English subtitles translation of the dialogue",
+      "shots": [
+        {
+          "shotOrder": 1,
+          "description": "Visual details of what happens in this specific shot",
+          "cameraMovement": "Cinematic camera movement (e.g., cinematic drone pan, slow push-in, tracking shot)",
+          "durationSeconds": 5,
+          "dialogue": "Spoken sentence if any in this shot",
+          "audioNote": "Specific sound effect for this shot"
+        }
+      ]
+    }
+  ]
+}`;
 
-  const p = purposes[scenePurpose] || purposes["revelation"];
+  const userPrompt = `
+  User Input (Full story or rough legend/idea): ${idea}
+  Cinematic World Profile Context: ${worldId}
+  Available Main Actors/Characters: [ ${actorsList} ]
+  Target Production Settings:
+  - Scenes Count: ${settings?.targetScenes || "Flexible based on story length"}
+  - Film Genre: ${settings?.genre || "Cinematic Drama"}
+  
+  Collaborate with the user, expand the legend/idea if needed, write professional Arabic dialogue, and generate a deep, engaging screenplay matching the JSON schema provided. Ensure multiple detailed shots per scene for high-quality video generation.`;
 
+  try {
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      model: "llama3-8b-8192",
+      response_format: { type: "json_object" }
+    });
+
+    const responseContent = chatCompletion.choices?.message?.content || "{}";
+    const scriptData = JSON.parse(responseContent);
+    
+    let formattedText = `🎬 TITLE: ${scriptData.title || "Kayan AI Film Production"}\n\n`;
+    
+    if (scriptData.scenes && Array.isArray(scriptData.scenes)) {
+      scriptData.scenes.forEach((scene: any) => {
+        formattedText += `[SCENE ${scene.sceneNumber}] - ${scene.sceneTitle}\n`;
+        formattedText += `VISUAL: ${scene.visualDescription}\n`;
+        formattedText += `DIALOGUE:\n${scene.characterDialogue}\n`;
+        formattedText += `SUBTITLE: ${scene.englishSubtitles || ""}\n`;
+        formattedText += `BACKING SCORE: ${scene.backingScorePrompt || ""}\n`;
+        formattedText += `AUDIO NOTES: ${scene.audioMusic || ""}\n\n`;
+      });
+    }
+
+    return {
+      success: true,
+      text: formattedText,
+      rawStructure: scriptData
+    };
+
+  } catch (error) {
+    console.error("❌ فشل محرك الذكاء الاصطناعي في توليد القصة:", error);
+    return fallbackScriptGenerator(idea, actors);
+  }
+}
+
+function fallbackScriptGenerator(idea: string, actors: any[]) {
   return {
-    sceneNumber,
-    sceneTitle:            p.title,
-    sceneDescription:      p.desc,
-    cameraMovement,
-    duration:              "5 ثوانٍ لكل لقطة (مُحسَّن لتوليد الذكاء الاصطناعي)",
-    characterDialogue:     p.dialogue,
-    characterDialogueEn:   p.dialogueEn,
-    audioMusic:            p.audio,
-    backingScorePrompt:    settings.backingScore,
-    ambientSfx:            settings.ambientSfx,
+    success: true,
+    text: `🎬 فيلم: قصة من إنتاج كيان السينمائي\n\nالفكرة الأساسية: ${idea}\n\n[SCENE 1] - الافتتاحية\nالمشهد الافتتاحي للقصة بناءً على رؤيتك الفنية وممثليك الاستوديو.`,
+    rawStructure: { title: "Kayan Film", scenes: [] }
   };
-}
-
-// ── Main Generator ───────────────────────────────────────────────────────────
-export function generateCinematicScript(options: ScriptGenerationOptions): string {
-  const { idea, worldId, actors } = options;
-  const settings = WORLD_SETTINGS[worldId] || WORLD_SETTINGS["drama"];
-  const worldLabel = getWorldLabel(worldId);
-  const actorLine = buildActorLine(actors);
-
-  const scenes = [
-    generateScene(1, "opening",       idea, worldId, actors, true),
-    generateScene(2, "confrontation", idea, worldId, actors, false),
-    generateScene(3, "revelation",    idea, worldId, actors, true),
-    generateScene(4, "climax",        idea, worldId, actors, false),
-    generateScene(5, "resolution",    idea, worldId, actors, true),
-  ];
-
-  // ── Arabic Script Block ──────────────────────────────────────────────────
-  const arabicHeader = `
-═══════════════════════════════════════════════════
-     استوديو كيان للإنتاج السينمائي بالذكاء الاصطناعي
-         Kayan AI Productions — Official Script
-═══════════════════════════════════════════════════
-
-العنوان: ${idea}
-العالم: ${worldLabel}
-الممثلون: ${actorLine}
-الأجواء: ${settings.atmosphere}
-درجة الألوان: ${settings.colorGrade}
-
-───────────────────────────────────────────────────
-ملاحظة للمخرج: جميع اللقطات مُحسَّنة لمدة 5 ثوانٍ
-لتوليد الذكاء الاصطناعي مع تجنب مشاكل الدمج
-───────────────────────────────────────────────────
-`;
-
-  const arabicScenes = scenes
-    .map((scene) => `
-
-╔═══════════════════════════════════════════════════╗
-  المشهد ${scene.sceneNumber} — ${scene.sceneTitle}
-╚═══════════════════════════════════════════════════╝
-
-📍 وصف المشهد:
-${scene.sceneDescription}
-
-🎬 حركة الكاميرا:
-${scene.cameraMovement}
-
-⏱ المدة:
-${scene.duration}
-
-💬 حوار الشخصية:
-${scene.characterDialogue}
-
-🎵 الموسيقى والصوت:
-${scene.audioMusic}
-
-🎼 Backing Score Prompt (Udio/Suno):
-${scene.backingScorePrompt}
-
-🔊 المؤثرات الصوتية المحيطية (Ambient SFX):
-${scene.ambientSfx}
-
-───────────────────────────────────────────────────`)
-    .join("\n");
-
-  const arabicFooter = `
-
-╔═══════════════════════════════════════════════════╗
-        توجيهات الإنتاج للذكاء الاصطناعي
-╚═══════════════════════════════════════════════════╝
-
-• كل لقطة = 5 ثوانٍ مستقلة للتوليد المنفصل
-• اللقطات العاطفية: كلوز أب مقرَّب على الوجه والعيون
-• لقطات الحركة: شوت عريض يُظهر البيئة والشخصية
-• تجنب الدمج: احرص على توليد كل مشهد بشكل مستقل
-• لون المشهد: ${settings.colorGrade}
-• الموسيقى: ${settings.musicStyle}
-
-═══════════════════════════════════════════════════
-         Produced by Kayan AI Productions ©
-═══════════════════════════════════════════════════
-`;
-
-  // ── English Subtitle Block ───────────────────────────────────────────────
-  const englishSubtitles = `
-═══════════════════════════════════════════════════
-   KAYAN AI PRODUCTIONS — English Subtitle Track
-         Synchronized · ${idea}
-═══════════════════════════════════════════════════
-
-World: ${worldLabel}  |  Era: ${settings.era}
-Actors: ${actorLine}
-
-` + scenes.map((scene) => `
-[SCENE ${scene.sceneNumber}] — ${scene.sceneTitle.replace(/\s/g, " ")}
-─────────────────────────────────────────────
-SUBTITLE: ${scene.characterDialogueEn}
-
-BACKING SCORE: ${scene.backingScorePrompt}
-
-AUDIO NOTES: ${scene.audioMusic}
-`).join("\n") + `
-
-═══════════════════════════════════════════════════
-  © Kayan AI Productions — All Rights Reserved
-═══════════════════════════════════════════════════
-`;
-
-  return arabicHeader + arabicScenes + arabicFooter + "\n---ENGLISH_SUBTITLES---\n" + englishSubtitles;
 }
