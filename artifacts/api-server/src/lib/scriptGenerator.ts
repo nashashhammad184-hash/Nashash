@@ -1,13 +1,14 @@
 import { Groq } from "groq-sdk";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || ""
-});
-
-interface GenerateScriptInput {
+export interface GenerateScriptInput {
   idea: string;
   worldId: string;
-  actors: Array<{ name: string; type: string; age: number; style: string }>;
+  actors: Array<{
+    name: string;
+    type: string;
+    age: number;
+    style: string;
+  }>;
   settings?: {
     durationMinutes?: number;
     targetScenes?: number;
@@ -15,99 +16,357 @@ interface GenerateScriptInput {
   };
 }
 
-export async function generateScript(input: GenerateScriptInput) {
+export interface GeneratedShot {
+  shotOrder: number;
+  description: string;
+  cameraMovement: string;
+  durationSeconds: number;
+  dialogue: string;
+  audioNote: string;
+}
+
+export interface GeneratedScene {
+  sceneNumber: number;
+  sceneTitle: string;
+  visualDescription: string;
+  characterDialogue: string;
+  backingScorePrompt: string;
+  audioMusic: string;
+  englishSubtitles: string;
+  shots: GeneratedShot[];
+}
+
+export interface GeneratedScript {
+  title: string;
+  scenes: GeneratedScene[];
+}
+
+export interface GenerateScriptResult {
+  success: true;
+  text: string;
+  rawStructure: GeneratedScript;
+}
+
+export async function generateScript(
+  input: GenerateScriptInput,
+): Promise<GenerateScriptResult> {
   const { idea, worldId, actors, settings } = input;
-  
-  if (!process.env.GROQ_API_KEY) {
-    console.warn("⚠️ GROQ_API_KEY غير مضبوط، سيتم التراجع إلى محرك افتراضي لتجنب الانهيار.");
-    return fallbackScriptGenerator(idea, actors);
+
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+
+  if (!apiKey) {
+    console.warn("GROQ_API_KEY is not configured.");
+    return fallbackScriptGenerator(idea);
   }
 
-  const actorsList = actors.map(a => `${a.name} (${a.age} سنة، طراز: ${a.style})`).join(", ");
-  
-  const systemPrompt = `You are an expert cinematic screenwriter, researcher, and co-creator in an AI filmmaking studio. 
-Your task is to collaborate with the user. The user's input might be a fully detailed script or just a rough idea/historical legend/myth.
-If it is a rough idea/legend, you must creatively expand it, write the full plotline, dramatize the scenes, and build the dialogue to assist them.
-If it is a complete script, break it down structurally.
-In both cases, split the story into detailed scenes and multiple specific shot plans.
-You must return your response STRICTLY as a valid JSON object matching this TypeScript structure:
+  const groq = new Groq({ apiKey });
+
+  const actorsList =
+    actors.length > 0
+      ? actors
+          .map(
+            (actor) =>
+              `${actor.name} (${actor.age} years old, ${actor.type}, ${actor.style})`,
+          )
+          .join(", ")
+      : "No predefined characters.";
+
+  const model =
+    process.env.GROQ_MODEL?.trim() ||
+    "llama-3.3-70b-versatile";
+
+  const systemPrompt = `
+You are a professional cinematic screenwriter and AI film director.
+
+Create a complete cinematic screenplay from the user's idea.
+
+The input can be a simple idea, legend, myth, historical event, story, or existing screenplay.
+
+Expand incomplete ideas creatively while preserving the core concept.
+
+Return ONLY valid JSON.
+
+Required structure:
+
 {
-  "title": "Movie Title",
+  "title": "Movie title",
   "scenes": [
     {
       "sceneNumber": 1,
-      "sceneTitle": "Scene Title",
-      "visualDescription": "Detailed visual setup of the setting and action",
-      "characterDialogue": "Dialogue text with speaker names in Arabic",
-      "backingScorePrompt": "AI Music generator prompt for the atmosphere",
-      "audioMusic": "SFX notes",
-      "englishSubtitles": "English subtitles translation of the dialogue",
+      "sceneTitle": "Scene title",
+      "visualDescription": "Detailed cinematic visual description",
+      "characterDialogue": "Arabic dialogue with speaker names",
+      "backingScorePrompt": "Music generation prompt",
+      "audioMusic": "Ambient and SFX notes",
+      "englishSubtitles": "English subtitle translation",
       "shots": [
         {
           "shotOrder": 1,
-          "description": "Visual details of what happens in this specific shot",
-          "cameraMovement": "Cinematic camera movement (e.g., cinematic drone pan, slow push-in, tracking shot)",
+          "description": "Detailed visual description of this exact shot",
+          "cameraMovement": "Professional cinematic camera movement",
           "durationSeconds": 5,
-          "dialogue": "Spoken sentence if any in this shot",
-          "audioNote": "Specific sound effect for this shot"
+          "dialogue": "Dialogue for this shot",
+          "audioNote": "Specific sound effects"
         }
       ]
     }
   ]
-}`;
+}
+
+Every scene must contain multiple shots.
+
+Maintain continuity of:
+- characters
+- costumes
+- locations
+- lighting
+- time
+- atmosphere
+
+Use professional cinematic camera terminology.
+`;
 
   const userPrompt = `
-  User Input (Full story or rough legend/idea): ${idea}
-  Cinematic World Profile Context: ${worldId}
-  Available Main Actors/Characters: [ ${actorsList} ]
-  Target Production Settings:
-  - Scenes Count: ${settings?.targetScenes || "Flexible based on story length"}
-  - Film Genre: ${settings?.genre || "Cinematic Drama"}
-  
-  Collaborate with the user, expand the legend/idea if needed, write professional Arabic dialogue, and generate a deep, engaging screenplay matching the JSON schema provided. Ensure multiple detailed shots per scene for high-quality video generation.`;
+USER IDEA:
+${idea}
+
+CINEMATIC WORLD:
+${worldId}
+
+AVAILABLE CHARACTERS:
+${actorsList}
+
+GENRE:
+${settings?.genre || "Cinematic Drama"}
+
+TARGET SCENES:
+${settings?.targetScenes || "Flexible"}
+
+TARGET DURATION:
+${settings?.durationMinutes || "Flexible"} minutes
+
+Create the complete cinematic screenplay and detailed shot plan.
+Write professional Arabic dialogue where appropriate.
+`;
 
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      model: "llama3-8b-8192",
-      response_format: { type: "json_object" }
-    });
-
-    const responseContent = chatCompletion.choices?.message?.content || "{}";
-    const scriptData = JSON.parse(responseContent);
-    
-    let formattedText = `🎬 TITLE: ${scriptData.title || "Kayan AI Film Production"}\n\n`;
-    
-    if (scriptData.scenes && Array.isArray(scriptData.scenes)) {
-      scriptData.scenes.forEach((scene: any) => {
-        formattedText += `[SCENE ${scene.sceneNumber}] - ${scene.sceneTitle}\n`;
-        formattedText += `VISUAL: ${scene.visualDescription}\n`;
-        formattedText += `DIALOGUE:\n${scene.characterDialogue}\n`;
-        formattedText += `SUBTITLE: ${scene.englishSubtitles || ""}\n`;
-        formattedText += `BACKING SCORE: ${scene.backingScorePrompt || ""}\n`;
-        formattedText += `AUDIO NOTES: ${scene.audioMusic || ""}\n\n`;
+    const completion =
+      await groq.chat.completions.create({
+        model,
+        temperature: 0.7,
+        max_tokens: 12000,
+        response_format: {
+          type: "json_object",
+        },
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt,
+          },
+          {
+            role: "user",
+            content: userPrompt,
+          },
+        ],
       });
-    }
+
+    const content =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "{}";
+
+    const parsed = JSON.parse(content);
+
+    const scriptData: GeneratedScript = {
+      title:
+        typeof parsed.title === "string" &&
+        parsed.title.trim()
+          ? parsed.title.trim()
+          : "Kayan AI Film",
+
+      scenes: Array.isArray(parsed.scenes)
+        ? parsed.scenes.map(
+            (scene: any, sceneIndex: number) => ({
+              sceneNumber:
+                Number(scene.sceneNumber) ||
+                sceneIndex + 1,
+
+              sceneTitle:
+                String(scene.sceneTitle || "").trim() ||
+                `Scene ${sceneIndex + 1}`,
+
+              visualDescription:
+                String(
+                  scene.visualDescription || "",
+                ).trim(),
+
+              characterDialogue:
+                String(
+                  scene.characterDialogue || "",
+                ).trim(),
+
+              backingScorePrompt:
+                String(
+                  scene.backingScorePrompt || "",
+                ).trim(),
+
+              audioMusic:
+                String(
+                  scene.audioMusic || "",
+                ).trim(),
+
+              englishSubtitles:
+                String(
+                  scene.englishSubtitles || "",
+                ).trim(),
+
+              shots: Array.isArray(scene.shots)
+                ? scene.shots.map(
+                    (shot: any, shotIndex: number) => ({
+                      shotOrder:
+                        Number(shot.shotOrder) ||
+                        shotIndex + 1,
+
+                      description:
+                        String(
+                          shot.description || "",
+                        ).trim(),
+
+                      cameraMovement:
+                        String(
+                          shot.cameraMovement ||
+                            "Cinematic slow push-in",
+                        ).trim(),
+
+                      durationSeconds:
+                        Number(
+                          shot.durationSeconds,
+                        ) > 0
+                          ? Math.round(
+                              Number(
+                                shot.durationSeconds,
+                              ),
+                            )
+                          : 5,
+
+                      dialogue:
+                        String(
+                          shot.dialogue || "",
+                        ).trim(),
+
+                      audioNote:
+                        String(
+                          shot.audioNote || "",
+                        ).trim(),
+                    }),
+                  )
+                : [],
+            }),
+          )
+        : [],
+    };
 
     return {
       success: true,
-      text: formattedText,
-      rawStructure: scriptData
+      text: formatScriptText(scriptData),
+      rawStructure: scriptData,
     };
-
   } catch (error) {
-    console.error("❌ فشل محرك الذكاء الاصطناعي في توليد القصة:", error);
-    return fallbackScriptGenerator(idea, actors);
+    console.error(
+      "Groq script generation failed:",
+      error,
+    );
+
+    return fallbackScriptGenerator(idea);
   }
 }
 
-function fallbackScriptGenerator(idea: string, actors: any[]) {
+function formatScriptText(
+  script: GeneratedScript,
+): string {
+  let text =
+    `🎬 TITLE: ${script.title}\n\n`;
+
+  for (const scene of script.scenes) {
+    text +=
+      `[SCENE ${scene.sceneNumber}] - ${scene.sceneTitle}\n`;
+
+    text +=
+      `VISUAL: ${scene.visualDescription}\n`;
+
+    text +=
+      `DIALOGUE:\n${scene.characterDialogue}\n`;
+
+    text +=
+      `SUBTITLE: ${scene.englishSubtitles}\n`;
+
+    text +=
+      `BACKING SCORE: ${scene.backingScorePrompt}\n`;
+
+    text +=
+      `AUDIO NOTES: ${scene.audioMusic}\n`;
+
+    for (const shot of scene.shots) {
+      text +=
+        `[SHOT ${shot.shotOrder}] ` +
+        `${shot.description}\n`;
+
+      text +=
+        `CAMERA: ${shot.cameraMovement}\n`;
+
+      text +=
+        `DURATION: ${shot.durationSeconds}s\n`;
+
+      if (shot.dialogue) {
+        text +=
+          `DIALOGUE: ${shot.dialogue}\n`;
+      }
+
+      if (shot.audioNote) {
+        text +=
+          `AUDIO: ${shot.audioNote}\n`;
+      }
+
+      text += "\n";
+    }
+
+    text += "\n";
+  }
+
+  return text;
+}
+
+function fallbackScriptGenerator(
+  idea: string,
+): GenerateScriptResult {
+  const script: GeneratedScript = {
+    title: "Kayan AI Film",
+    scenes: [
+      {
+        sceneNumber: 1,
+        sceneTitle: "Opening",
+        visualDescription:
+          "Cinematic opening based on the user's idea.",
+        characterDialogue: "",
+        backingScorePrompt: "",
+        audioMusic: "",
+        englishSubtitles: "",
+        shots: [
+          {
+            shotOrder: 1,
+            description: "Establishing shot matching the concept: " + idea,
+            cameraMovement: "Wide slow pan",
+            durationSeconds: 5,
+            dialogue: "",
+            audioNote: ""
+          }
+        ]
+      }
+    ]
+  };
+
   return {
     success: true,
-    text: `🎬 فيلم: قصة من إنتاج كيان السينمائي\n\nالفكرة الأساسية: ${idea}\n\n[SCENE 1] - الافتتاحية\nالمشهد الافتتاحي للقصة بناءً على رؤيتك الفنية وممثليك الاستوديو.`,
-    rawStructure: { title: "Kayan Film", scenes: [] }
+    text: formatScriptText(script),
+    rawStructure: script
   };
 }
