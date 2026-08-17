@@ -80,11 +80,14 @@ router.post(
     }
 
     const {
-      projectId,
-      idea,
-      worldId,
-      actors,
-    } = parsed.data;
+        projectId,
+        idea,
+        worldId,
+        actors,
+        durationMinutes,
+        targetScenes,
+        genre,
+      } = parsed.data;
 
     /*
      * The current API contract provides actor names.
@@ -101,11 +104,16 @@ router.post(
       }));
 
     const generated =
-      await generateScript({
-        idea,
-        worldId,
-        actors: normalizedActors,
-      });
+        await generateScript({
+          idea,
+          worldId,
+          actors: normalizedActors,
+          settings: {
+            durationMinutes,
+            targetScenes,
+            genre,
+          },
+        });
 
     const [script] = await db
       .insert(scriptsTable)

@@ -3,6 +3,13 @@ import { Project, useListProjectScripts, useGenerateScript, getListProjectScript
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Loader2, PenTool, Sparkles, ScrollText, Globe, ChevronDown, ChevronUp } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -70,6 +77,9 @@ function EnglishSubtitlesPanel({ content }: { content: string }) {
 export default function WritingTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
   const [idea, setIdea] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState("1");
+  const [targetScenes, setTargetScenes] = useState("2");
+  const [genre, setGenre] = useState("cinematic");
 
   const { data: scripts, isLoading: scriptsLoading } = useListProjectScripts(project.id, {
     query: { enabled: !!project.id, queryKey: getListProjectScriptsQueryKey(project.id) }
@@ -86,7 +96,10 @@ export default function WritingTab({ project }: { project: Project }) {
       data: {
         projectId: project.id,
         idea,
-        worldId: project.worldId
+        worldId: project.worldId,
+          durationMinutes: Number(durationMinutes),
+          targetScenes: Number(targetScenes),
+          genre
       }
     }, {
       onSuccess: () => {
@@ -130,6 +143,64 @@ export default function WritingTab({ project }: { project: Project }) {
               placeholder="وصف المشهد... مثلاً: البطل يواجه خصمه لأول مرة في وسط عاصفة ممطرة، وهناك حوار مشحون بالتوتر."
               className="flex-1 bg-background/50 border-white/10 resize-none text-base leading-relaxed"
             />
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  مدة الفيلم
+                </label>
+                <Select value={durationMinutes} onValueChange={setDurationMinutes}>
+                  <SelectTrigger className="bg-background/50 border-white/10">
+                    <SelectValue placeholder="المدة" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map((value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        {value} {value === 1 ? "دقيقة" : "دقائق"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  عدد المشاهد
+                </label>
+                <Select value={targetScenes} onValueChange={setTargetScenes}>
+                  <SelectTrigger className="bg-background/50 border-white/10">
+                    <SelectValue placeholder="المشاهد" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 6 }, (_, i) => i + 1).map((value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        {value} {value === 1 ? "مشهد" : "مشاهد"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  نوع الفيلم
+                </label>
+                <Select value={genre} onValueChange={setGenre}>
+                  <SelectTrigger className="bg-background/50 border-white/10">
+                    <SelectValue placeholder="النوع" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cinematic">سينمائي</SelectItem>
+                    <SelectItem value="science fiction cinematic">خيال علمي</SelectItem>
+                    <SelectItem value="action cinematic">أكشن</SelectItem>
+                    <SelectItem value="drama cinematic">دراما</SelectItem>
+                    <SelectItem value="horror cinematic">رعب</SelectItem>
+                    <SelectItem value="fantasy cinematic">فانتازيا</SelectItem>
+                    <SelectItem value="documentary cinematic">وثائقي</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
             <Button
               onClick={handleGenerate}

@@ -47,3 +47,18 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Backup files
+*.bak
+*.bak-*
+*.broken
+*.before-*
+
+# Generated/build output
+artifacts/api-server/dist.before-generation-settings/
+*.bak*

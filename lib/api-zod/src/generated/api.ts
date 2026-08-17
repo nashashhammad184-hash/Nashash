@@ -340,7 +340,10 @@ export const GenerateScriptBody = zod.object({
   "projectId": zod.number(),
   "idea": zod.string().min(1),
   "worldId": zod.string(),
-  "actors": zod.array(zod.string()).optional()
+  "actors": zod.array(zod.string()).optional(),
+  "durationMinutes": zod.number().min(1).max(10).optional(),
+  "targetScenes": zod.number().min(1).max(6).optional(),
+  "genre": zod.string().optional()
 })
 
 export const GenerateScriptResponse = zod.object({
