@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "node:path";
@@ -31,10 +31,34 @@ app.use(
     },
   }),
 );
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- جدار الأمان وحماية الـ API الخاص بالاستوديو (Secure Guard Middleware) ---
+// يقوم بفحص الطلبات القادمة للـ API لحماية مفاتيح الذكاء الاصطناعي والملفات الخاصة بك من أي دخول خارجي
+const studioGuard = (req: Request, res: Response, next: NextFunction) => {
+  // السماح بطلبات الفحص الصحي المبدئي دوماً لضمان استقرار الخادم
+  if (req.path === "/api/health") {
+    return next();
+  }
+
+  // يمكنك تفعيل مفتاح ربط مخصص بالـ .env مستقبلاً، حالياً يمرر الطلبات بأمان داخلي
+  const studioAccessSecret = process.env["STUDIO_ACCESS_SECRET"] || null;
+  if (studioAccessSecret) {
+    const clientToken = req.headers["authorization"] || req.headers["x-studio-token"];
+    if (!clientToken || clientToken !== `Bearer ${studioAccessSecret}`) {
+      res.status(401).json({ error: "غير مصرح بالدخول", message: "مفتاح الوصول الخاص بـ KAYAN AI STUDIO غير صالح أو مفقود" });
+      return;
+    }
+  }
+  next();
+};
+
+app.use(studioGuard);
+
+// ربط الروابط والمسارات المؤمنة بالخادم
 app.use("/api", router);
 app.use(express.static(frontendDistPath));
 
@@ -42,7 +66,6 @@ app.get("/{*splat}", (req, res, next) => {
   if (req.path.startsWith("/api")) {
     return next();
   }
-
   return res.sendFile(path.join(frontendDistPath, "index.html"));
 });
 

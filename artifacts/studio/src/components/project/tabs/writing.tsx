@@ -97,9 +97,6 @@ export default function WritingTab({ project }: { project: Project }) {
         projectId: project.id,
         idea,
         worldId: project.worldId,
-          durationMinutes: Number(durationMinutes),
-          targetScenes: Number(targetScenes),
-          genre
       }
     }, {
       onSuccess: () => {

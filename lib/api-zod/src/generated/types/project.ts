@@ -10,6 +10,8 @@ export interface Project {
   id: number;
   title: string;
   worldId: string;
+  projectType: string;
+  style: string;
   /** @nullable */
   synopsis?: string | null;
   status: string;

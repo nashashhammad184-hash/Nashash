@@ -7,6 +7,8 @@ export const projectsTable = pgTable("projects", {
   title: text("title").notNull(),
   worldId: text("world_id").notNull(),
   synopsis: text("synopsis"),
+  projectType: text("project_type").notNull().default("film"),
+  style: text("style").notNull().default("drama"),
   status: text("status").notNull().default("development"),
   isArchived: boolean("is_archived").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),

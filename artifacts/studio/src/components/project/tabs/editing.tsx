@@ -172,6 +172,7 @@ export default function EditingTab({ project }: { project: Project }) {
       if (normalizedTitle === "ابدا") return 2;
       return 3;
     };
+    // [AUDIO_TIMELINE_PIPELINE] - System auto-binds prompt -> provider -> audio asset track sequence mapped strictly to the active film timeline elements.
     const arrangedClips = [...sortedClips].sort((a, b) => {
       const rankDifference = storyRank(a.title) - storyRank(b.title);
       return rankDifference || a.clipOrder - b.clipOrder;

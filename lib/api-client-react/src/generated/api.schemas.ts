@@ -29,6 +29,8 @@ export interface Project {
   id: number;
   title: string;
   worldId: string;
+  projectType: string;
+  style: string;
   /** @nullable */
   synopsis?: string | null;
   status: string;
@@ -42,6 +44,8 @@ export interface ProjectInput {
   /** @minLength 1 */
   title: string;
   worldId: string;
+  projectType: string;
+  style: string;
   synopsis?: string;
 }
 
@@ -49,6 +53,8 @@ export interface ProjectPatch {
   /** @minLength 1 */
   title?: string;
   worldId?: string;
+  projectType?: string;
+  style?: string;
   synopsis?: string;
   status?: string;
 }
@@ -89,9 +95,6 @@ export interface ScriptGenerateInput {
   idea: string;
   worldId: string;
   actors?: string[];
-  durationMinutes?: number;
-  targetScenes?: number;
-  genre?: string;
 }
 
 export interface VideoGenerateInput {

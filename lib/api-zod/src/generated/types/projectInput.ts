@@ -10,5 +10,7 @@ export interface ProjectInput {
   /** @minLength 1 */
   title: string;
   worldId: string;
+  projectType: string;
+  style: string;
   synopsis?: string;
 }

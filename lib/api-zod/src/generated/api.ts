@@ -29,7 +29,21 @@ export const ListActorsResponseItem = zod.object({
   "type": zod.string(),
   "age": zod.number(),
   "style": zod.string(),
-  "imageUrl": zod.string().nullish()
+  "imageUrl": zod.string().nullish(),
+  "faceDescription": zod.string(),
+  "hair": zod.string(),
+  "eyes": zod.string(),
+  "appearance": zod.string(),
+  "clothing": zod.string(),
+  "distinctiveFeatures": zod.string(),
+  "psychologicalTraits": zod.string(),
+  "background": zod.string(),
+  "speechStyle": zod.string(),
+  "voice": zod.string(),
+  "voiceId": zod.string(),
+  "referenceImages": zod.string(),
+  "characterPrompt": zod.string(),
+  "negativePrompt": zod.string()
 })
 export const ListActorsResponse = zod.array(ListActorsResponseItem)
 
@@ -57,6 +71,8 @@ export const ListProjectsResponseItem = zod.object({
   "id": zod.number(),
   "title": zod.string(),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().nullish(),
   "status": zod.string(),
   "isArchived": zod.boolean().optional(),
@@ -75,6 +91,8 @@ export const ListProjectsResponse = zod.array(ListProjectsResponseItem)
 export const CreateProjectBody = zod.object({
   "title": zod.string().min(1),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().optional()
 })
 
@@ -82,6 +100,8 @@ export const CreateProjectResponse = zod.object({
   "id": zod.number(),
   "title": zod.string(),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().nullish(),
   "status": zod.string(),
   "isArchived": zod.boolean().optional(),
@@ -101,6 +121,8 @@ export const GetProjectResponse = zod.object({
   "id": zod.number(),
   "title": zod.string(),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().nullish(),
   "status": zod.string(),
   "isArchived": zod.boolean().optional(),
@@ -122,6 +144,8 @@ export const UpdateProjectParams = zod.object({
 export const UpdateProjectBody = zod.object({
   "title": zod.string().min(1).optional(),
   "worldId": zod.string().optional(),
+  "projectType": zod.string().optional(),
+  "style": zod.string().optional(),
   "synopsis": zod.string().optional(),
   "status": zod.string().optional()
 })
@@ -130,6 +154,8 @@ export const UpdateProjectResponse = zod.object({
   "id": zod.number(),
   "title": zod.string(),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().nullish(),
   "status": zod.string(),
   "isArchived": zod.boolean().optional(),
@@ -163,6 +189,8 @@ export const ArchiveProjectResponse = zod.object({
   "id": zod.number(),
   "title": zod.string(),
   "worldId": zod.string(),
+  "projectType": zod.string(),
+  "style": zod.string(),
   "synopsis": zod.string().nullish(),
   "status": zod.string(),
   "isArchived": zod.boolean().optional(),
@@ -267,7 +295,7 @@ export const ListProjectShotsParams = zod.object({
 export const ListProjectShotsResponseItem = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
-  "scriptId": zod.number().nullish(),
+  "scriptId": zod.number().int().nullish(),
   "sceneNumber": zod.number(),
   "description": zod.string(),
   "cameraMovement": zod.string(),
@@ -304,7 +332,7 @@ export const ListProjectTasksResponseItem = zod.object({
   "projectId": zod.number(),
   "title": zod.string(),
   "status": zod.string(),
-  "assignedActorId": zod.number().nullish(),
+  "assignedActorId": zod.number().int().nullish(),
   "dueDate": zod.string().nullish(),
   "createdAt": zod.string()
 })
@@ -322,7 +350,7 @@ export const ListProjectClipsResponseItem = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
   "title": zod.string(),
-  "durationSeconds": zod.number().nullish(),
+  "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
   "createdAt": zod.string()
@@ -340,10 +368,7 @@ export const GenerateScriptBody = zod.object({
   "projectId": zod.number(),
   "idea": zod.string().min(1),
   "worldId": zod.string(),
-  "actors": zod.array(zod.string()).optional(),
-  "durationMinutes": zod.number().min(1).max(10).optional(),
-  "targetScenes": zod.number().min(1).max(6).optional(),
-  "genre": zod.string().optional()
+  "actors": zod.array(zod.string()).optional()
 })
 
 export const GenerateScriptResponse = zod.object({
@@ -383,7 +408,7 @@ export const GenerateVideoResponse = zod.object({
  * @summary Stream a generated video through the studio
  */
 export const StreamVideoQueryParams = zod.object({
-  "url": zod.string().url()
+  "url": zod.coerce.string().url()
 })
 
 export const StreamVideoResponse = zod.unknown()
@@ -393,7 +418,7 @@ export const StreamVideoResponse = zod.unknown()
  * @summary Download a generated video
  */
 export const DownloadVideoQueryParams = zod.object({
-  "url": zod.string().url()
+  "url": zod.coerce.string().url()
 })
 
 export const DownloadVideoResponse = zod.unknown()
@@ -416,7 +441,7 @@ export const CreateShotBody = zod.object({
 export const CreateShotResponse = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
-  "scriptId": zod.number().nullish(),
+  "scriptId": zod.number().int().nullish(),
   "sceneNumber": zod.number(),
   "description": zod.string(),
   "cameraMovement": zod.string(),
@@ -446,7 +471,7 @@ export const UpdateShotBody = zod.object({
 export const UpdateShotResponse = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
-  "scriptId": zod.number().nullish(),
+  "scriptId": zod.number().int().nullish(),
   "sceneNumber": zod.number(),
   "description": zod.string(),
   "cameraMovement": zod.string(),
@@ -486,7 +511,7 @@ export const CreateTaskResponse = zod.object({
   "projectId": zod.number(),
   "title": zod.string(),
   "status": zod.string(),
-  "assignedActorId": zod.number().nullish(),
+  "assignedActorId": zod.number().int().nullish(),
   "dueDate": zod.string().nullish(),
   "createdAt": zod.string()
 })
@@ -511,7 +536,7 @@ export const UpdateTaskResponse = zod.object({
   "projectId": zod.number(),
   "title": zod.string(),
   "status": zod.string(),
-  "assignedActorId": zod.number().nullish(),
+  "assignedActorId": zod.number().int().nullish(),
   "dueDate": zod.string().nullish(),
   "createdAt": zod.string()
 })
@@ -545,7 +570,7 @@ export const CreateClipResponse = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
   "title": zod.string(),
-  "durationSeconds": zod.number().nullish(),
+  "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
   "createdAt": zod.string()
@@ -570,7 +595,7 @@ export const UpdateClipResponse = zod.object({
   "id": zod.number(),
   "projectId": zod.number(),
   "title": zod.string(),
-  "durationSeconds": zod.number().nullish(),
+  "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
   "createdAt": zod.string()

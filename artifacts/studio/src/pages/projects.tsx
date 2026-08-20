@@ -22,6 +22,8 @@ export default function Projects() {
   const [title, setTitle] = useState("");
   const [worldId, setWorldId] = useState("");
   const [synopsis, setSynopsis] = useState("");
+  const [projectType, setProjectType] = useState("film");
+  const [style, setStyle] = useState("drama");
 
   const { data: projects, isLoading: projectsLoading } = useListProjects({ archived: false });
   const { data: worlds, isLoading: worldsLoading } = useListWorlds();
@@ -32,13 +34,17 @@ export default function Projects() {
     e.preventDefault();
     if (!title || !worldId) return;
 
-    createProject.mutate({ data: { title, worldId, synopsis } }, {
+    createProject.mutate({
+      data: { title, worldId, projectType, style, synopsis }
+    }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ archived: false }) });
         setIsDialogOpen(false);
         setTitle("");
         setWorldId("");
         setSynopsis("");
+        setProjectType("film");
+        setStyle("drama");
         toast.success("تم إنشاء المشروع بنجاح");
       },
       onError: () => {
@@ -94,63 +100,141 @@ export default function Projects() {
           </div>
           
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2 shrink-0">
-                <Plus className="w-4 h-4" />
-                مشروع جديد
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px] border-white/10 bg-card/95 backdrop-blur-xl">
-              <DialogHeader>
-                <DialogTitle className="text-2xl font-bold">إنشاء مشروع سينمائي جديد</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleCreate} className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground/80">عنوان الفيلم</label>
-                  <Input 
-                    value={title} 
-                    onChange={e => setTitle(e.target.value)} 
-                    placeholder="مثال: رحلة إلى المجهول"
-                    className="bg-background/50 border-white/10"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground/80">العالم السينمائي</label>
-                  <Select value={worldId} onValueChange={setWorldId} required>
-                    <SelectTrigger className="bg-background/50 border-white/10">
-                      <SelectValue placeholder="اختر عالم القصة" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {worlds?.map(w => (
-                        <SelectItem key={w.id} value={w.id}>{w.nameAr}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground/80">الملخص (اختياري)</label>
-                  <Textarea 
-                    value={synopsis} 
-                    onChange={e => setSynopsis(e.target.value)} 
-                    placeholder="اكتب ملخصاً قصيراً للقصة..."
-                    className="bg-background/50 border-white/10 min-h-[100px] resize-none"
-                  />
-                </div>
-                <DialogFooter className="mt-6">
-                  <Button type="button" variant="ghost" onClick={() => setIsDialogOpen(false)}>إلغاء</Button>
-                  <Button type="submit" disabled={createProject.isPending} className="gap-2">
-                    {createProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clapperboard className="w-4 h-4" />}
-                    بدء الإنتاج
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
+              <DialogTrigger asChild>
+                <Button className="gap-2 shrink-0">
+                  <Plus className="w-4 h-4" />
+                  مشروع جديد
+                </Button>
+              </DialogTrigger>
 
-      {filteredProjects.length === 0 ? (
+              <DialogContent className="w-[calc(100%-24px)] max-w-[520px] max-h-[90vh] overflow-y-auto rounded-2xl border-white/10 bg-card/95 backdrop-blur-xl p-5 sm:p-6">
+                <DialogHeader className="text-right">
+                  <DialogTitle className="text-2xl font-bold">
+                    مشروع جديد
+                  </DialogTitle>
+                  <p className="text-sm text-muted-foreground">
+                    اختر الإعدادات الأساسية وسنبدأ بناء المشروع معك.
+                  </p>
+                </DialogHeader>
+
+                <form onSubmit={handleCreate} className="space-y-5 mt-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      اسم المشروع
+                    </label>
+                    <Input
+                      value={title}
+                      onChange={e => setTitle(e.target.value)}
+                      placeholder="مثال: رحلة إلى المجهول"
+                      className="h-12 bg-background/50 border-white/10 text-base"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      نوع المشروع
+                    </label>
+                    <Select
+                      value={projectType}
+                      onValueChange={setProjectType}
+                    >
+                      <SelectTrigger className="h-12 bg-background/50 border-white/10">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="film">🎬 فيلم</SelectItem>
+                        <SelectItem value="series">📺 مسلسل</SelectItem>
+                        <SelectItem value="short">📱 فيديو قصير</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      نوع القصة
+                    </label>
+                    <Select
+                      value={style}
+                      onValueChange={setStyle}
+                    >
+                      <SelectTrigger className="h-12 bg-background/50 border-white/10">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="drama">🎭 دراما</SelectItem>
+                        <SelectItem value="action">💥 أكشن</SelectItem>
+                        <SelectItem value="comedy">😂 كوميديا</SelectItem>
+                        <SelectItem value="horror">👻 رعب</SelectItem>
+                        <SelectItem value="scifi">🚀 خيال علمي</SelectItem>
+                        <SelectItem value="romance">❤️ رومانسي</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      العالم السينمائي
+                    </label>
+                    <Select
+                      value={worldId}
+                      onValueChange={setWorldId}
+                    >
+                      <SelectTrigger className="h-12 bg-background/50 border-white/10">
+                        <SelectValue placeholder="اختر عالم القصة" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {worlds?.map(w => (
+                          <SelectItem key={w.id} value={w.id}>
+                            {w.nameAr}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      فكرة المشروع <span className="text-muted-foreground">(اختياري)</span>
+                    </label>
+                    <Textarea
+                      value={synopsis}
+                      onChange={e => setSynopsis(e.target.value)}
+                      placeholder="اكتب فكرة بسيطة عن القصة..."
+                      className="bg-background/50 border-white/10 min-h-[110px] resize-none text-base"
+                    />
+                  </div>
+
+                  <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full sm:w-auto"
+                      onClick={() => setIsDialogOpen(false)}
+                    >
+                      إلغاء
+                    </Button>
+
+                    <Button
+                      type="submit"
+                      disabled={createProject.isPending || !title || !worldId}
+                      className="w-full sm:w-auto h-12 px-8 gap-2"
+                    >
+                      {createProject.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Clapperboard className="w-4 h-4" />
+                      )}
+                      إنشاء المشروع
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+
+{filteredProjects.length === 0 ? (
         <Card className="bg-card/20 border-dashed border-white/10 h-64 flex flex-col items-center justify-center">
           <Film className="w-12 h-12 text-muted-foreground/30 mb-4" />
           <p className="text-muted-foreground text-lg">لم يتم العثور على مشاريع.</p>

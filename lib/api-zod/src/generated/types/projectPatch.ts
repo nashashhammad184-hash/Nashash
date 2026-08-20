@@ -10,6 +10,8 @@ export interface ProjectPatch {
   /** @minLength 1 */
   title?: string;
   worldId?: string;
+  projectType?: string;
+  style?: string;
   synopsis?: string;
   status?: string;
 }

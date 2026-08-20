@@ -1,14 +1,15 @@
 import { Router, type IRouter } from "express";
-import {
-  asc,
+import { asc,
   desc,
-  eq,
-} from "drizzle-orm";
+  eq, inArray } from "drizzle-orm";
 
 import {
   db,
   scriptsTable,
   shotsTable,
+  worldProfilesTable,
+  actorsTable,
+  projectActorsTable,
 } from "@workspace/db";
 
 import {
@@ -79,14 +80,11 @@ router.post(
       return;
     }
 
-    const {
+      const {
         projectId,
         idea,
         worldId,
         actors,
-        durationMinutes,
-        targetScenes,
-        genre,
       } = parsed.data;
 
     /*
@@ -94,14 +92,36 @@ router.post(
      * Convert them into the richer structure expected
      * by the cinematic script generator.
      */
-    const normalizedActors =
-      (actors ?? []).map((name) => ({
+    // استخراج بيانات الـ Character Bible الكاملة من قاعدة البيانات للممثلين المحددين
+    const dbActors = (actors && actors.length > 0)
+      ? await db.select().from(actorsTable).where(inArray(actorsTable.name, actors))
+      : [];
+
+    const normalizedActors = (actors ?? []).map((name) => {
+      const dbActor = dbActors.find(a => a.name === name);
+      return {
         name,
-        type: "supporting",
-        age: 30,
-        style:
-          "cinematic naturalistic",
-      }));
+        type: dbActor?.type ?? "supporting",
+        age: dbActor?.age ?? 30,
+        style: dbActor?.style ?? "cinematic naturalistic",
+        category: dbActor?.category ?? "global",
+        imageUrl: dbActor?.imageUrl,
+        gender: dbActor?.gender,
+        eyeColor: dbActor?.eyeColor,
+        hairStyle: dbActor?.hairStyle,
+        physicalDescription: dbActor?.physicalDescription,
+        personalityTraits: dbActor?.personalityTraits,
+        backstory: dbActor?.backstory,
+        clothingPrompt: dbActor?.clothingPrompt,
+        characterMasterPrompt: dbActor?.characterMasterPrompt,
+        characterNegativePrompt: dbActor?.characterNegativePrompt,
+        faceReferenceUrl: dbActor?.faceReferenceUrl,
+        bodyReferenceUrl: dbActor?.bodyReferenceUrl,
+        secondaryReferenceUrl: dbActor?.secondaryReferenceUrl,
+        voiceId: dbActor?.voiceId,
+        voiceProvider: dbActor?.voiceProvider ?? "elevenlabs"
+      };
+    });
 
     const generated =
         await generateScript({
@@ -109,11 +129,42 @@ router.post(
           worldId,
           actors: normalizedActors,
           settings: {
-            durationMinutes,
-            targetScenes,
-            genre,
+            durationMinutes: 1,
+            targetScenes: 2,
+            genre: "drama",
           },
         });
+
+    // تفكيك الهيكل وتحويله إلى شجرة إنتاج سينمائية موفرة للموارد تدعم الهرمية الخماسية بالكامل
+    const rawStructure = generated.rawStructure;
+    const structuredProductionTree = {
+      seriesId: `series_${projectId}`,
+      title: rawStructure.title || "Kayan Cinematic Series Production",
+      season: {
+        seasonNumber: 1,
+        episode: {
+          episodeNumber: 1,
+          title: `الحلقة الأولى من فكرة: ${idea.substring(0, 30)}...`,
+          scenes: (rawStructure.scenes || []).map((scene) => ({
+            sceneNumber: scene.sceneNumber,
+            sceneTitle: scene.sceneTitle,
+            visualDescription: scene.visualDescription,
+            characterDialogue: scene.characterDialogue,
+            backingScorePrompt: scene.backingScorePrompt,
+            audioMusic: scene.audioMusic,
+            englishSubtitles: scene.englishSubtitles,
+            shots: (scene.shots || []).map((shot) => ({
+              shotOrder: shot.shotOrder,
+              description: shot.description,
+              cameraMovement: shot.cameraMovement,
+              durationSeconds: shot.durationSeconds,
+              dialogue: shot.dialogue,
+              audioNote: shot.audioNote
+            }))
+          }))
+        }
+      }
+    };
 
     const [script] = await db
       .insert(scriptsTable)
@@ -121,8 +172,7 @@ router.post(
         projectId,
         idea,
         worldId,
-        generatedContent:
-          generated.text,
+        generatedContent: JSON.stringify(structuredProductionTree),
       })
       .returning();
 

@@ -12,7 +12,4 @@ export interface ScriptGenerateInput {
   idea: string;
   worldId: string;
   actors?: string[];
-  durationMinutes?: number;
-  targetScenes?: number;
-  genre?: string;
 }

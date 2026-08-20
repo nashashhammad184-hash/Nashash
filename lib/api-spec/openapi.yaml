@@ -685,13 +685,17 @@ components:
 
     Project:
       type: object
-      required: [id, title, worldId, status, createdAt]
+      required: [id, title, worldId, projectType, style, status, createdAt]
       properties:
         id:
           type: number
         title:
           type: string
         worldId:
+          type: string
+        projectType:
+          type: string
+        style:
           type: string
         synopsis:
           type: ["string", "null"]
@@ -706,12 +710,16 @@ components:
 
     ProjectInput:
       type: object
-      required: [title, worldId]
+      required: [title, worldId, projectType, style]
       properties:
         title:
           type: string
           minLength: 1
         worldId:
+          type: string
+        projectType:
+          type: string
+        style:
           type: string
         synopsis:
           type: string
@@ -723,6 +731,10 @@ components:
           type: string
           minLength: 1
         worldId:
+          type: string
+        projectType:
+          type: string
+        style:
           type: string
         synopsis:
           type: string

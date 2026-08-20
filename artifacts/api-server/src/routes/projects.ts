@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import {
   db,
   projectsTable,
@@ -176,7 +176,7 @@ router.patch("/projects/:id/archive", async (req, res): Promise<void> => {
   );
 });
 
-// List actors assigned to project
+// List actors assigned to project with rich Bible fields
 router.get("/projects/:id/actors", async (req, res): Promise<void> => {
   const params = ListProjectActorsParams.safeParse(req.params);
   if (!params.success) {
@@ -197,6 +197,17 @@ router.get("/projects/:id/actors", async (req, res): Promise<void> => {
         type: actorsTable.type,
         age: actorsTable.age,
         style: actorsTable.style,
+        imageUrl: actorsTable.imageUrl,
+        gender: actorsTable.gender,
+        eyeColor: actorsTable.eyeColor,
+        hairStyle: actorsTable.hairStyle,
+        physicalDescription: actorsTable.physicalDescription,
+        personalityTraits: actorsTable.personalityTraits,
+        backstory: actorsTable.backstory,
+        clothingPrompt: actorsTable.clothingPrompt,
+        characterMasterPrompt: actorsTable.characterMasterPrompt,
+        characterNegativePrompt: actorsTable.characterNegativePrompt,
+        voiceId: actorsTable.voiceId
       },
     })
     .from(projectActorsTable)
@@ -244,7 +255,7 @@ router.post("/projects/:id/actors", async (req, res): Promise<void> => {
   );
 });
 
-// Remove actor from project
+// Remove actor from project fixing multi-delete bug
 router.delete("/projects/:id/actors/:actorId", async (req, res): Promise<void> => {
   const params = RemoveActorFromProjectParams.safeParse(req.params);
   if (!params.success) {
@@ -254,7 +265,10 @@ router.delete("/projects/:id/actors/:actorId", async (req, res): Promise<void> =
   const [row] = await db
     .delete(projectActorsTable)
     .where(
-      eq(projectActorsTable.projectId, params.data.id)
+      and(
+        eq(projectActorsTable.projectId, params.data.id),
+        eq(projectActorsTable.actorId, params.data.actorId)
+      )
     )
     .returning();
   if (!row) {
