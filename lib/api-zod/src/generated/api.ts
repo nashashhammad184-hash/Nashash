@@ -27,23 +27,10 @@ export const ListActorsResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "type": zod.string(),
+  "category": zod.string().optional(),
   "age": zod.number(),
   "style": zod.string(),
-  "imageUrl": zod.string().nullish(),
-  "faceDescription": zod.string(),
-  "hair": zod.string(),
-  "eyes": zod.string(),
-  "appearance": zod.string(),
-  "clothing": zod.string(),
-  "distinctiveFeatures": zod.string(),
-  "psychologicalTraits": zod.string(),
-  "background": zod.string(),
-  "speechStyle": zod.string(),
-  "voice": zod.string(),
-  "voiceId": zod.string(),
-  "referenceImages": zod.string(),
-  "characterPrompt": zod.string(),
-  "negativePrompt": zod.string()
+  "imageUrl": zod.string().nullish()
 })
 export const ListActorsResponse = zod.array(ListActorsResponseItem)
 
@@ -216,6 +203,7 @@ export const ListProjectActorsResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "type": zod.string(),
+  "category": zod.string().optional(),
   "age": zod.number(),
   "style": zod.string(),
   "imageUrl": zod.string().nullish()
@@ -248,6 +236,7 @@ export const AssignActorToProjectResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "type": zod.string(),
+  "category": zod.string().optional(),
   "age": zod.number(),
   "style": zod.string(),
   "imageUrl": zod.string().nullish()

@@ -9,6 +9,10 @@ import tasksRouter from "./tasks";
 import clipsRouter from "./clips";
 import studioRouter from "./studio";
 import videoRouter from "./video";
+import bibleRouter from "./bible";
+import pipelineRouter from "./pipeline";
+import productionRouter from "./production";
+import renderRouter from "./render";
 import episodesRouter from "./episodes";
 import audioRouter from "./audio";
 
@@ -24,6 +28,11 @@ router.use(tasksRouter);
 router.use(clipsRouter);
 router.use(studioRouter);
 router.use(videoRouter);
+router.use(bibleRouter);
+router.use(pipelineRouter);
+router.use(securityMiddleware.rateLimiterShield);
+router.use(productionRouter);
+router.use(renderRouter);
 router.use(episodesRouter);
 router.use(audioRouter);
 

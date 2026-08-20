@@ -30,8 +30,9 @@ function placeholder(id: number) {
 export default function ActorsPage() {
   const { data: actors, isLoading, isError, refetch } = useListActors();
   const [search, setSearch] = useState("");
-  const [type, setType] = useState("الكل");
+  const [category, setCategory] = useState("الكل"); const [type, setType] = useState("الكل");
 
+  const categories = ["الكل", "عرب", "عالميون"];
   const types = useMemo(
     () => ["الكل", ...Array.from(new Set((actors ?? []).map(a => a.type)))],
     [actors]
@@ -40,7 +41,7 @@ export default function ActorsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (actors ?? []).filter(a =>
-      (type === "الكل" || a.type === type) &&
+      ((category === "الكل") || (category === "عرب" && a.category === "arab") || (category === "عالميون" && a.category === "global")) && (type === "الكل" || a.type === type) &&
       (!q ||
         a.name.toLowerCase().includes(q) ||
         a.style.toLowerCase().includes(q) ||
@@ -101,6 +102,23 @@ export default function ActorsPage() {
               />
             </div>
 
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {categories.map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={
+                    "shrink-0 rounded-full border px-4 py-2 text-sm transition-all " +
+                    (category === c
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-white/10 bg-card/40 text-muted-foreground hover:border-primary/40")
+                  }
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {types.map(t => (
                 <button

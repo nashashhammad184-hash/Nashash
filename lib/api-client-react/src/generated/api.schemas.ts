@@ -13,6 +13,7 @@ export interface Actor {
   id: number;
   name: string;
   type: string;
+  category?: string;
   age: number;
   style: string;
   imageUrl?: string | null;

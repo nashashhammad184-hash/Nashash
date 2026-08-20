@@ -3,25 +3,27 @@ import { Groq } from "groq-sdk";
 export interface GenerateScriptInput {
   idea: string;
   worldId: string;
+  projectId: number;
   actors: Array<{
+    id: number;
     name: string;
     type: string;
     age: number;
     style: string;
-    gender?: string;
-    eyeColor?: string;
-    hairStyle?: string;
-    physicalDescription?: string;
-    personalityTraits?: string;
-    backstory?: string;
-    clothingPrompt?: string;
-    characterMasterPrompt?: string;
+    role?: string;
+    personality?: string;
+    background?: string;
+    appearance?: any;
+    wardrobe?: any;
+    characterPrompt?: string;
   }>;
-  settings?: {
-    durationMinutes?: number;
-    targetScenes?: number;
-    genre?: string;
+  worldBible?: {
+    era?: string; location?: string; geography?: string; architecture?: string;
+    clothingStyle?: string; technology?: string; lighting?: string;
+    colorPalette?: string; atmosphere?: string; weather?: string; visualStyle?: string;
+    masterPrompt?: string;
   };
+  previousContext?: string;
 }
 
 export interface GeneratedShot {
@@ -58,28 +60,7 @@ export interface GenerateScriptResult {
 export async function generateScript(
   input: GenerateScriptInput,
 ): Promise<GenerateScriptResult> {
-  const { idea, worldId, actors, settings } = input;
-
-  const targetScenes = Math.max(
-    1,
-    Math.min(6, Math.round(Number(settings?.targetScenes) || 2)),
-  );
-
-  const targetDurationMinutes = Math.max(
-    1,
-    Math.min(10, Math.round(Number(settings?.durationMinutes) || 1)),
-  );
-
-  const targetDurationSeconds = targetDurationMinutes * 60;
-
-  const shotsPerScene = Math.max(
-    2,
-    Math.min(
-      5,
-      Math.ceil(targetDurationSeconds / targetScenes / 15),
-    ),
-  );
-
+  const { idea, worldId, actors, worldBible, previousContext } = input;
   const apiKey = process.env.GROQ_API_KEY?.trim();
 
   if (!apiKey) {
@@ -88,65 +69,61 @@ export async function generateScript(
   }
 
   const groq = new Groq({ apiKey });
+  const model = process.env.GROQ_MODEL?.trim() || "llama-3.1-8b-instant";
 
-  // دمج ملامح وصفات الـ Character Bible الكاملة لتوثيق وتثبيت أداء الممثل في السيناريو
-  const actorsList =
-    actors.length > 0
-      ? actors
-          .map(
-            (actor) =>
-              `- الممثل: ${actor.name} (${actor.age} سنة, ${actor.type})
-                * الملامح الجسدية الثابتة: ${actor.physicalDescription || actor.style}
-                * لون العينين والشعر: ${actor.eyeColor || 'تلقائي'} / ${actor.hairStyle || 'تلقائي'}
-                * المظهر والملابس الافتراضية: ${actor.clothingPrompt || 'سينمائي كلاسيكي'}
-                * السلوك وبناء الهوية النفسية: ${actor.personalityTraits || 'كاريزمي غامض'}
-                * برومبت التثبيت البصري للوجه (AI Anchor): ${actor.characterMasterPrompt || 'Hyper-realistic dynamic rendering'}`
-          )
-          .join("\n\n")
-      : "لا توجد شخصيات مسبقة التعيين.";
+  // Build centralized rich Character Context
+  const characterBibleContext = actors.map(a => {
+    return `[CHARACTER BIBLE: ${a.name}]
+Role: ${a.role || 'Supporting'} | Age: ${a.age} | Group: ${a.type}
+Appearance: Face: ${a.appearance?.face || 'Default'}, Eyes: ${a.appearance?.eyes || 'Default'}, Hair: ${a.appearance?.hair || 'Default'}, Style: ${a.appearance?.hairstyle || 'Default'}, Build: ${a.appearance?.bodyBuild || 'Default'}
+Wardrobe: Outfit: ${a.wardrobe?.defaultClothing || 'Default'}, Colors: ${a.wardrobe?.colors || 'Default'}, Accessories: ${a.wardrobe?.accessories || 'None'}
+Personality & Speaking: ${a.personality || 'Cinematic standard'} | Tone: ${a.style}
+Visual AI Target Prompt: ${a.characterPrompt || ''}`;
+  }).join("\n\n");
 
-  const model =
-    process.env.GROQ_MODEL?.trim() ||
-    "llama-3.1-8b-instant";
+  // Build centralized rich World Context
+  const worldBibleContext = `[WORLD BIBLE CONTEXT: ${worldId}]
+Era: ${worldBible?.era || 'Contemporary'} | Location: ${worldBible?.location || 'Unknown'}
+Geography & Architecture: ${worldBible?.geography || 'Standard'}, ${worldBible?.architecture || 'Modern'}
+Lighting & Palette: ${worldBible?.lighting || 'Cinematic high-contrast'}, ${worldBible?.colorPalette || 'Realistic'}
+Atmosphere & Visual Style: ${worldBible?.atmosphere || 'Dramatic'}, ${worldBible?.visualStyle || 'Netflix cinematic'}
+Weather conditions: ${worldBible?.weather || 'Clear'}
+Master AI Prompt Rule: ${worldBible?.masterPrompt || ''}`;
+
+  const continuityPrompt = previousContext 
+    ? `[CONTINUITY CONTEXT - PREVIOUS SCENES DEVELOPMENTS]:\n${previousContext}`
+    : "No previous scene context available. This is the script genesis.";
 
   const systemPrompt = `
-You are a professional cinematic screenwriter, film director, and continuity supervisor for "Kayan AI Productions".
-Create a production-ready cinematic screenplay from the USER IDEA.
+You are Kayan AI centralized Prompt & Screenplay Director Engine.
 
-STRICT ACTOR BIBLE COMPLIANCE:
-1. You MUST maintain the visual identity, clothing style, and psychological profiles of the assigned actors provided below.
-2. Ensure their dialogues and actions match their listed personality traits.
-3. In shot descriptions, reference their specific physical attributes and hair/eye styles to enforce absolute visual consistency across shots.
+Generate a JSON script completely using Modern Standard Arabic for narrative/dialogue text.
+Ensure perfect Character Consistency and Continuity by strictly enforcing the injected Character Bibles, Wardrobe sets, and World Bible parameters.
 
-LANGUAGE AND CULTURAL INTEGRITY:
-1. Write all screenplay content in natural, fluent Modern Standard Arabic.
-2. English is allowed ONLY in englishSubtitles and cameraMovement.
-3. Dialogue must be natural, grammatically correct Arabic.
+Validations:
+1. Every shot visual description MUST fuse the character appearance, specific wardrobe colors, and the active weather/lighting parameters from the World Bible.
+2. If the user narrative references a character name not present in the injected Bibles, immediately fail script structure.
 
-STORY QUALITY & SHOT CONTINUITY:
-1. Every shot must advance the story and introduce a new visual action or camera perspective.
-2. Keep background, lighting, and actor positions completely consistent across consecutive shots.
-
-Required JSON structure:
+Return format ONLY:
 {
-  "title": "Arabic movie title",
+  "title": "Arabic title",
   "scenes": [
     {
       "sceneNumber": 1,
-      "sceneTitle": "Arabic scene title",
-      "visualDescription": "Detailed Arabic visual description using actor attributes",
-      "characterDialogue": "Complete Arabic dialogue matching actor profiles",
-      "backingScorePrompt": "Arabic music prompt",
-      "audioMusic": "Arabic ambient sound and SFX",
-      "englishSubtitles": "Accurate English translation of Arabic dialogue",
+      "sceneTitle": "Arabic Title",
+      "visualDescription": "Fused Arabic visual prompt combining current scene context, world lighting, and active clothing items",
+      "characterDialogue": "Arabic dialogues",
+      "backingScorePrompt": "Udio/Suno soundtrack prompt based on World Atmosphere",
+      "audioMusic": "Arabic sfx guidelines",
+      "englishSubtitles": "Translation of dialogue",
       "shots": [
         {
           "shotOrder": 1,
-          "description": "Specific Arabic visual action describing the actor's facial anchors",
-          "cameraMovement": "Professional camera movement",
+          "description": "Concrete Arabic vision block combining explicit character build/wardrobe and world atmosphere",
+          "cameraMovement": "Cinematic camera path",
           "durationSeconds": 5,
-          "dialogue": "Arabic dialogue or empty string",
-          "audioNote": "Specific Arabic audio and SFX"
+          "dialogue": "Arabic spoken line",
+          "audioNote": "SFX description"
         }
       ]
     }
@@ -154,130 +131,48 @@ Required JSON structure:
 }
 `;
 
-  const userPrompt = `
-USER IDEA:
-${idea}
-
-CINEMATIC WORLD ENGINE (WORLD BIBLE LAWS):
-${worldId}
-
-CRITICAL WORLD BIBLE RULE:
-You must treat the cinematic world details (Era, Visual Style, Lighting, Color Grading, Architecture, Atmosphere, Master Prompt) as absolute environment laws. For EVERY scene and shot, you MUST explicitly bake these visual style, lighting direction, and architectural backdrop elements directly into the description and camera prompts to preserve spatial continuity and guarantee a locked atmospheric aesthetic across the entire generation lifecycle.
-
-CHARACTER BIBLE PROFILES (STRICT ADHERENCE REQUIRED):
-${actorsList}
-
-GENRE: ${settings?.genre || "Cinematic Drama"}
-TARGET SCENES: ${targetScenes}
-TARGET DURATION: ${targetDurationMinutes} minutes
-
-Create the complete cinematic screenplay and detailed shot plan complying perfectly with the character profiles now.
-`;
-
   try {
-    const completion =
-      await groq.chat.completions.create({
-        model,
-        temperature: 0.7,
-        max_tokens: 4000,
-        response_format: {
-          type: "json_object",
-        },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      });
+    const completion = await groq.chat.completions.create({
+      model,
+      temperature: 0.5,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `IDEA:\n${idea}\n\n${characterBibleContext}\n\n${worldBibleContext}\n\n${continuityPrompt}` }
+      ],
+    });
 
-    const content = completion.choices?.[0]?.message?.content?.trim() || "{}";
-    const parsed = JSON.parse(content);
-
-    const scriptData: GeneratedScript = {
-      title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "Kayan AI Film",
-      scenes: Array.isArray(parsed.scenes)
-        ? parsed.scenes.map((scene: any, sceneIndex: number) => ({
-              sceneNumber: Number(scene.sceneNumber) || sceneIndex + 1,
-              sceneTitle: String(scene.sceneTitle || "").trim() || `Scene ${sceneIndex + 1}`,
-              visualDescription: String(scene.visualDescription || "").trim(),
-              characterDialogue: String(scene.characterDialogue || "").trim(),
-              backingScorePrompt: String(scene.backingScorePrompt || "").trim(),
-              audioMusic: String(scene.audioMusic || "").trim(),
-              englishSubtitles: String(scene.englishSubtitles || "").trim(),
-              shots: Array.isArray(scene.shots)
-                ? scene.shots.map((shot: any, shotIndex: number) => ({
-                      shotOrder: Number(shot.shotOrder) || shotIndex + 1,
-                      description: String(shot.description || "").trim(),
-                      cameraMovement: String(shot.cameraMovement || "Cinematic slow push-in").trim(),
-                      durationSeconds: Number(shot.durationSeconds) > 0 ? Math.round(Number(shot.durationSeconds)) : 5,
-                      dialogue: String(shot.dialogue || "").trim(),
-                      audioNote: String(shot.audioNote || "").trim(),
-                    }))
-                : [],
-            }))
-        : [],
-    };
-
+    const parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
     return {
       success: true,
-      text: formatScriptText(scriptData),
-      rawStructure: scriptData,
+      text: JSON.stringify(parsed, null, 2),
+      rawStructure: parsed
     };
-  } catch (error) {
-    console.error("Groq script generation failed:", error);
+  } catch (e) {
     return fallbackScriptGenerator(idea);
   }
 }
 
-function formatScriptText(script: GeneratedScript): string {
-  let text = `🎬 TITLE: ${script.title}\n\n`;
-  for (const scene of script.scenes) {
-    text += `[SCENE ${scene.sceneNumber}] - ${scene.sceneTitle}\n`;
-    text += `VISUAL: ${scene.visualDescription}\n`;
-    text += `DIALOGUE:\n${scene.characterDialogue}\n`;
-    text += `SUBTITLE: ${scene.englishSubtitles}\n`;
-    text += `BACKING SCORE: ${scene.backingScorePrompt}\n`;
-    text += `AUDIO NOTES: ${scene.audioMusic}\n`;
-    for (const shot of scene.shots) {
-      text += `[SHOT ${shot.shotOrder}] ${shot.description}\n`;
-      text += `CAMERA: ${shot.cameraMovement}\n`;
-      text += `DURATION: ${shot.durationSeconds}s\n`;
-      if (shot.dialogue) text += `DIALOGUE: ${shot.dialogue}\n`;
-      if (shot.audioNote) text += `AUDIO: ${shot.audioNote}\n`;
-      text += "\n";
-    }
-    text += "\n";
-  }
-  return text;
-}
-
 function fallbackScriptGenerator(idea: string): GenerateScriptResult {
-  const script: GeneratedScript = {
-    title: "Kayan AI Film",
-    scenes: [
-      {
-        sceneNumber: 1,
-        sceneTitle: "Opening",
-        visualDescription: "Cinematic opening based on the user's idea.",
-        characterDialogue: "",
-        backingScorePrompt: "",
-        audioMusic: "",
-        englishSubtitles: "",
-        shots: [
-          {
-            shotOrder: 1,
-            description: "Establishing shot matching the concept: " + idea,
-            cameraMovement: "Wide slow pan",
-            durationSeconds: 5,
-            dialogue: "",
-            audioNote: ""
-          }
-        ]
-      }
-    ]
+  const fallback = {
+    title: "Kayan Film",
+    scenes: [{
+      sceneNumber: 1,
+      sceneTitle: "بداية المشهد",
+      visualDescription: `مشهد سينمائي مع الحفاظ على اتساق المظهر: ${idea}`,
+      characterDialogue: "",
+      backingScorePrompt: "Cinematic atmospheric background score",
+      audioMusic: "أصوات محيطية متناسقة",
+      englishSubtitles: "",
+      shots: [{
+        shotOrder: 1,
+        description: "لقطة سينمائية تدمج الشخصيات والمظهر المختار",
+        cameraMovement: "Slow tracking shot",
+        durationSeconds: 5,
+        dialogue: "",
+        audioNote: "أصوات طبيعية"
+      }]
+    }]
   };
-  return {
-    success: true,
-    text: formatScriptText(script),
-    rawStructure: script
-  };
+  return { success: true, text: JSON.stringify(fallback), rawStructure: fallback };
 }

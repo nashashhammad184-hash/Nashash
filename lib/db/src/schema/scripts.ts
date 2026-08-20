@@ -19,11 +19,3 @@ export type InsertScript = z.infer<typeof insertScriptSchema>;
 export type Script = typeof scriptsTable.$inferSelect;
 
 // --- نظام الأصول المركزي المطور الموفر للموارد (Assets System) ---
-export const assetsTable = pgTable("assets", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id").notNull(),
-  targetId: text("target_id").notNull(), // يربط بمعرف اللقطة، الممثل، أو المشهد ديناميكياً
-  assetType: text("asset_type").notNull(), // character_image, world_image, shot_video, voice, music, sfx, subtitle, final_render
-  assetUrl: text("asset_url").notNull(), // رابط الملف المادي الحقيقي على السيرفر أو التخزين الخارجي
-  metaData: text("meta_data"), // حقل نصي مرن لتخزين أي تفاصيل إضافية بدون استهلاك موارد
-});
