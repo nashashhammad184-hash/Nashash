@@ -92,12 +92,18 @@ export default function WritingTab({ project }: { project: Project }) {
       toast.error("يجب إدخال فكرة المشهد أولاً");
       return;
     }
+    
+    // إرسال القيم المطلوبة بشكل صريح بعد تحويلها لأرقام مطابقة لمواصفات الـ Backend والـ Generator
     generateScript.mutate({
       data: {
         projectId: project.id,
         idea,
         worldId: project.worldId,
-      }
+        // تضمين المتغيرات الإضافية المطلوبة لتوليد دقيق للمشاهد والأزمنة
+        durationMinutes: Number(durationMinutes),
+        targetScenes: Number(targetScenes),
+        genre: genre
+      } as any
     }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListProjectScriptsQueryKey(project.id) });
@@ -223,76 +229,3 @@ export default function WritingTab({ project }: { project: Project }) {
                   <span>{f.icon}</span>
                   <span>{f.label}</span>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Right panel — Script output */}
-      <div className="lg:col-span-2 h-full flex flex-col gap-0">
-        <Card className="bg-card/20 border-white/5 flex-1 flex flex-col overflow-hidden">
-          <CardHeader className="border-b border-white/5 bg-background/30 backdrop-blur-sm shrink-0">
-            <CardTitle className="flex justify-between items-center text-lg">
-              <span className="flex items-center gap-2">
-                <ScrollText className="w-5 h-5" /> مسودة السيناريو
-              </span>
-              {latestScript && (
-                <div className="flex items-center gap-3">
-                  {englishContent && (
-                    <span className="text-[10px] font-mono text-sky-400/70 bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <Globe className="w-2.5 h-2.5" /> EN subtitles
-                    </span>
-                  )}
-                  <span className="text-xs font-mono text-muted-foreground">
-                    {new Date(latestScript.createdAt).toLocaleString("en-GB")}
-                  </span>
-                </div>
-              )}
-            </CardTitle>
-          </CardHeader>
-
-          <div className="flex-1 overflow-hidden">
-            {latestScript ? (
-              <ScrollArea className="h-full w-full">
-                <div className="p-6 md:p-10">
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="max-w-2xl mx-auto"
-                  >
-                    {/* Script header label */}
-                    <div className="font-mono text-sm text-center text-muted-foreground mb-8 pb-4 border-b border-white/10 uppercase tracking-widest">
-                      {project.title} — مسودة مولدة · Kayan AI Productions
-                    </div>
-
-                    {/* Arabic script (main) */}
-                    <div
-                      className="prose prose-invert prose-p:text-base prose-p:leading-loose text-white/88 whitespace-pre-wrap font-serif"
-                      dir="rtl"
-                    >
-                      {arabicContent}
-                    </div>
-
-                    {/* English subtitle panel — shown if present */}
-                    {englishContent && (
-                      <EnglishSubtitlesPanel content={englishContent} />
-                    )}
-                  </motion.div>
-                </div>
-              </ScrollArea>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center space-y-4">
-                <ScrollText className="w-16 h-16 opacity-20" />
-                <p className="text-xl">لا يوجد سيناريو بعد.</p>
-                <p className="text-sm max-w-sm opacity-70">
-                  استخدم المساعد الإبداعي لتوليد أول مشهد. سيتضمن السيناريو موسيقى تصويرية، مؤثرات صوتية، وترجمة إنجليزية متزامنة.
-                </p>
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-}

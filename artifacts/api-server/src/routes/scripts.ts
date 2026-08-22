@@ -1,37 +1,27 @@
 import { Router, type IRouter } from "express";
-import { asc,
-  desc,
-  eq, inArray } from "drizzle-orm";
-
-import {
-  db,
-  scriptsTable,
-  shotsTable,
-  worldProfilesTable,
-  actorsTable,
-  projectActorsTable,
-} from "@workspace/db";
-
-import {
-  ListProjectScriptsParams,
-  ListProjectScriptsResponse,
-  GenerateScriptBody,
-  GenerateScriptResponse,
-} from "@workspace/api-zod";
-
-import {
-  generateScript,
-} from "../lib/scriptGenerator";
+import { asc, desc, eq, inArray } from "drizzle-orm";
+import { db, scriptsTable, shotsTable, actorsTable } from "@workspace/db";
+import { ListProjectScriptsParams, ListProjectScriptsResponse, GenerateScriptResponse } from "@workspace/api-zod";
+import { generateScript } from "../lib/scriptGenerator";
+import Groq from "groq-sdk";
+import * as zod from "zod";
 
 const router: IRouter = Router();
+
+const DynamicScriptGenerateBody = zod.object({
+  projectId: zod.number(),
+  idea: zod.string().min(1),
+  worldId: zod.string(),
+  actors: zod.array(zod.union([zod.string(), zod.number()])).optional(),
+  durationMinutes: zod.number().optional(),
+  targetScenes: zod.number().optional(),
+  genre: zod.string().optional()
+});
 
 router.get(
   "/projects/:id/scripts",
   async (req, res): Promise<void> => {
-    const params =
-      ListProjectScriptsParams.safeParse(
-        req.params,
-      );
+    const params = ListProjectScriptsParams.safeParse(req.params);
 
     if (!params.success) {
       res.status(400).json({
@@ -43,22 +33,14 @@ router.get(
     const scripts = await db
       .select()
       .from(scriptsTable)
-      .where(
-        eq(
-          scriptsTable.projectId,
-          params.data.id,
-        ),
-      )
-      .orderBy(
-        desc(scriptsTable.createdAt),
-      );
+      .where(eq(scriptsTable.projectId, params.data.id))
+      .orderBy(desc(scriptsTable.createdAt));
 
     res.json(
       ListProjectScriptsResponse.parse(
         scripts.map((script) => ({
           ...script,
-          createdAt:
-            script.createdAt.toISOString(),
+          createdAt: script.createdAt.toISOString(),
         })),
       ),
     );
@@ -68,10 +50,7 @@ router.get(
 router.post(
   "/scripts/generate",
   async (req, res): Promise<void> => {
-    const parsed =
-      GenerateScriptBody.safeParse(
-        req.body,
-      );
+    const parsed = DynamicScriptGenerateBody.safeParse(req.body);
 
     if (!parsed.success) {
       res.status(400).json({
@@ -80,91 +59,72 @@ router.post(
       return;
     }
 
-      const {
-        projectId,
-        idea,
-        worldId,
-        actors,
-      } = parsed.data;
+    const {
+      projectId,
+      idea,
+      worldId,
+      actors,
+      durationMinutes,
+      targetScenes,
+      genre,
+    } = parsed.data;
 
-    /*
-     * The current API contract provides actor names.
-     * Convert them into the richer structure expected
-     * by the cinematic script generator.
-     */
-    // استخراج بيانات الـ Character Bible الكاملة من قاعدة البيانات للممثلين المحددين
-    const dbActors = (actors && actors.length > 0)
-      ? await db.select().from(actorsTable).where(inArray(actorsTable.name, actors))
-      : [];
+    let normalizedActors: Array<{
+      name: string;
+      type: string;
+      age: number;
+      style: string;
+    }> = [];
 
-    const normalizedActors = (actors ?? []).map((name) => {
-      const dbActor = dbActors.find(a => a.name === name);
-      return {
-        name,
-        type: dbActor?.type ?? "supporting",
-        age: dbActor?.age ?? 30,
-        style: dbActor?.style ?? "cinematic naturalistic",
-        category: dbActor?.category ?? "global",
-        imageUrl: dbActor?.imageUrl,
-        gender: dbActor?.gender,
-        eyeColor: dbActor?.eyeColor,
-        hairStyle: dbActor?.hairStyle,
-        physicalDescription: dbActor?.physicalDescription,
-        personalityTraits: dbActor?.personalityTraits,
-        backstory: dbActor?.backstory,
-        clothingPrompt: dbActor?.clothingPrompt,
-        characterMasterPrompt: dbActor?.characterMasterPrompt,
-        characterNegativePrompt: dbActor?.characterNegativePrompt,
-        faceReferenceUrl: dbActor?.faceReferenceUrl,
-        bodyReferenceUrl: dbActor?.bodyReferenceUrl,
-        secondaryReferenceUrl: dbActor?.secondaryReferenceUrl,
-        voiceId: dbActor?.voiceId,
-        voiceProvider: dbActor?.voiceProvider ?? "elevenlabs"
-      };
-    });
+    if (actors && actors.length > 0) {
+      const actorIds = actors.filter((a): a is number => typeof a === "number");
+      const actorNames = actors.filter((a): a is string => typeof a === "string");
 
-    const generated =
-        await generateScript({
-          idea,
-          worldId,
-          actors: normalizedActors,
-          settings: {
-            durationMinutes: 1,
-            targetScenes: 2,
-            genre: "drama",
-          },
+      if (actorIds.length > 0) {
+        const dbActorsById = await db
+          .select()
+          .from(actorsTable)
+          .where(inArray(actorsTable.id, actorIds));
+
+        dbActorsById.forEach(actor => {
+          normalizedActors.push({
+            name: actor.name,
+            type: actor.type,
+            age: actor.age,
+            style: actor.style,
+          });
         });
-
-    // تفكيك الهيكل وتحويله إلى شجرة إنتاج سينمائية موفرة للموارد تدعم الهرمية الخماسية بالكامل
-    const rawStructure = generated.rawStructure;
-    const structuredProductionTree = {
-      seriesId: `series_${projectId}`,
-      title: rawStructure.title || "Kayan Cinematic Series Production",
-      season: {
-        seasonNumber: 1,
-        episode: {
-          episodeNumber: 1,
-          title: `الحلقة الأولى من فكرة: ${idea.substring(0, 30)}...`,
-          scenes: (rawStructure.scenes || []).map((scene) => ({
-            sceneNumber: scene.sceneNumber,
-            sceneTitle: scene.sceneTitle,
-            visualDescription: scene.visualDescription,
-            characterDialogue: scene.characterDialogue,
-            backingScorePrompt: scene.backingScorePrompt,
-            audioMusic: scene.audioMusic,
-            englishSubtitles: scene.englishSubtitles,
-            shots: (scene.shots || []).map((shot) => ({
-              shotOrder: shot.shotOrder,
-              description: shot.description,
-              cameraMovement: shot.cameraMovement,
-              durationSeconds: shot.durationSeconds,
-              dialogue: shot.dialogue,
-              audioNote: shot.audioNote
-            }))
-          }))
-        }
       }
-    };
+
+      if (actorNames.length > 0) {
+        const dbActorsByName = await db
+          .select()
+          .from(actorsTable)
+          .where(inArray(actorsTable.name, actorNames));
+
+        dbActorsByName.forEach(actor => {
+          if (!normalizedActors.some(a => a.name === actor.name)) {
+            normalizedActors.push({
+              name: actor.name,
+              type: actor.type,
+              age: actor.age,
+              style: actor.style,
+            });
+          }
+        });
+      }
+    }
+
+    const generated = await generateScript({
+      idea,
+      worldId,
+      actors: normalizedActors,
+      settings: {
+        durationMinutes: durationMinutes ?? 1,
+        targetScenes: targetScenes ?? 2,
+        genre: genre ?? "drama",
+      },
+    });
 
     const [script] = await db
       .insert(scriptsTable)
@@ -172,24 +132,18 @@ router.post(
         projectId,
         idea,
         worldId,
-        generatedContent: JSON.stringify(structuredProductionTree),
+        generatedContent: generated.text,
       })
       .returning();
 
     if (!script) {
       res.status(500).json({
-        error:
-          "Failed to save generated script.",
+        error: "Failed to save generated script.",
       });
       return;
     }
 
-    /*
-     * Persist every AI-generated shot
-     * as a real database record.
-     */
-    for (const scene of
-      generated.rawStructure.scenes) {
+    for (const scene of generated.rawStructure.scenes) {
       for (const shot of scene.shots) {
         if (!shot.description.trim()) {
           continue;
@@ -200,23 +154,13 @@ router.post(
           .values({
             projectId,
             scriptId: script.id,
-            sceneNumber:
-              scene.sceneNumber,
-            description:
-              shot.description,
-            cameraMovement:
-              shot.cameraMovement ||
-              "Cinematic slow push-in",
-            durationSeconds:
-              shot.durationSeconds > 0
-                ? Math.round(
-                    shot.durationSeconds,
-                  )
-                : 5,
-            dialogue:
-              shot.dialogue || null,
-            audioNote:
-              shot.audioNote || null,
+            sceneNumber: scene.sceneNumber,
+            shotOrder: shot.shotOrder,
+            description: shot.description,
+            cameraMovement: shot.cameraMovement || "Cinematic slow push-in",
+            durationSeconds: shot.durationSeconds > 0 ? Math.round(shot.durationSeconds) : 5,
+            dialogue: shot.dialogue || null,
+            audioNote: shot.audioNote || null,
           });
       }
     }
@@ -224,8 +168,7 @@ router.post(
     res.status(201).json(
       GenerateScriptResponse.parse({
         ...script,
-        createdAt:
-          script.createdAt.toISOString(),
+        createdAt: script.createdAt.toISOString(),
       }),
     );
   },
@@ -246,12 +189,8 @@ function fallbackProductionPrompt(
         `Scene ${shot.sceneNumber}`,
         `Visual: ${shot.description}`,
         `Camera: ${shot.cameraMovement}`,
-        shot.dialogue
-          ? `Dialogue: ${shot.dialogue}`
-          : "",
-        `Duration: ${
-          shot.durationSeconds ?? 5
-        } seconds`,
+        shot.dialogue ? `Dialogue: ${shot.dialogue}` : "",
+        `Duration: ${shot.durationSeconds ?? 5} seconds`,
       ]
         .filter(Boolean)
         .join(". "),
@@ -259,68 +198,41 @@ function fallbackProductionPrompt(
     .join("\n");
 }
 
+// هنا تم الإصلاح: معالجة الطلب بالكامل باستخدام Groq SDK الرسمي الصحيح وتوجيهه لـ Endpoint توليد النصوص
 async function translateProductionPrompt(
   prompt: string,
 ): Promise<string> {
-  const apiKey =
-    process.env.GROQ_API_KEY?.trim();
+  const apiKey = process.env.GROQ_API_KEY?.trim();
 
   if (!apiKey) {
     return prompt;
   }
 
   try {
-    const response = await fetch(
-      "https://groq.com",
-      {
-        method: "POST",
-        headers: {
-          authorization:
-            `Bearer ${apiKey}`,
-          "content-type":
-            "application/json",
+    // تهيئة عميل الـ SDK الرسمي باستخدام المفتاح الخاص بك المعتمد بالسيرفر
+    const groq = new Groq({ apiKey });
+    const model = process.env.GROQ_MODEL?.trim() || "llama-3.1-8b-instant";
+
+    const chatCompletion = await groq.chat.completions.create({
+      model: model,
+      temperature: 0.1,
+      max_tokens: 900,
+      messages: [
+        {
+          role: "system",
+          content: "Translate the production prompt to concise cinematic English. Preserve scene order, dialogue meaning, camera movement, and durations. Return only the prompt.",
         },
-        body: JSON.stringify({
-          model:
-            process.env.GROQ_MODEL?.trim() ||
-            "llama-3.1-8b-instant",
-          temperature: 0.1,
-          max_tokens: 900,
-          messages: [
-            {
-              role: "system",
-              content:
-                "Translate the production prompt to concise cinematic English. Preserve scene order, dialogue meaning, camera movement, and durations. Return only the prompt.",
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-        }),
-        signal:
-          AbortSignal.timeout(8000),
-      },
-    );
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
 
-    if (!response.ok) {
-      return prompt;
-    }
-
-    const payload =
-      (await response.json()) as {
-        choices?: Array<{
-          message?: {
-            content?: string;
-          };
-        }>;
-      };
-
-    return (
-      payload.choices?.[0]?.message
-        ?.content?.trim() || prompt
-    );
-  } catch {
+    return chatCompletion.choices[0]?.message?.content?.trim() || prompt;
+  } catch (error) {
+    // تسجيل الخطأ الفعلي بداخل الـ Terminal ومسجل النظام للتحليل، وإرجاع الـ fallback prompt لحماية تجربة الاستخدام
+    console.error("Groq API Error in translateProductionPrompt:", error);
     return prompt;
   }
 }
@@ -328,43 +240,26 @@ async function translateProductionPrompt(
 router.get(
   "/projects/:id/production-prompt",
   async (req, res): Promise<void> => {
-    const projectId =
-      Number(req.params.id);
+    const projectId = Number(req.params.id);
 
-    if (
-      !Number.isInteger(projectId) ||
-      projectId <= 0
-    ) {
+    if (!Number.isInteger(projectId) || projectId <= 0) {
       res.status(400).json({
-        error:
-          "A valid project id is required.",
+        error: "A valid project id is required.",
       });
       return;
     }
 
     const shots = await db
       .select({
-        sceneNumber:
-          shotsTable.sceneNumber,
-        description:
-          shotsTable.description,
-        cameraMovement:
-          shotsTable.cameraMovement,
-        dialogue:
-          shotsTable.dialogue,
-        durationSeconds:
-          shotsTable.durationSeconds,
+        sceneNumber: shotsTable.sceneNumber,
+        description: shotsTable.description,
+        cameraMovement: shotsTable.cameraMovement,
+        dialogue: shotsTable.dialogue,
+        durationSeconds: shotsTable.durationSeconds,
       })
       .from(shotsTable)
-      .where(
-        eq(
-          shotsTable.projectId,
-          projectId,
-        ),
-      )
-      .orderBy(
-        asc(shotsTable.sceneNumber),
-      );
+      .where(eq(shotsTable.projectId, projectId))
+      .orderBy(asc(shotsTable.sceneNumber));
 
     if (shots.length === 0) {
       res.json({
@@ -374,20 +269,13 @@ router.get(
       return;
     }
 
-    const sourcePrompt =
-      fallbackProductionPrompt(shots);
+    const sourcePrompt = fallbackProductionPrompt(shots);
 
-    const prompt =
-      await translateProductionPrompt(
-        sourcePrompt,
-      );
+    const prompt = await translateProductionPrompt(sourcePrompt);
 
     res.json({
       prompt,
-      source:
-        prompt === sourcePrompt
-          ? "fallback"
-          : "director",
+      source: prompt === sourcePrompt ? "fallback" : "director",
     });
   },
 );

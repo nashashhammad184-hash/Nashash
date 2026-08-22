@@ -11,3 +11,5 @@ export * from "./episodes";
 export * from "./production_jobs";
 export * from "./continuity_checks";
 export * from "./storage_backups";
+// إضافات البنية الإنتاجية الأساسية لـ Kayan AI Productions
+export * from "./production_pipeline";

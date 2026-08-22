@@ -12,6 +12,7 @@ import Projects from '@/pages/projects';
 import ProjectDetail from '@/pages/project-detail';
 import Actors from '@/pages/actors';
 import Archive from '@/pages/archive';
+import WorldsPage from '@/pages/worlds';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,6 +32,7 @@ function Router() {
         <Route path="/projects/:id" component={ProjectDetail} />
         <Route path="/actors" component={Actors} />
         <Route path="/archive" component={Archive} />
+        <Route path="/worlds" component={WorldsPage} />
         <Route component={NotFound} />
       </Switch>
     </StudioLayout>

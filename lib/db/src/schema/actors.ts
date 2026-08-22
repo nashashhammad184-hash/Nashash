@@ -1,43 +1,49 @@
-import { pgTable, serial, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
 
 export const actorsTable = pgTable("actors", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  type: text("type").notNull(), // رجال، نساء، مراهقين، أطفال، كبار سن
+  type: text("type").notNull(),
   category: text("category").notNull().default("global"),
   age: integer("age").notNull(),
   style: text("style").notNull(),
   imageUrl: text("image_url"),
   
-  // Character Bible Extention - Identity & Personality
-  role: text("role"),
+  // المجموعة الأولى من الأعمدة المخزنة في السيرفر
+  eye_color: text("eye_color"),
+  hair_style: text("hair_style"),
+  physical_description: text("physical_description"),
+  personality_traits: text("personality_traits"),
+  backstory: text("backstory"),
+  clothing_prompt: text("clothing_prompt"),
+  character_master_prompt: text("character_master_prompt"),
+  character_negative_prompt: text("character_negative_prompt"),
+  face_reference_url: text("face_reference_url"),
+  body_reference_url: text("body_reference_url"),
+  secondary_reference_url: text("secondary_reference_url"),
+  voice_provider: text("voice_provider"),
+  face_description: text("face_description"),
+  hair: text("hair"),
+  eyes: text("eyes"),
+  clothing: text("clothing"),
+  distinctive_features: text("distinctive_features"),
+  psychological_traits: text("psychological_traits"),
+  speech_style: text("speech_style"),
+  voice: text("voice"),
+
+  // المجموعة الثانية من الأعمدة المخزنة في السيرفر (مصححة)
   gender: text("gender"),
-  personality: text("personality"),
+  voice_id: text("voice_id"),
   background: text("background"),
+  reference_images: text("reference_images"),
+  character_prompt: text("character_prompt"),
+  negative_prompt: text("negative_prompt"),
+  role: text("role"),
+  personality: text("personality"),
   behavior: text("behavior"),
-  speakingStyle: text("speaking_style"),
-
-  // Appearance & Wardrobe stored as robust JSONB structure
-  appearance: jsonb("appearance").$type<{
-    face?: string; eyes?: string; hair?: string; hairstyle?: string;
-    skinTone?: string; bodyBuild?: string; distinctiveFeatures?: string;
-  }>().default({}),
-  wardrobe: jsonb("wardrobe").$type<{
-    defaultClothing?: string; colors?: string; accessories?: string;
-  }>().default({}),
-
-  // Production Parameters
-  characterPrompt: text("character_prompt"),
-  negativePrompt: text("negative_prompt"),
-  referenceImages: jsonb("reference_images").$type<string[]>().default([]),
-  voiceId: text("voice_id"),
-  voiceSettings: jsonb("voice_settings").$type<{ stability: number; clarity: number }>().default({ stability: 0.75, clarity: 0.75 }),
-  
+  speaking_style: text("speaking_style"),
+  appearance: text("appearance"),
+  wardrobe: text("wardrobe"),
+  voice_settings: text("voice_settings"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
-
-export const insertActorSchema = createInsertSchema(actorsTable).omit({ id: true, createdAt: true });
-export type InsertActor = z.infer<typeof insertActorSchema>;
-export type Actor = typeof actorsTable.$inferSelect;

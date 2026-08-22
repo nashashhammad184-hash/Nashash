@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { Film, Clapperboard, Users, Archive, LayoutDashboard } from "lucide-react";
+import { Film, Clapperboard, Users, Archive, LayoutDashboard, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,6 +14,7 @@ export function StudioLayout({ children }: { children: ReactNode }) {
     { name: "إدارة المشاريع", href: "/projects", icon: Film },
     { name: "قسم الشخصيات", href: "/actors", icon: Users },
     { name: "الأرشيف", href: "/archive", icon: Archive },
+    { name: "محرك العوالم", href: "/worlds", icon: Globe },
   ];
 
   return (

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -11,6 +11,11 @@ export const projectActorsTable = pgTable("project_actors", {
   roleName: text("role_name").notNull(),
   roleType: text("role_type"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => {
+  return {
+    // قيد فريد مركب يمنع برمجياً وعلى مستوى قاعدة البيانات تكرار تعيين نفس الممثل في نفس المشروع
+    projectActorUniqueIdx: uniqueIndex("project_actor_unique_idx").on(table.projectId, table.actorId),
+  };
 });
 
 export const insertProjectActorSchema = createInsertSchema(projectActorsTable).omit({ id: true, createdAt: true });

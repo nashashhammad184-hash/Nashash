@@ -176,7 +176,7 @@ router.patch("/projects/:id/archive", async (req, res): Promise<void> => {
   );
 });
 
-// List actors assigned to project with rich Bible fields
+// List actors assigned to project
 router.get("/projects/:id/actors", async (req, res): Promise<void> => {
   const params = ListProjectActorsParams.safeParse(req.params);
   if (!params.success) {
@@ -197,17 +197,6 @@ router.get("/projects/:id/actors", async (req, res): Promise<void> => {
         type: actorsTable.type,
         age: actorsTable.age,
         style: actorsTable.style,
-        imageUrl: actorsTable.imageUrl,
-        gender: actorsTable.gender,
-        eyeColor: actorsTable.eyeColor,
-        hairStyle: actorsTable.hairStyle,
-        physicalDescription: actorsTable.physicalDescription,
-        personalityTraits: actorsTable.personalityTraits,
-        backstory: actorsTable.backstory,
-        clothingPrompt: actorsTable.clothingPrompt,
-        characterMasterPrompt: actorsTable.characterMasterPrompt,
-        characterNegativePrompt: actorsTable.characterNegativePrompt,
-        voiceId: actorsTable.voiceId
       },
     })
     .from(projectActorsTable)
@@ -237,6 +226,23 @@ router.post("/projects/:id/actors", async (req, res): Promise<void> => {
     res.status(400).json({ error: body.error.message });
     return;
   }
+
+  // فحص استباقي لمنع تكرار نفس الشخصية داخل نفس المشروع برمجياً وإرجاع كود 409 Conflict واضح
+  const existingAssignment = await db
+    .select()
+    .from(projectActorsTable)
+    .where(
+      and(
+        eq(projectActorsTable.projectId, params.data.id),
+        eq(projectActorsTable.actorId, body.data.actorId)
+      )
+    );
+
+  if (existingAssignment.length > 0) {
+    res.status(409).json({ error: "Conflict: This actor is already assigned to this project." });
+    return;
+  }
+
   const [assignment] = await db
     .insert(projectActorsTable)
     .values({ projectId: params.data.id, ...body.data })
@@ -255,7 +261,7 @@ router.post("/projects/:id/actors", async (req, res): Promise<void> => {
   );
 });
 
-// Remove actor from project fixing multi-delete bug
+// Remove actor from project
 router.delete("/projects/:id/actors/:actorId", async (req, res): Promise<void> => {
   const params = RemoveActorFromProjectParams.safeParse(req.params);
   if (!params.success) {
