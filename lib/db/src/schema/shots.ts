@@ -3,7 +3,27 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { actorsTable } from "./actors";
 
-// 1. جدول اللقطات الأساسي
+// ── 1. جدول المشاهد المستقل الجديد PRODUCTION SCENES (إصلاح 23) ──
+export const scenesTable = pgTable("scenes", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id").notNull(),
+  episodeId: integer("episode_id"), // nullable تلقائياً للمسلسلات والأفلام
+  sceneNumber: text("scene_number").notNull(),
+  title: text("title").notNull(),
+  location: text("location"),
+  timeOfDay: text("time_of_day"), // e.g., 'Day', 'Night', 'Golden Hour'
+  weather: text("weather"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSceneSchema = createInsertSchema(scenesTable).omit({ id: true, createdAt: true });
+export type InsertScene = z.infer<typeof insertSceneSchema>;
+export type Scene = typeof scenesTable.$inferSelect;
+
+
+// ── 2. جدول اللقطات المطور SHOTS (تحديث إصلاح 23) ──
+// محمي ومحافظ على الـ 65 سجل القديم بالكامل مع حيازة عمود sceneNumber للتوافق
 export const shotsTable = pgTable("shots", {
   id: serial("id").primaryKey(),
   scriptId: integer("script_id"),
@@ -15,8 +35,13 @@ export const shotsTable = pgTable("shots", {
   status: text("status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
 
+  // ربط اللقطة بالمشهد المستقل الجديد (Shot.sceneId -> scenes.id)
+  sceneId: integer("scene_id")
+    .references(() => scenesTable.id, { onDelete: "set null" }),
+
+  // ── PRESERVED SHOT COLUMNS (للتوافق القديم وحماية الـ 65 سجل من الحذف) ──
+  sceneNumber: text("scene_number"), // المحافظة الصارمة عليه
   projectId: integer("project_id"),
-  sceneNumber: text("scene_number"),
   shotOrder: integer("shot_order"),
   cameraMovement: text("camera_movement"),
   dialogue: text("dialogue"),
@@ -29,7 +54,8 @@ export const insertShotSchema = createInsertSchema(shotsTable).omit({ id: true, 
 export type InsertShot = z.infer<typeof insertShotSchema>;
 export type Shot = typeof shotsTable.$inferSelect;
 
-// 2. جدول العلاقات الوسيط لـ SHOT CHARACTERS
+
+// ── 3. جدول العلاقات الوسيط لـ SHOT CHARACTERS ──
 export const shotCharactersTable = pgTable("shot_characters", {
   id: serial("id").primaryKey(),
   shotId: integer("shot_id")
@@ -48,7 +74,8 @@ export const insertShotCharacterSchema = createInsertSchema(shotCharactersTable)
 export type InsertShotCharacter = z.infer<typeof insertShotCharacterSchema>;
 export type ShotCharacter = typeof shotCharactersTable.$inferSelect;
 
-// 3. جدول الوظائف المنفصل VIDEO GENERATION JOBS
+
+// ── 4. جدول الوظائف المنفصل VIDEO GENERATION JOBS ──
 export const videoGenerationJobsTable = pgTable("video_generation_jobs", {
   id: serial("id").primaryKey(),
   shotId: integer("shot_id")
