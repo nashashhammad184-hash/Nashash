@@ -41,3 +41,21 @@ export const editClipsTable = pgTable("edit_clips", {
 export const insertEditClipSchema = createInsertSchema(editClipsTable).omit({ id: true });
 export type InsertEditClip = z.infer<typeof insertEditClipSchema>;
 export type EditClip = typeof editClipsTable.$inferSelect;
+
+// ── SUBTITLE TRACKS TABLE (إصلاح 24) ──
+import { shotsTable } from "./shots";
+
+export const subtitleTracksTable = pgTable("subtitle_tracks", {
+  id: serial("id").primaryKey(),
+  shotId: integer("shot_id")
+    .notNull()
+    .references(() => shotsTable.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  startTime: integer("start_time").notNull(), // بالملي ثانية أو الثواني للتزامن الفعلي
+  endTime: integer("end_time").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSubtitleTrackSchema = createInsertSchema(subtitleTracksTable).omit({ id: true, createdAt: true });
+export type InsertSubtitleTrack = z.infer<typeof insertSubtitleTrackSchema>;
+export type SubtitleTrack = typeof subtitleTracksTable.$inferSelect;
