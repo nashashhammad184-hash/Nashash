@@ -1,32 +1,43 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
-import { projectsTable } from "./projects";
+import { assetsTable } from "./production_pipeline";
 
+// 5. جدول مقاطع المونتاج المطور EDIT CLIPS (إصلاح 20) متوافق 100% مع الأنواع الصارمة والجديدة
 export const editClipsTable = pgTable("edit_clips", {
   id: serial("id").primaryKey(),
-  projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull(),
   title: text("title").notNull(),
-  durationSeconds: integer("duration_seconds"),
+  durationSeconds: integer("duration_seconds").notNull(),
   notes: text("notes"),
-  clipOrder: integer("clip_order").notNull().default(0),
-  
-  // الحقول الجديدة لبناء الـ Timeline الاحترافي
-  sourceAssetId: integer("source_asset_id"), 
-  startTime: text("start_time").default("00:00.00"),
+  clipOrder: integer("clip_order").notNull(),
+  videoUrl: text("video_url"), 
+
+  createdAt: timestamp("created_at").defaultNow(),
+  sourceAssetId: text("source_asset_id"),
+  startTime: text("start_time"),
   endTime: text("end_time"),
-  timelinePosition: integer("timeline_position").default(0),
-  trackNumber: integer("track").default(1), // Video or Audio track layers
-  audioSettings: text("audio_settings"), // Volume, Fade settings stored as config string
-  transitionType: text("transition").default("none"), // fade, dissolve, cross-zoom etc
-  subtitlesText: text("subtitles"),
-  appliedEffects: text("effects"),
-  seasonNumber: integer("season_number").default(1),
-  episodeNumber: integer("episode_number").default(1),
-  
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  timelinePosition: text("timeline_position"),
+  track: text("track"),
+  audioSettings: text("audio_settings"), 
+  subtitles: text("subtitles"),
+  seasonNumber: integer("season_number"),
+  episodeNumber: integer("episode_number"),
+  effects: text("effects"), 
+
+  // الحقول الـ 9 الهيكلية المطلوبة لغرفة المونتاج الاحترافية
+  assetId: integer("asset_id")
+    .references(() => assetsTable.id, { onDelete: "set null" }), 
+  trackType: text("track_type"), 
+  timelineStart: integer("timeline_start"), 
+  timelineEnd: integer("timeline_end"),     
+  sourceStart: integer("source_start"),     
+  sourceEnd: integer("source_end"),         
+  volume: integer("volume"),                 
+  transition: text("transition"),           
+  effectsNew: jsonb("effects_new").default({}),    
 });
 
-export const insertEditClipSchema = createInsertSchema(editClipsTable).omit({ id: true, createdAt: true });
+export const insertEditClipSchema = createInsertSchema(editClipsTable).omit({ id: true });
 export type InsertEditClip = z.infer<typeof insertEditClipSchema>;
 export type EditClip = typeof editClipsTable.$inferSelect;
