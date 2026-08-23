@@ -1,25 +1,52 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
-import { projectsTable } from "./projects";
-import { scriptsTable } from "./scripts";
+import { actorsTable } from "./actors";
 
+// 1. جدول اللقطات الأساسي (محمي وجعل الحقول مرنة لمنع حذف الـ 65 سجل)
 export const shotsTable = pgTable("shots", {
   id: serial("id").primaryKey(),
-  projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
-  scriptId: integer("script_id").references(() => scriptsTable.id, { onDelete: "cascade" }),
-  sceneNumber: integer("scene_number").notNull(),
-  seasonNumber: integer("season_number").default(1),
-  episodeNumber: integer("episode_number").default(1),
+  scriptId: integer("script_id"),
+  shotNumber: text("shot_number"),
+  description: text("description"),
+  visualCue: text("visual_cue"),
+  audioCue: text("audio_cue"),
+  durationSeconds: integer("duration_seconds"),
+  status: text("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+
+  // ── PRESERVED SHOT COLUMNS (لمنع حذف بيانات الاستوديو القديمة) ──
+  projectId: integer("project_id"),
+  sceneNumber: text("scene_number"),
   shotOrder: integer("shot_order"),
-  description: text("description").notNull(),
-  cameraMovement: text("camera_movement").notNull(),
-  durationSeconds: integer("duration_seconds").notNull().default(5),
+  cameraMovement: text("camera_movement"),
   dialogue: text("dialogue"),
   audioNote: text("audio_note"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  seasonNumber: integer("season_number"),
+  episodeNumber: integer("episode_number"),
 });
 
 export const insertShotSchema = createInsertSchema(shotsTable).omit({ id: true, createdAt: true });
 export type InsertShot = z.infer<typeof insertShotSchema>;
 export type Shot = typeof shotsTable.$inferSelect;
+
+
+// 2. ── SHOT CHARACTERS TABLE (جدول العلاقات الوسيط المطلوب في إصلاح 12) ──
+export const shotCharactersTable = pgTable("shot_characters", {
+  id: serial("id").primaryKey(),
+  shotId: integer("shot_id")
+    .notNull()
+    .references(() => shotsTable.id, { onDelete: "cascade" }),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actorsTable.id, { onDelete: "cascade" }),
+  role: text("role").default("appearing"), 
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  // قيد الفرادة لـ shotId + actorId لمنع تكرار الشخصية في نفس اللقطة
+  unique("shot_actor_unique_idx").on(t.shotId, t.actorId),
+]);
+
+export const insertShotCharacterSchema = createInsertSchema(shotCharactersTable).omit({ id: true, createdAt: true });
+export type InsertShotCharacter = z.infer<typeof insertShotCharacterSchema>;
+export type ShotCharacter = typeof shotCharactersTable.$inferSelect;

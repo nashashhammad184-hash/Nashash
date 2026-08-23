@@ -1,5 +1,8 @@
-import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
 
+// 1. جدول الممثلين الأساسي (مؤمن ومحافظ على البيانات القديمة)
 export const actorsTable = pgTable("actors", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -9,41 +12,70 @@ export const actorsTable = pgTable("actors", {
   style: text("style").notNull(),
   imageUrl: text("image_url"),
   
-  // المجموعة الأولى من الأعمدة المخزنة في السيرفر
-  eye_color: text("eye_color"),
-  hair_style: text("hair_style"),
-  physical_description: text("physical_description"),
-  personality_traits: text("personality_traits"),
-  backstory: text("backstory"),
-  clothing_prompt: text("clothing_prompt"),
-  character_master_prompt: text("character_master_prompt"),
-  character_negative_prompt: text("character_negative_prompt"),
-  face_reference_url: text("face_reference_url"),
-  body_reference_url: text("body_reference_url"),
-  secondary_reference_url: text("secondary_reference_url"),
-  voice_provider: text("voice_provider"),
-  face_description: text("face_description"),
-  hair: text("hair"),
-  eyes: text("eyes"),
-  clothing: text("clothing"),
-  distinctive_features: text("distinctive_features"),
-  psychological_traits: text("psychological_traits"),
-  speech_style: text("speech_style"),
-  voice: text("voice"),
-
-  // المجموعة الثانية من الأعمدة المخزنة في السيرفر (مصححة)
+  // ── PRESERVED COLUMNS (للمحافظة على الـ 31 ممثلاً الحاليين) ──
   gender: text("gender"),
-  voice_id: text("voice_id"),
-  background: text("background"),
-  reference_images: text("reference_images"),
-  character_prompt: text("character_prompt"),
-  negative_prompt: text("negative_prompt"),
+  eyeColor: text("eye_color"),
+  hairStyleOld: text("hair_style"),
+  physicalDescription: text("physical_description"),
+  personalityTraits: text("personality_traits"),
+  backstory: text("backstory"),
+  clothingPrompt: text("clothing_prompt"),
+  characterMasterPrompt: text("character_master_prompt"),
+  characterNegativePrompt: text("character_negative_prompt"),
+  faceReferenceUrl: text("face_reference_url"),
+  bodyReferenceUrl: text("body_reference_url"),
+  secondaryReferenceUrl: text("secondary_reference_url"),
+  voiceProvider: text("voice_provider"),
+  clothing: text("clothing"),
+  psychologicalTraits: text("psychological_traits"),
+  speechStyle: text("speech_style"),
+  voice: text("voice"),
+  referenceImages: text("reference_images"),
   role: text("role"),
-  personality: text("personality"),
-  behavior: text("behavior"),
-  speaking_style: text("speaking_style"),
   appearance: text("appearance"),
   wardrobe: text("wardrobe"),
-  voice_settings: text("voice_settings"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at"),
+
+  // ── CHARACTER BIBLE NEW EXTENSIONS (إصلاح 9) ──
+  faceDescription: text("face_description"),
+  eyes: text("eyes"),
+  hair: text("hair"),
+  hairstyle: text("hairstyle"),
+  skinDescription: text("skin_description"),
+  bodyDescription: text("body_description"),
+  distinctiveFeatures: text("distinctive_features"),
+  defaultWardrobe: text("default_wardrobe"),
+  wardrobeColors: text("wardrobe_colors"),
+  accessories: text("accessories"),
+  personality: text("personality"),
+  background: text("background"),
+  behavior: text("behavior"),
+  speakingStyle: text("speaking_style"),
+  characterPrompt: text("character_prompt"),
+  negativePrompt: text("negative_prompt"),
+  voiceId: text("voice_id"),
+  voiceSettings: text("voice_settings"),
 });
+
+export const insertActorSchema = createInsertSchema(actorsTable).omit({ id: true });
+export type InsertActor = z.infer<typeof insertActorSchema>;
+export type Actor = typeof actorsTable.$inferSelect;
+
+
+// 2. ── CHARACTER REFERENCES TABLE (إصلاح 10) ──
+export const characterReferencesTable = pgTable("character_references", {
+  id: serial("id").primaryKey(),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actorsTable.id, { onDelete: "cascade" }),
+  projectId: integer("project_id"), // nullable تلقائياً
+  assetUrl: text("asset_url").notNull(),
+  referenceType: text("reference_type").notNull().default("image"), 
+  isPrimary: boolean("is_primary").notNull().default(false),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCharacterReferenceSchema = createInsertSchema(characterReferencesTable).omit({ id: true });
+export type InsertCharacterReference = z.infer<typeof insertCharacterReferenceSchema>;
+export type CharacterReference = typeof characterReferencesTable.$inferSelect;
