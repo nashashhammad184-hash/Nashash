@@ -6,7 +6,6 @@ import { logger } from "../lib/logger";
 const router: IRouter = Router();
 
 const REPLICATE_PREDICTIONS_ENDPOINT = "https://api.replicate.com/v1/predictions";
-const DEFAULT_REPLICATE_TOKEN = "r8_Oqq3bqUWc4sHfHrGyvIeDShqkn1zOsy0KvOEg";
 const MAX_POLLING_ATTEMPTS = 60;
 const POLLING_INTERVAL_MS = 3_000;
 const HTTP_TIMEOUT_MS = 15_000;
@@ -127,16 +126,15 @@ async function proxyVideo(req: Request, res: Response, asDownload: boolean) {
 }
 
 async function executeReplicatePrediction(prompt: string): Promise<{ videoUrl: string; jobId: string }> {
-  const apiToken = process.env.REPLICATE_API_TOKEN?.trim() || DEFAULT_REPLICATE_TOKEN;
-
+  const apiToken = process.env.REPLICATE_API_TOKEN?.trim();
   if (!apiToken) {
-    throw new Error("REPLICATE_API_TOKEN is missing or empty.");
+    throw new Error("REPLICATE_API_TOKEN environment variable is not configured.");
   }
 
   const modelVersion = process.env.REPLICATE_VIDEO_MODEL_VERSION?.trim();
   if (!modelVersion) {
     throw new Error(
-      "REPLICATE_VIDEO_MODEL_VERSION environment variable is not defined. Please set a valid Replicate video model version hash."
+      "REPLICATE_VIDEO_MODEL_VERSION environment variable is not configured."
     );
   }
 
