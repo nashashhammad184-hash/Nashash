@@ -1,108 +1,274 @@
-import { exec } from "child_process";
-import { promisify } from "util";
-import * as fs from "fs";
-import { db, finalRenderJobsTable, assetsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { logger } from "./logger";
 
-const execAsync = promisify(exec);
+export type RenderJobStatus = "queued" | "processing" | "completed" | "failed";
 
-export interface RenderInput {
-  projectId: number;
-  clips: Array<{
-    fileUrl: string;
-    track: "VIDEO" | "VOICE" | "MUSIC" | "SFX" | "SUBTITLE";
-    timelineStart: number;
-    timelineEnd: number;
-    volume: number;
-  }>;
-  watermarkText?: string;
+export interface TimelineClipItem {
+  id?: number | string;
+  url?: string;
+  path?: string;
+  durationSeconds?: number;
+  order?: number;
 }
 
-// 1. محرك فحص الاتساق والاستمرارية السينمائي الصارم (Continuity Engine)
-export async function runContinuitySanityCheck(projectId: number, clips: any[]): Promise<{ result: "PASS" | "WARNING" | "FAIL"; report: any }> {
-  console.log(`[Continuity Engine] Analyzing scene timeline matching criteria for project: ${projectId}`);
-  
-  // فحص حقيقي لمرجعيات الأصول ومطابقة المعطيات الفنية
-  const report = {
-    characterMatch: true,
-    wardrobeConsistency: true,
-    lightingCoherence: true,
-    weatherAlignment: true,
-    timestamp: new Date().toISOString()
-  };
+export interface RenderJobInput {
+  projectId?: number;
+  videoUrl?: string;
+  videoPath?: string;
+  audioUrl?: string;
+  audioPath?: string;
+  subtitlesUrl?: string;
+  subtitlesText?: string;
+  watermarkText?: string;
+  clips?: TimelineClipItem[];
+}
 
-  // حظر وجود لقطات فارغة أو متضاربة برمجياً
-  if (clips.length === 0) {
-    return { result: "FAIL", report: { ...report, reason: "Timeline is completely empty. Structural breakdown failed." } };
+export interface RenderJob {
+  id: string;
+  projectId?: number;
+  status: RenderJobStatus;
+  progress: number;
+  input: RenderJobInput;
+  outputPath?: string;
+  outputUrl?: string;
+  fileSize?: number;
+  error?: string;
+  createdAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+}
+
+const renderJobsStore = new Map<string, RenderJob>();
+
+function getStorageDir(subDir: "renders" | "temp"): string {
+  const targetDir = path.resolve(process.cwd(), "uploads", subDir);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+  return targetDir;
+}
+
+async function resolveAssetToLocal(assetUrlOrPath: string, extension: string): Promise<string> {
+  const trimmed = assetUrlOrPath.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    const tempDir = getStorageDir("temp");
+    const filename = `asset_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.${extension}`;
+    const localFilePath = path.join(tempDir, filename);
+
+    logger.info({ url: trimmed }, "Downloading remote asset for render...");
+    const response = await fetch(trimmed, { signal: AbortSignal.timeout(60_000) });
+    if (!response.ok) {
+      throw new Error(`Failed to download remote render asset: HTTP ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length === 0) {
+      throw new Error(`Downloaded asset from ${trimmed} is 0 bytes.`);
+    }
+
+    fs.writeFileSync(localFilePath, buffer);
+    return localFilePath;
   }
 
-  return { result: "PASS", report };
+  if (fs.existsSync(trimmed)) {
+    return trimmed;
+  }
+
+  throw new Error(`Specified local render asset does not exist: ${trimmed}`);
 }
 
-// 2. محرك الرندرة والدمج الفعلي باستخدام FFmpeg (FFmpeg Render Engine)
-export async function executeFinalRenderAssembly(jobId: number, input: RenderInput): Promise<void> {
-  console.log(`[Render Engine] Starting FFmpeg compilation matrix for Job ID: ${jobId}`);
+function spawnFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    logger.info({ args }, "Spawning real FFmpeg process...");
+    const ffmpegProcess = spawn("ffmpeg", ["-y", ...args]);
+    let stdout = "";
+    let stderr = "";
 
-  await db
-    .update(finalRenderJobsTable)
-    .set({ status: "PROCESSING", progress: 15, updatedAt: new Date() })
-    .where(eq(finalRenderJobsTable.id, jobId));
+    ffmpegProcess.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    ffmpegProcess.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    ffmpegProcess.on("error", (err) => {
+      reject(new Error(`Failed to spawn FFmpeg binary: ${err.message}. Ensure ffmpeg is installed.`));
+    });
+
+    ffmpegProcess.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const errorDetails = stderr.slice(-600) || stdout.slice(-600) || "Unknown FFmpeg error";
+        reject(new Error(`FFmpeg exited with non-zero status code ${code}: ${errorDetails}`));
+      }
+    });
+  });
+}
+
+export function createRenderJob(input: RenderJobInput): RenderJob {
+  const jobId = `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+  const newJob: RenderJob = {
+    id: jobId,
+    projectId: input.projectId,
+    status: "queued",
+    progress: 0,
+    input,
+    createdAt: new Date(),
+  };
+
+  renderJobsStore.set(jobId, newJob);
+  logger.info({ jobId }, "Created new real render job");
+
+  // Trigger processing asynchronously in queue
+  setImmediate(() => {
+    void processRenderQueue();
+  });
+
+  return newJob;
+}
+
+export function getRenderJobStatus(jobId: string): RenderJob | undefined {
+  return renderJobsStore.get(jobId);
+}
+
+export async function processRenderQueue(): Promise<void> {
+  const queuedJob = Array.from(renderJobsStore.values()).find((j) => j.status === "queued");
+  if (!queuedJob) return;
+
+  queuedJob.status = "processing";
+  queuedJob.startedAt = new Date();
+  queuedJob.progress = 15;
+
+  const rendersDir = getStorageDir("renders");
+  const outputFileName = `render_${queuedJob.id}.mp4`;
+  const finalOutputPath = path.join(rendersDir, outputFileName);
+  const tempFilesToClean: string[] = [];
 
   try {
-    const videoClips = input.clips.filter(c => c.track === "VIDEO");
-    const audioClips = input.clips.filter(c => c.track === "VOICE" || c.track === "MUSIC" || c.track === "SFX");
+    const input = queuedJob.input;
+    const ffmpegArgs: string[] = [];
 
-    // مخرجات إنتاج حقيقية: إنشاء ملف MP4 حقيقي وصالح للتشغيل بالكامل
-    const outputDirectory = "/home/ubuntu/Nashash/artifacts/api-server/dist/public/renders";
-    if (!fs.existsSync(outputDirectory)) {
-      fs.mkdirSync(outputDirectory, { recursive: true });
+    // Case 1: Timeline clips concatenation
+    if (Array.isArray(input.clips) && input.clips.length > 0) {
+      queuedJob.progress = 30;
+      const sortedClips = [...input.clips].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const concatListLines: string[] = [];
+
+      for (const clip of sortedClips) {
+        const clipSource = clip.path || clip.url;
+        if (!clipSource) continue;
+        const localClipPath = await resolveAssetToLocal(clipSource, "mp4");
+        tempFilesToClean.push(localClipPath);
+        concatListLines.push(`file '${localClipPath.replace(/'/g, "'\\''")}'`);
+      }
+
+      if (concatListLines.length === 0) {
+        throw new Error("No valid clips found in timeline for concatenation.");
+      }
+
+      const tempDir = getStorageDir("temp");
+      const concatListFile = path.join(tempDir, `concat_${queuedJob.id}.txt`);
+      fs.writeFileSync(concatListFile, concatListLines.join("\n"));
+      tempFilesToClean.push(concatListFile);
+
+      ffmpegArgs.push("-f", "concat", "-safe", "0", "-i", concatListFile, "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", finalOutputPath);
+    }
+    // Case 2: Video + Audio Merge / Re-encode
+    else if (input.videoUrl || input.videoPath) {
+      queuedJob.progress = 35;
+      const rawVideo = input.videoPath || input.videoUrl!;
+      const localVideoPath = await resolveAssetToLocal(rawVideo, "mp4");
+      tempFilesToClean.push(localVideoPath);
+
+      if (input.audioUrl || input.audioPath) {
+        const rawAudio = input.audioPath || input.audioUrl!;
+        const localAudioPath = await resolveAssetToLocal(rawAudio, "mp3");
+        tempFilesToClean.push(localAudioPath);
+
+        ffmpegArgs.push(
+          "-i", localVideoPath,
+          "-i", localAudioPath,
+          "-map", "0:v:0",
+          "-map", "1:a:0",
+          "-c:v", "libx264",
+          "-c:a", "aac",
+          "-shortest",
+          "-pix_fmt", "yuv420p",
+          finalOutputPath
+        );
+      } else {
+        ffmpegArgs.push("-i", localVideoPath, "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", finalOutputPath);
+      }
+    }
+    // Case 3: Audio only -> generate video with black background
+    else if (input.audioUrl || input.audioPath) {
+      queuedJob.progress = 35;
+      const rawAudio = input.audioPath || input.audioUrl!;
+      const localAudioPath = await resolveAssetToLocal(rawAudio, "mp3");
+      tempFilesToClean.push(localAudioPath);
+
+      ffmpegArgs.push(
+        "-f", "lavfi",
+        "-i", "color=c=black:s=1280x720:r=30",
+        "-i", localAudioPath,
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-shortest",
+        "-pix_fmt", "yuv420p",
+        finalOutputPath
+      );
+    } else {
+      throw new Error("No media inputs (video, audio, or timeline clips) provided for rendering.");
     }
 
-    const targetOutputFilePath = `${outputDirectory}/final_render_project_${input.projectId}_${jobId}.mp4`;
-    const watermark = input.watermarkText || "Kayan AI Productions";
+    queuedJob.progress = 60;
+    await spawnFfmpeg(ffmpegArgs);
 
-    // صياغة أمر FFmpeg الفعلي لدمج الصوت والصورة وحقن الـ Watermark والترجمات برمجياً ككتلة موحدة
-    // نستخدم فلتر توليد فيديو اختباري حقيقي مدمج بـ FFmpeg في حال عدم اكتمال تحميل الأصول لضمان كفاءة الملف الناتج وملائمته للمتصفحات
-    const ffmpegCommand = `ffmpeg -y -f lavfi -i testsrc=duration=5:size=1280x720:rate=30 -vf "drawtext=text='${watermark}':x=10:y=H-30:fontsize=24:fontcolor=white" -c:v libx264 -pix_fmt yuv420p ${targetOutputFilePath}`;
-
-    console.log(`[FFmpeg Execution]: ${ffmpegCommand}`);
-    await execAsync(ffmpegCommand);
-
-    // التحقق الصارم من وجود الملف الفعلي وصلاحيته قبل إعلان النجاح
-    if (!fs.existsSync(targetOutputFilePath)) {
-      throw new Error(`FFmpeg failed to produce the binary file at: ${targetOutputFilePath}`);
+    // Strict Validation: file exists & size > 0
+    if (!fs.existsSync(finalOutputPath)) {
+      throw new Error(`Render output file was not found on disk at: ${finalOutputPath}`);
     }
 
-    // تسجيل الفيديو النهائي كـ Asset مركزي معتمد في النظام
-    const [asset] = await db.insert(assetsTable).values({
-      projectId: input.projectId,
-      type: "FINAL_RENDER",
-      fileUrl: `/renders/final_render_project_${input.projectId}_${jobId}.mp4`,
-      provider: "FFmpeg Native Engine",
-      status: "active"
-    }).returning();
+    const fileStats = fs.statSync(finalOutputPath);
+    if (!fileStats.isFile() || fileStats.size === 0) {
+      if (fs.existsSync(finalOutputPath)) fs.unlinkSync(finalOutputPath);
+      throw new Error("Render process created a 0-byte invalid video file.");
+    }
 
-    // تحديث حالة وظيفة الدمج إلى مكتملة 100%
-    await db
-      .update(finalRenderJobsTable)
-      .set({
-        status: "COMPLETED",
-        progress: 100,
-        outputAssetId: asset.id,
-        updatedAt: new Date()
-      })
-      .where(eq(finalRenderJobsTable.id, jobId));
+    queuedJob.status = "completed";
+    queuedJob.progress = 100;
+    queuedJob.outputPath = finalOutputPath;
+    queuedJob.outputUrl = `/uploads/renders/${outputFileName}`;
+    queuedJob.fileSize = fileStats.size;
+    queuedJob.completedAt = new Date();
 
-    console.log(`[Render Engine] Production file compiled successfully for Job ID: ${jobId}`);
-  } catch (error: any) {
-    console.error(`[Render Engine Critical Error]: ${error.message}`);
-    await db
-      .update(finalRenderJobsTable)
-      .set({
-        status: "FAILED",
-        errorLog: error.message,
-        updatedAt: new Date()
-      })
-      .where(eq(finalRenderJobsTable.id, jobId));
+    logger.info({ jobId: queuedJob.id, fileSize: fileStats.size }, "Render job completed successfully");
+  } catch (error) {
+    queuedJob.status = "failed";
+    queuedJob.progress = 0;
+    queuedJob.error = error instanceof Error ? error.message : "Unknown render engine failure";
+    queuedJob.completedAt = new Date();
+
+    logger.error({ jobId: queuedJob.id, err: error }, "Render job execution failed");
+  } finally {
+    // Cleanup temporary intermediate files
+    for (const tempFile of tempFilesToClean) {
+      try {
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+
+    // Process next item in queue if available
+    setImmediate(() => {
+      void processRenderQueue();
+    });
   }
 }
