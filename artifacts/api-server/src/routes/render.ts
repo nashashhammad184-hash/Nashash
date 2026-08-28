@@ -1,166 +1,304 @@
-// @ts-nocheck
 import { Router, type IRouter, type Request, type Response } from "express";
-import { exec } from "node:child_process";
-import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
-const REQUEST_TIMEOUT_MS = 30000;
-const MAX_POLLING_ATTEMPTS = 60;
-const POLLING_DELAY_MS = 4000;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const RENDERS_DIR = path.resolve(__dirname, "../../../studio/dist/public/renders");
+const DEEPGRAM_TTS_ENDPOINT = "https://api.deepgram.com/v1/speak";
+const REPLICATE_PREDICTIONS_ENDPOINT = "https://api.replicate.com/v1/predictions";
+const DEFAULT_TTS_MODEL = "aura-asteria-en";
+const MAX_POLLING_ATTEMPTS = 80;
+const POLLING_INTERVAL_MS = 3_000;
+const HTTP_TIMEOUT_MS = 25_000;
 
-router.post("/render/merge", async (req: Request, res: Response): Promise<void> => {
-  const { prompt, worldId, text, timelineSubs, microExpression } = req.body || {};
-  if (!prompt || !text || !worldId) {
-    res.status(400).json({ error: "prompt, text, and worldId are required for comprehensive final render." });
+interface ReplicatePrediction {
+  id: string;
+  version?: string;
+  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
+  error?: string | null;
+  output?: unknown;
+  urls?: {
+    get?: string;
+    cancel?: string;
+  };
+}
+
+function extractMediaUrl(output: unknown): string | undefined {
+  if (typeof output === "string" && output.trim().length > 0) {
+    return output.trim();
+  }
+  if (Array.isArray(output) && output.length > 0) {
+    const first = output[0];
+    if (typeof first === "string" && first.trim().length > 0) {
+      return first.trim();
+    }
+  }
+  if (output && typeof output === "object") {
+    const record = output as Record<string, unknown>;
+    for (const key of ["video", "video_url", "url", "output", "synced_video"]) {
+      const val = record[key];
+      if (typeof val === "string" && val.trim().length > 0) {
+        return val.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function getRendersDir(): string {
+  const rendersDir = path.resolve(process.cwd(), "uploads", "renders");
+  if (!fs.existsSync(rendersDir)) {
+    fs.mkdirSync(rendersDir, { recursive: true });
+  }
+  return rendersDir;
+}
+
+/**
+ * 1. Deepgram TTS Stage
+ */
+async function generateAudioStage(text: string, deepgramKey: string, ttsModel: string): Promise<{ audioBuffer: Buffer; audioDataUri: string; audioPath: string }> {
+  const url = `${DEEPGRAM_TTS_ENDPOINT}?model=${encodeURIComponent(ttsModel)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${deepgramKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Deepgram TTS failed (${response.status}): ${errorText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Deepgram TTS returned 0 bytes of audio data.");
+  }
+
+  const timestamp = Date.now();
+  const audioFileName = `render_audio_${timestamp}.mp3`;
+  const audioPath = path.join(getRendersDir(), audioFileName);
+  fs.writeFileSync(audioPath, buffer);
+
+  const audioDataUri = `data:audio/mp3;base64,${buffer.toString("base64")}`;
+  return { audioBuffer: buffer, audioDataUri, audioPath };
+}
+
+/**
+ * 2. Replicate Video Generation Stage
+ */
+async function generateVideoStage(prompt: string, replicateToken: string, videoModelVersion: string): Promise<string> {
+  const createResponse = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${replicateToken}`,
+      "Content-Type": "application/json",
+      Prefer: "wait=5",
+    },
+    body: JSON.stringify({
+      version: videoModelVersion,
+      input: { prompt },
+    }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text().catch(() => "");
+    throw new Error(`Replicate Video API returned HTTP ${createResponse.status}: ${errorText}`);
+  }
+
+  let prediction = (await createResponse.json()) as ReplicatePrediction;
+  if (!prediction || !prediction.id) {
+    throw new Error("Replicate Video API did not return a valid prediction ID.");
+  }
+
+  const pollingUrl = prediction.urls?.get || `${REPLICATE_PREDICTIONS_ENDPOINT}/${prediction.id}`;
+
+  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
+    if (prediction.status === "succeeded") {
+      const videoUrl = extractMediaUrl(prediction.output);
+      if (!videoUrl) {
+        throw new Error("Replicate Video succeeded but returned no valid video URL.");
+      }
+      return videoUrl;
+    }
+
+    if (prediction.status === "failed") {
+      throw new Error(`Replicate Video prediction failed: ${prediction.error || "Unknown error"}`);
+    }
+
+    if (prediction.status === "canceled") {
+      throw new Error("Replicate Video prediction was canceled.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
+
+    const pollResponse = await fetch(pollingUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${replicateToken}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+
+    if (!pollResponse.ok) {
+      const pollErrorText = await pollResponse.text().catch(() => "");
+      throw new Error(`Replicate Video polling failed (${pollResponse.status}): ${pollErrorText}`);
+    }
+
+    prediction = (await pollResponse.json()) as ReplicatePrediction;
+  }
+
+  throw new Error(`Replicate Video generation timed out after ${MAX_POLLING_ATTEMPTS * 3} seconds.`);
+}
+
+/**
+ * 3. Replicate Lip Sync Stage
+ */
+async function generateLipSyncStage(videoUrl: string, audioDataUriOrUrl: string, replicateToken: string, lipsyncModelVersion: string): Promise<string> {
+  const createResponse = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${replicateToken}`,
+      "Content-Type": "application/json",
+      Prefer: "wait=5",
+    },
+    body: JSON.stringify({
+      version: lipsyncModelVersion,
+      input: {
+        face: videoUrl,
+        input_audio: audioDataUriOrUrl,
+      },
+    }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text().catch(() => "");
+    throw new Error(`Replicate LipSync API returned HTTP ${createResponse.status}: ${errorText}`);
+  }
+
+  let prediction = (await createResponse.json()) as ReplicatePrediction;
+  if (!prediction || !prediction.id) {
+    throw new Error("Replicate LipSync API did not return a valid prediction ID.");
+  }
+
+  const pollingUrl = prediction.urls?.get || `${REPLICATE_PREDICTIONS_ENDPOINT}/${prediction.id}`;
+
+  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
+    if (prediction.status === "succeeded") {
+      const syncedUrl = extractMediaUrl(prediction.output);
+      if (!syncedUrl) {
+        throw new Error("Replicate LipSync succeeded but returned no valid video URL.");
+      }
+      return syncedUrl;
+    }
+
+    if (prediction.status === "failed") {
+      throw new Error(`Replicate LipSync prediction failed: ${prediction.error || "Unknown error"}`);
+    }
+
+    if (prediction.status === "canceled") {
+      throw new Error("Replicate LipSync prediction was canceled.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
+
+    const pollResponse = await fetch(pollingUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${replicateToken}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+
+    if (!pollResponse.ok) {
+      const pollErrorText = await pollResponse.text().catch(() => "");
+      throw new Error(`Replicate LipSync polling failed (${pollResponse.status}): ${pollErrorText}`);
+    }
+
+    prediction = (await pollResponse.json()) as ReplicatePrediction;
+  }
+
+  throw new Error(`Replicate LipSync timed out after ${MAX_POLLING_ATTEMPTS * 3} seconds.`);
+}
+
+async function handleRenderPipeline(req: Request, res: Response): Promise<void> {
+  const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (!deepgramKey) {
+    res.status(500).json({ error: "DEEPGRAM_API_KEY environment variable is not configured." });
     return;
   }
 
-  const replicateToken = process.env.REPLICATE_API_TOKEN;
-  const deepgramKey = process.env.DEEPGRAM_API_KEY;
-  const timestamp = Date.now();
+  const replicateToken = process.env.REPLICATE_API_TOKEN?.trim();
+  if (!replicateToken) {
+    res.status(500).json({ error: "REPLICATE_API_TOKEN environment variable is not configured." });
+    return;
+  }
 
-  const tempAudioPath = path.join(RENDERS_DIR, `temp_audio_${timestamp}.mp3`);
-  const tempLipVideoPath = path.join(RENDERS_DIR, `temp_lip_${timestamp}.mp4`);
-  const tempSrtPath = path.join(RENDERS_DIR, `temp_sub_${timestamp}.srt`);
-  const finalVideoName = `final_render_${timestamp}.mp4`;
-  const finalVideoPath = path.join(RENDERS_DIR, finalVideoName);
+  const videoModelVersion = process.env.REPLICATE_VIDEO_MODEL_VERSION?.trim();
+  if (!videoModelVersion) {
+    res.status(500).json({ error: "REPLICATE_VIDEO_MODEL_VERSION environment variable is not configured." });
+    return;
+  }
+
+  const lipsyncModelVersion = process.env.REPLICATE_LIPSYNC_MODEL_VERSION?.trim();
+  if (!lipsyncModelVersion) {
+    res.status(500).json({ error: "REPLICATE_LIPSYNC_MODEL_VERSION environment variable is not configured." });
+    return;
+  }
+
+  const { prompt, text } = req.body || {};
+  if (!prompt || !text) {
+    res.status(400).json({ error: "Both 'prompt' (for video) and 'text' (for speech) are required." });
+    return;
+  }
+
+  const ttsModel = process.env.DEEPGRAM_TTS_MODEL?.trim() || req.body?.model?.trim() || DEFAULT_TTS_MODEL;
 
   try {
-    if (!fs.existsSync(RENDERS_DIR)) {
-      fs.mkdirSync(RENDERS_DIR, { recursive: true });
-    }
+    logger.info("==> [RENDER PIPELINE] Starting Stage 1: Deepgram TTS...");
+    const { audioDataUri, audioPath } = await generateAudioStage(text, deepgramKey, ttsModel);
 
-    let srtContent = "";
-    if (Array.isArray(timelineSubs) && timelineSubs.length > 0) {
-      timelineSubs.forEach((sub: { index: number; start: string; end: string; text: string }) => {
-        srtContent += `${sub.index}\n${sub.start} --> ${sub.end}\n${sub.text}\n\n`;
-      });
-    } else {
-      srtContent = `1\n00:00:00,000 --> 00:00:07,000\n${text}\n\n`;
-    }
-    fs.writeFileSync(tempSrtPath, srtContent, "utf8");
+    logger.info("==> [RENDER PIPELINE] Starting Stage 2: Replicate Video Generation...");
+    const rawVideoUrl = await generateVideoStage(prompt, replicateToken, videoModelVersion);
 
-    req.log?.info("=== Stage 1: Audio Production via Deepgram ===");
-    const audioResponse = await fetch("https://deepgram.com", {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${deepgramKey}`,
-        "Content-Type": "application/json",
+    logger.info("==> [RENDER PIPELINE] Starting Stage 3: Replicate Lip Sync...");
+    const syncedVideoUrl = await generateLipSyncStage(rawVideoUrl, audioDataUri, replicateToken, lipsyncModelVersion);
+
+    res.status(200).json({
+      success: true,
+      status: "completed",
+      videoUrl: rawVideoUrl,
+      syncedVideoUrl,
+      renderUrl: syncedVideoUrl,
+      stages: {
+        audio: "completed",
+        video: "completed",
+        lipsync: "completed",
       },
-      body: JSON.stringify({ text }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
-    if (!audioResponse.ok) throw new Error("Deepgram core generation failed.");
-    const audioBuffer = await audioResponse.arrayBuffer();
-    fs.writeFileSync(tempAudioPath, Buffer.from(audioBuffer));
-    const audioBase64 = Buffer.from(audioBuffer).toString("base64");
-    const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
-
-    req.log?.info("=== Stage 2: Visual Production via Replicate ===");
-    const videoResponse = await fetch("https://replicate.com", {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${replicateToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        version: "c452144365b40e53a99e46a78bd3bc957117f763f03bda00f77bcbe867f0868c",
-        input: { prompt, world_id: worldId, micro_expression: microExpression || "neutral" }
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    });
-    if (!videoResponse.ok) throw new Error("Replicate Video execution failed.");
-    const videoPrediction = await videoResponse.json() as { urls: { get: string } };
-    
-    let rawVideoUrl: string | null = null;
-    for (let i = 0; i < MAX_POLLING_ATTEMPTS; i++) {
-      await new Promise(r => setTimeout(r, POLLING_DELAY_MS));
-      const p = await fetch(videoPrediction.urls.get, { headers: { "Authorization": `Token ${replicateToken}` } });
-      const d = await p.json() as { status: string; output?: string | string[] };
-      if (d.status === "succeeded") {
-        rawVideoUrl = Array.isArray(d.output) ? d.output : d.output || null;
-        break;
-      }
-      if (["failed", "canceled"].includes(d.status)) throw new Error("Raw video generation failed.");
-    }
-    if (!rawVideoUrl) throw new Error("Raw video generation timed out.");
-
-    req.log?.info("=== Stage 3: Real Lip Sync Execution ===");
-    const lipResponse = await fetch("https://replicate.com", {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${replicateToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        version: "2444ff76f1e8e2fa012b184da3109a96e6255152026ae611c0fe20c43665bc72",
-        input: { face: rawVideoUrl, audio: audioDataUrl }
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    });
-    if (!lipResponse.ok) throw new Error("Lip Sync orchestration failed.");
-    const lipPrediction = await lipResponse.json() as { urls: { get: string } };
-    
-    let syncedVideoUrl: string | null = null;
-    for (let i = 0; i < MAX_POLLING_ATTEMPTS; i++) {
-      await new Promise(r => setTimeout(r, POLLING_DELAY_MS));
-      const p = await fetch(lipPrediction.urls.get, { headers: { "Authorization": `Token ${replicateToken}` } });
-      const d = await p.json() as { status: string; output?: string | string[] };
-      if (d.status === "succeeded") {
-        syncedVideoUrl = Array.isArray(d.output) ? d.output : d.output || null;
-        break;
-      }
-      if (["failed", "canceled"].includes(d.status)) throw new Error("Lip Sync processing collapsed on Replicate.");
-    }
-    if (!syncedVideoUrl) throw new Error("Lip Sync pipeline timed out.");
-
-    const lipFileResponse = await fetch(syncedVideoUrl);
-    if (!lipFileResponse.ok) throw new Error("Failed to process server CDN audio-visual track.");
-    const lipVideoBuffer = await lipFileResponse.arrayBuffer();
-    fs.writeFileSync(tempLipVideoPath, Buffer.from(lipVideoBuffer));
-
-    req.log?.info("=== Stage 4: Optimized Arabic Subtitle Hardcoding ===");
-    const ffmpegCommand = `ffmpeg -y -i "${tempLipVideoPath}" -i "${tempAudioPath}" -vf "subtitles='${tempSrtPath}':charenc=UTF-8:force_style='FontName=KacstOne,FontSize=16'" -c:v libx264 -preset superfast -crf 22 -c:a aac -map 0:v:0 -map 1:a:0 "${finalVideoPath}"`;
-    
-    exec(ffmpegCommand, (execError, stdout, stderr) => {
-      try {
-        if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-        if (fs.existsSync(tempLipVideoPath)) fs.unlinkSync(tempLipVideoPath);
-        if (fs.existsSync(tempSrtPath)) fs.unlinkSync(tempSrtPath);
-      } catch (e) {
-        req.log?.warn({ err: e }, "Files cleanup warning");
-      }
-
-      if (execError) {
-        req.log?.error({ err: execError, stderr }, "FFmpeg subtitle burn failed");
-        res.status(502).json({ error: "FFmpeg execution error", details: stderr });
-        return;
-      }
-
-      req.log?.info({ finalVideoName }, "Arabic Render Pipeline Executed Safely on Free Tier");
-      res.json({
-        success: true,
-        videoUrl: `/renders/${finalVideoName}`,
-        downloadUrl: `/renders/${finalVideoName}`,
-        streamUrl: `/renders/${finalVideoName}`,
-        provider: "kayan-arabic-render-pipeline"
-      });
-    });
-
   } catch (error) {
-    try {
-      if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-      if (fs.existsSync(tempLipVideoPath)) fs.unlinkSync(tempLipVideoPath);
-      if (fs.existsSync(tempSrtPath)) fs.unlinkSync(tempSrtPath);
-    } catch {}
-    res.status(502).json({ error: "Pipeline failed", message: error instanceof Error ? error.message : "Unknown error" });
+    logger.error({ err: error }, "Render Pipeline failed");
+    res.status(502).json({
+      success: false,
+      error: "Render Pipeline execution failed",
+      message: error instanceof Error ? error.message : "Unknown pipeline error",
+    });
   }
-});
+}
+
+// Register render routes
+router.post("/", handleRenderPipeline);
+router.post("/merge", handleRenderPipeline);
+router.post("/generate", handleRenderPipeline);
 
 export default router;

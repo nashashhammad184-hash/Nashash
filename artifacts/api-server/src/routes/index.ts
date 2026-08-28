@@ -11,6 +11,7 @@ import studioRouter from "./studio";
 import videoRouter from "./video";
 import voiceRouter from "./voice";
 import lipsyncRouter from "./lipsync";
+import renderRouter from "./render";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,7 @@ router.use("/voice", voiceRouter);
 router.use(voiceRouter);
 router.use("/lipsync", lipsyncRouter);
 router.use(lipsyncRouter);
+router.use("/render", renderRouter);
+router.use(renderRouter);
 
 export default router;
