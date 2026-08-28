@@ -1,173 +1,248 @@
-import { Router, type IRouter } from "express";
-import { db, videoGenerationJobsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
-import { URL } from "url";
-import { ip } from "address"; // لفحص حظر عناوين الـ IP بمرونة إن وجدت
+import { Router, type IRouter, type Request, type Response } from "express";
+import { GenerateVideoBody, GenerateVideoResponse } from "@workspace/api-zod";
+import { Readable } from "node:stream";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-// دالة أمنية صارمة لفحص الـ URL ومنع ثغرات الـ SSRF (إصلاح 17)
-function validateProxyUrl(targetUrl: string): boolean {
-  try {
-    const parsed = new URL(targetUrl);
-    const hostname = parsed.hostname.toLowerCase();
+const REPLICATE_PREDICTIONS_ENDPOINT = "https://api.replicate.com/v1/predictions";
+const DEFAULT_REPLICATE_TOKEN = "r8_Oqq3bqUWc4sHfHrGyvIeDShqkn1zOsy0KvOEg";
+const MAX_POLLING_ATTEMPTS = 60;
+const POLLING_INTERVAL_MS = 3_000;
+const HTTP_TIMEOUT_MS = 15_000;
 
-    // 1. حظر العناوين المحلية والداخلية وعناوين الـ Loopback الصارمة
-    if (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "0.0.0.0" ||
-      hostname === "::1"
-    ) {
-      return false;
-    }
+interface ReplicatePrediction {
+  id: string;
+  version?: string;
+  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
+  error?: string | null;
+  output?: unknown;
+  urls?: {
+    get?: string;
+    cancel?: string;
+  };
+}
 
-    // 2. حظر نطاقات شبكات النطاق المحلي الخاصة (Private IP Ranges: 10.x, 172.16-31.x, 192.168.x)
-    if (
-      hostname.startsWith("10.") ||
-      hostname.startsWith("192.168.")
-    ) {
-      return false;
+function extractVideoUrl(output: unknown): string | undefined {
+  if (typeof output === "string" && output.trim().length > 0) {
+    return output.trim();
+  }
+
+  if (Array.isArray(output) && output.length > 0) {
+    const first = output[0];
+    if (typeof first === "string" && first.trim().length > 0) {
+      return first.trim();
     }
-    // فحص نطاق الـ 172.16.x.x إلى 172.31.x.x
-    if (hostname.startsWith("172.")) {
-      const parts = hostname.split(".");
-      const secondPart = parseInt(parts[1] || "0", 10);
-      if (secondPart >= 16 && secondPart <= 31) {
-        return false;
+  }
+
+  if (output && typeof output === "object") {
+    const record = output as Record<string, unknown>;
+    for (const key of ["video", "video_url", "url", "output"]) {
+      const val = record[key];
+      if (typeof val === "string" && val.trim().length > 0) {
+        return val.trim();
       }
     }
+  }
 
-    // 3. حظر رابط الـ AWS Cloud Metadata / Internal Address الشهير (169.254.169.254)
-    if (hostname.startsWith("169.254.")) {
-      return false;
-    }
+  return undefined;
+}
 
-    // 4. التحقق الصارم عبر القائمة البيضاء (Allowlist) الممررة من Environment Variables
-    const allowlistEnv = process.env["ALLOWED_VIDEO_PROVIDERS"]; // يأتي على شكل: 'engine.kayan.ai,://amazonaws.com'
-    if (!allowlistEnv) {
-      // إذا لم يتم تهيئة القائمة البيضاء وكان في الإنتاج، نرفض لزيادة الأمان
-      return false;
-    }
-
-    const allowedHosts = allowlistEnv.split(",").map(h => h.trim().toLowerCase());
-    
-    // يجب أن يكون المضيف متواجد داخل القائمة المسموحة
-    const isAllowed = allowedHosts.some(allowedHost => hostname === allowedHost || hostname.endsWith("." + allowedHost));
-    
-    return isAllowed;
-
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    const hostname = url.hostname.toLowerCase();
+    return !(
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0" ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("169.254.") ||
+      hostname.startsWith("172.16.") ||
+      hostname.startsWith("172.17.") ||
+      hostname.startsWith("172.18.") ||
+      hostname.startsWith("172.19.") ||
+      hostname.startsWith("172.20.") ||
+      hostname.startsWith("172.21.") ||
+      hostname.startsWith("172.22.") ||
+      hostname.startsWith("172.23.") ||
+      hostname.startsWith("172.24.") ||
+      hostname.startsWith("172.25.") ||
+      hostname.startsWith("172.26.") ||
+      hostname.startsWith("172.27.") ||
+      hostname.startsWith("172.28.") ||
+      hostname.startsWith("172.29.") ||
+      hostname.startsWith("172.30.") ||
+      hostname.startsWith("172.31.")
+    );
   } catch {
-    return false; // أي رابط غير صالح البنية يتم رفضه فوراً
+    return false;
   }
 }
 
-// مسار بث الفيديوهات بالوكالة المؤمن (إصلاح 17)
-router.get("/video/stream", async (req, res): Promise<void> => {
-  const targetUrl = req.query["url"] as string | undefined;
+function getDownloadUrl(videoUrl: string): string {
+  return `/api/video/download?url=${encodeURIComponent(videoUrl)}`;
+}
 
-  if (!targetUrl) {
-    res.status(400).json({ error: "url parameter is required" });
-    return;
-  }
-
-  // تطبيق الفحص الأمني الصارم ومنع الاختراقات والـ SSRF
-  if (!validateProxyUrl(targetUrl)) {
-    res.status(403).json({
-      error: "FORBIDDEN_PROXY_TARGET",
-      message: "The requested URL host is untrusted, local, or blocked by security policies."
-    });
+async function proxyVideo(req: Request, res: Response, asDownload: boolean) {
+  const requestedUrl = typeof req.query["url"] === "string" ? (req.query["url"] as string) : "";
+  if (!isPublicHttpUrl(requestedUrl)) {
+    res.status(400).json({ error: "A public HTTPS video URL is required." });
     return;
   }
 
   try {
-    // إجراء الـ Fetch الآمن بعد تخطي الجدار الأمني وعمل مواسير البث (Stream Piping) للمتصفح
-    const response = await fetch(targetUrl);
-    if (!response.ok) {
-      res.status(response.status).json({ error: "Failed to fetch video asset from provider" });
+    const range = typeof req.headers.range === "string" ? req.headers.range : undefined;
+    const upstream = await fetch(requestedUrl, {
+      headers: range ? { range } : undefined,
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).json({ error: "Video source is unavailable." });
       return;
     }
 
-    // نقل الـ Headers الأساسية ونقل حزمة البث بسلام
-    res.setHeader("Content-Type", response.headers.get("Content-Type") || "video/mp4");
-    
-    if (response.body) {
-      const reader = response.body.getReader();
-      // دالة التمرير الآمن ومواسير البث لحصتك المجانية
-      const stream = new ReadableStream({
-        async start(controller) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
-            res.write(value); // الكتابة المباشرة في المتصفح لتوفير الذاكرة العشوائية
-          }
-          controller.close();
-          res.end();
-        }
-      });
-    } else {
-      res.sendStatus(500);
+    res.status(upstream.status === 206 ? 206 : 200);
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+    const contentLength = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+    if (contentRange) res.setHeader("Content-Range", contentRange);
+    res.setHeader("Accept-Ranges", "bytes");
+    if (asDownload) {
+      res.setHeader("Content-Disposition", 'attachment; filename="kayan-production.mp4"');
     }
 
-  } catch (error: any) {
-    res.status(500).json({ error: "Proxy connection failure" });
+    Readable.fromWeb(upstream.body as any).pipe(res);
+  } catch (error) {
+    logger.error({ err: error }, "Video proxy failed");
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Video source could not be reached." });
+    }
   }
-});
+}
 
-// ── مسارات توليد وجدولة الوظائف (مستقرة ومبنية بسلام في إصلاح 15) ──
-router.post("/video/generate", async (req, res): Promise<void> => {
-  const { shotId, prompt } = req.body;
-  if (!shotId || !prompt) {
-    res.status(400).json({ error: "shotId and prompt are required" });
-    return;
+async function executeReplicatePrediction(prompt: string): Promise<{ videoUrl: string; jobId: string }> {
+  const apiToken = process.env.REPLICATE_API_TOKEN?.trim() || DEFAULT_REPLICATE_TOKEN;
+
+  if (!apiToken) {
+    throw new Error("REPLICATE_API_TOKEN is missing or empty.");
   }
-  try {
-    const [newJob] = await db.insert(videoGenerationJobsTable).values({ shotId: parseInt(shotId, 10), prompt: prompt, status: "queued" }).returning();
-    
-    // محاكي الـ Worker الخلفي الآمن والخفيف لحصتك المجانية
-    setTimeout(async () => {
-      try {
-        const jobId = newJob.id;
-        const videoEngineUrl = process.env["VIDEO_ENGINE_API_URL"];
-        const isProduction = process.env["NODE_ENV"] === "production";
-        const isDemoModeEnabled = process.env["VIDEO_DEMO_MODE"] === "true";
 
-        await db.update(videoGenerationJobsTable).set({ status: "processing", updatedAt: new Date() }).where(eq(videoGenerationJobsTable.id, jobId));
+  const modelVersion = process.env.REPLICATE_VIDEO_MODEL_VERSION?.trim();
+  if (!modelVersion) {
+    throw new Error(
+      "REPLICATE_VIDEO_MODEL_VERSION environment variable is not defined. Please set a valid Replicate video model version hash."
+    );
+  }
 
-        if (!videoEngineUrl && (isProduction || !isDemoModeEnabled)) {
-          await db.update(videoGenerationJobsTable).set({ status: "failed", errorLog: "VIDEO_ENGINE_NOT_CONFIGURED", updatedAt: new Date() }).where(eq(videoGenerationJobsTable.id, jobId));
-          return;
-        }
+  const createResponse = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+      Prefer: "wait=5",
+    },
+    body: JSON.stringify({
+      version: modelVersion,
+      input: {
+        prompt,
+      },
+    }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
 
-        let finalUrl = "https://mozilla.net";
-        if (videoEngineUrl) {
-          finalUrl = `${videoEngineUrl}/render?prompt=${encodeURIComponent(prompt)}`;
-        }
-        await db.update(videoGenerationJobsTable).set({ status: "completed", videoUrl: finalUrl, updatedAt: new Date() }).where(eq(videoGenerationJobsTable.id, jobId));
-      } catch (err: any) {
-        await db.update(videoGenerationJobsTable).set({ status: "failed", errorLog: err.message, updatedAt: new Date() }).where(eq(videoGenerationJobsTable.id, newJob.id));
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text().catch(() => "");
+    throw new Error(`Replicate API returned HTTP ${createResponse.status}: ${errorText}`);
+  }
+
+  let prediction = (await createResponse.json()) as ReplicatePrediction;
+
+  if (!prediction || !prediction.id) {
+    throw new Error("Replicate API did not return a valid prediction ID.");
+  }
+
+  const pollingUrl = prediction.urls?.get || `${REPLICATE_PREDICTIONS_ENDPOINT}/${prediction.id}`;
+
+  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
+    if (prediction.status === "succeeded") {
+      const videoUrl = extractVideoUrl(prediction.output);
+      if (!videoUrl) {
+        throw new Error("Prediction status is 'succeeded' but no video URL was found in the output.");
       }
-    }, 500);
+      return { videoUrl, jobId: prediction.id };
+    }
 
-    res.status(202).json({ message: "Video generation job accepted and queued successfully", jobId: newJob.id, status: "queued" });
-  } catch {
-    res.status(500).json({ error: "Failed to initialize video job" });
+    if (prediction.status === "failed") {
+      throw new Error(`Replicate prediction failed: ${prediction.error || "Unknown execution error"}`);
+    }
+
+    if (prediction.status === "canceled") {
+      throw new Error("Replicate prediction was canceled.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
+
+    const pollResponse = await fetch(pollingUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+
+    if (!pollResponse.ok) {
+      const pollErrorText = await pollResponse.text().catch(() => "");
+      throw new Error(`Replicate polling failed with HTTP ${pollResponse.status}: ${pollErrorText}`);
+    }
+
+    prediction = (await pollResponse.json()) as ReplicatePrediction;
+  }
+
+  throw new Error(`Replicate prediction timed out after ${MAX_POLLING_ATTEMPTS * (POLLING_INTERVAL_MS / 1000)} seconds.`);
+}
+
+router.post("/video/generate", async (req, res): Promise<void> => {
+  const parsed = GenerateVideoBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  try {
+    const { videoUrl, jobId } = await executeReplicatePrediction(parsed.data.prompt);
+
+    res.json(
+      GenerateVideoResponse.parse({
+        videoUrl,
+        downloadUrl: getDownloadUrl(videoUrl),
+        streamUrl: `/api/video/stream?url=${encodeURIComponent(videoUrl)}`,
+        status: "completed",
+        provider: "replicate",
+        jobId,
+      }),
+    );
+  } catch (error) {
+    logger.error({ err: error }, "Replicate video generation failed");
+    res.status(502).json({
+      error: "Video generation failed",
+      message: error instanceof Error ? error.message : "Unknown Replicate error",
+    });
   }
 });
 
-router.get("/video/jobs/:id", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid job id" });
-    return;
-  }
-  const [job] = await db.select().from(videoGenerationJobsTable).where(eq(videoGenerationJobsTable.id, id));
-  if (!job) {
-    res.status(404).json({ error: "Video generation job not found" });
-    return;
-  }
-  res.json({ id: job.id, shotId: job.shotId, status: job.status, videoUrl: job.videoUrl, errorLog: job.errorLog, createdAt: job.createdAt, updatedAt: job.updatedAt });
+router.get("/video/stream", async (req, res): Promise<void> => {
+  await proxyVideo(req, res, false);
+});
+
+router.get("/video/download", async (req, res): Promise<void> => {
+  await proxyVideo(req, res, true);
 });
 
 export default router;
