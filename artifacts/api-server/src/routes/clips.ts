@@ -43,7 +43,17 @@ router.post("/clips", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const [clip] = await db.insert(editClipsTable).values(parsed.data).returning();
+  const [clip] = await db
+    .insert(editClipsTable)
+    .values({
+      projectId: parsed.data.projectId,
+      title: parsed.data.title,
+      durationSeconds: parsed.data.durationSeconds ?? null,
+      notes: parsed.data.notes ?? null,
+      clipOrder: parsed.data.clipOrder ?? 0,
+    } as any)
+    .returning();
+
   res.status(201).json(
     CreateClipResponse.parse({
       ...clip,
@@ -66,7 +76,7 @@ router.patch("/clips/:id", async (req, res): Promise<void> => {
   }
   const [clip] = await db
     .update(editClipsTable)
-    .set(parsed.data)
+    .set(parsed.data as any)
     .where(eq(editClipsTable.id, params.data.id))
     .returning();
   if (!clip) {
