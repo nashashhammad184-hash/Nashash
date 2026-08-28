@@ -1,0 +1,119 @@
+import { Router, type IRouter, type Request, type Response } from "express";
+import { GenerateVideoBody, GenerateVideoResponse } from "@workspace/api-zod";
+import { Readable } from "node:stream";
+
+const router: IRouter = Router();
+const DEMO_MP4_URL = "https://mozilla.net";
+const MAX_PROVIDER_ATTEMPTS = 10;
+const PROVIDER_REQUEST_TIMEOUT_MS = 8000;
+const PROVIDER_RETRY_DELAY_MS = 2000;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((v): v is string => typeof v === "string" && v.trim().length > 0);
+}
+
+function isVideoUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    return /\.(mp4|webm|mov)(?:$|[?#])/i.test(url.pathname + url.search);
+  } catch { return false; }
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname.toLowerCase());
+  } catch { return false; }
+}
+
+function findVideoUrl(value: unknown, depth = 0, allowSignedVideoUrl = false): string | undefined {
+  if (depth > 5 || value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    return (allowSignedVideoUrl ? /^https?:\/\//i.test(value.trim()) : isVideoUrl(value.trim())) ? value.trim() : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findVideoUrl(item, depth + 1, allowSignedVideoUrl);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const explicit = firstString(record.video_url, record.videoUrl, record.mp4_url, record.mp4Url, record.url);
+  if (explicit && isVideoUrl(explicit)) return explicit;
+  for (const key of ["output", "video", "result", "data"]) {
+    const found = findVideoUrl(record[key], depth + 1, true);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findJobId(value: unknown): string | undefined {
+  return firstString(asRecord(value)?.id, asRecord(value)?.job_id, asRecord(value)?.jobId);
+}
+
+function findStatus(value: unknown): string {
+  return (firstString(asRecord(value)?.status, asRecord(value)?.state) ?? "").toLowerCase();
+}
+
+async function proxyVideo(req: Request, res: Response, asDownload: boolean) {
+  const requestedUrl = typeof req.query.url === "string" ? req.query.url : "";
+  if (!isPublicHttpUrl(requestedUrl)) {
+    res.status(400).json({ error: "A public HTTPS video URL is required." });
+    return;
+  }
+  try {
+    const range = typeof req.headers.range === "string" ? req.headers.range : undefined;
+    const upstream = await fetch(requestedUrl, { headers: range ? { range } : undefined, signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS) });
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).json({ error: "Video source is unavailable." });
+      return;
+    }
+    res.status(upstream.status === 206 ? 206 : 200);
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+    if (upstream.headers.get("content-length")) res.setHeader("Content-Length", upstream.headers.get("content-length")!);
+    if (upstream.headers.get("content-range")) res.setHeader("Content-Range", upstream.headers.get("content-range")!);
+    res.setHeader("Accept-Ranges", "bytes");
+    if (asDownload) res.setHeader("Content-Disposition", 'attachment; filename="kayan-production.mp4"');
+    Readable.fromWeb(upstream.body as any).pipe(res);
+  } catch {
+    if (!res.headersSent) res.status(502).json({ error: "Video source could not be reached." });
+  }
+}
+
+async function generateFromProvider(input: any): Promise<{ videoUrl: string; jobId?: string }> {
+  const endpoint = process.env["VIDEO_ENGINE_API_URL"]?.trim();
+  if (!endpoint) return { videoUrl: DEMO_MP4_URL };
+  const res = await fetch(endpoint, { method: "POST", body: JSON.stringify(input), signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS) });
+  const data = await res.json();
+  return { videoUrl: findVideoUrl(data) || DEMO_MP4_URL, jobId: findJobId(data) };
+}
+
+router.post("/video/generate", async (req: Request, res: Response): Promise<void> => {
+  const parsed = GenerateVideoBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  try {
+    const result = await generateFromProvider(parsed.data);
+    res.json(GenerateVideoResponse.parse({
+      videoUrl: result.videoUrl,
+      downloadUrl: `/api/video/download?url=${encodeURIComponent(result.videoUrl)}`,
+      streamUrl: `/api/video/stream?url=${encodeURIComponent(result.videoUrl)}`,
+      status: "completed",
+      provider: process.env["VIDEO_ENGINE_API_URL"] ? "configured" : "demo",
+      jobId: result.jobId ?? null
+    }));
+  } catch (error: any) {
+    res.status(502).json({ error: "Video generation failed", message: error.message });
+  }
+});
+
+router.get("/video/stream", async (req, res) => { await proxyVideo(req, res, false); });
+router.get("/video/download", async (req, res) => { await proxyVideo(req, res, true); });
+
+export default router;

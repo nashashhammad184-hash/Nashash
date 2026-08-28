@@ -57,7 +57,7 @@ router.post("/projects/:id/world-bible", async (req, res): Promise<void> => {
     const existing = await db
       .select()
       .from(worldProfilesTable)
-      .where(and(eq(worldProfilesTable.projectId, projectId), eq(worldProfilesTable.worldId, worldId)))
+      .where(and(eq(worldProfilesTable.projectId, projectId), eq(worldProfilesTable.id, worldId)))
       .limit(1);
 
     if (existing.length > 0) {

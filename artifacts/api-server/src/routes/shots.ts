@@ -1,96 +1,154 @@
-import { Router, type IRouter } from "express";
-import { db, shotsTable, shotCharactersTable, actorsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { Router, type IRouter, type Request, type Response } from "express";
+import { eq, asc } from "drizzle-orm";
+import { db, shotsTable } from "@workspace/db";
+import {
+  ListProjectShotsParams,
+  ListProjectShotsResponse,
+  CreateShotBody,
+  CreateShotResponse,
+  UpdateShotParams,
+  UpdateShotBody,
+  UpdateShotResponse,
+  DeleteShotParams,
+} from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
-// 1. جلب لقطة معينة مع الشخصيات المرتبطة بها
-router.get("/shots/:id", async (req, res): Promise<void> => {
-  const shotId = parseInt(req.params.id, 10);
-  if (isNaN(shotId)) {
-    res.status(400).json({ error: "Invalid shotId" });
+// List shots for a project
+router.get("/projects/:id/shots", async (req: Request, res: Response): Promise<void> => {
+  const params = ListProjectShotsParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
     return;
   }
+  const shots = await db
+    .select()
+    .from(shotsTable)
+    .where(eq(shotsTable.projectId, params.data.id))
+    .orderBy(asc(shotsTable.sceneNumber));
+  
+  res.json(
+    ListProjectShotsResponse.parse(
+      shots.map((s) => ({
+        ...s,
+        scriptId: s.scriptId ?? null,
+        dialogue: s.dialogue ?? null,
+        audioNote: s.audioNote ?? null,
+        createdAt: s.createdAt.toISOString(),
+      }))
+    )
+  );
+});
 
-  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, shotId));
+// Create shot
+router.post("/shots", async (req: Request, res: Response): Promise<void> => {
+  const parsed = CreateShotBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const [shot] = await db.insert(shotsTable).values({
+    projectId: parsed.data.projectId,
+    scriptId: parsed.data.scriptId ?? null,
+    sceneNumber: String(parsed.data.sceneNumber),
+    description: parsed.data.description,
+    cameraMovement: parsed.data.cameraMovement,
+    durationSeconds: parsed.data.durationSeconds ?? 5,
+    dialogue: parsed.data.dialogue ?? null,
+    audioNote: parsed.data.audioNote ?? null,
+  }).returning();
+
+  res.status(201).json(
+    CreateShotResponse.parse({
+      ...shot,
+      scriptId: shot.scriptId ?? null,
+      dialogue: shot.dialogue ?? null,
+      audioNote: shot.audioNote ?? null,
+      createdAt: shot.createdAt.toISOString(),
+    })
+  );
+});
+
+// Bulk update shots for Timeline Sync
+router.post("/shots/bulk-update", async (req: Request, res: Response): Promise<void> => {
+  const { shots } = req.body || {};
+  if (!Array.isArray(shots)) {
+    res.status(400).json({ error: "Invalid payload: shots array is required" });
+    return;
+  }
+  try {
+    for (const s of shots) {
+      if (!s.id) continue;
+      const updateData: Record<string, any> = {};
+      if (s.durationSeconds !== undefined) updateData.durationSeconds = s.durationSeconds;
+      if (s.sceneNumber !== undefined) updateData.sceneNumber = String(s.sceneNumber);
+      if (s.description !== undefined) updateData.description = s.description;
+      
+      await db.update(shotsTable).set(updateData).where(eq(shotsTable.id, s.id));
+    }
+    res.json({ success: true, message: "Timeline shots synced successfully in database" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to perform timeline bulk sync", message: String(error) });
+  }
+});
+
+// Update shot
+router.patch("/shots/:id", async (req: Request, res: Response): Promise<void> => {
+  const params = UpdateShotParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const parsed = UpdateShotBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const updateData: Record<string, any> = {};
+  if (parsed.data.sceneNumber !== undefined) updateData.sceneNumber = String(parsed.data.sceneNumber);
+  if (parsed.data.description !== undefined) updateData.description = parsed.data.description;
+  if (parsed.data.cameraMovement !== undefined) updateData.cameraMovement = parsed.data.cameraMovement;
+  if (parsed.data.durationSeconds !== undefined) updateData.durationSeconds = parsed.data.durationSeconds;
+  if (parsed.data.dialogue !== undefined) updateData.dialogue = parsed.data.dialogue ?? null;
+  if (parsed.data.audioNote !== undefined) updateData.audioNote = parsed.data.audioNote ?? null;
+
+  const [shot] = await db
+    .update(shotsTable)
+    .set(updateData)
+    .where(eq(shotsTable.id, params.data.id))
+    .returning();
+
   if (!shot) {
     res.status(404).json({ error: "Shot not found" });
     return;
   }
-
-  // جلب الشخصيات المشتركة في هذه اللقطة عبر جدول الربط الوسيط
-  const characters = await db
-    .select({
-      id: shotCharactersTable.id,
-      actorId: shotCharactersTable.actorId,
-      role: shotCharactersTable.role,
-      name: actorsTable.name,
-      type: actorsTable.type,
+  res.json(
+    UpdateShotResponse.parse({
+      ...shot,
+      scriptId: shot.scriptId ?? null,
+      dialogue: shot.dialogue ?? null,
+      audioNote: shot.audioNote ?? null,
+      createdAt: shot.createdAt.toISOString(),
     })
-    .from(shotCharactersTable)
-    .innerJoin(actorsTable, eq(shotCharactersTable.actorId, actorsTable.id))
-    .where(eq(shotCharactersTable.shotId, shotId));
-
-  res.json({ ...shot, characters });
+  );
 });
 
-// 2. [POST] إضافة شخصية (Actor) إلى لقطة معينة (Shot) — إصلاح 12
-router.post("/shots/:id/characters", async (req, res): Promise<void> => {
-  const shotId = parseInt(req.params.id, 10);
-  const { actorId, role } = req.body;
-
-  if (isNaN(shotId) || !actorId) {
-    res.status(400).json({ error: "shotId and actorId are required" });
+// Delete shot
+router.delete("/shots/:id", async (req: Request, res: Response): Promise<void> => {
+  const params = DeleteShotParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
     return;
   }
-
-  try {
-    // إدخال العلاقة بسلام؛ وقيد الفرادة (Unique) سيمنع التكرار تلقائياً
-    const [newRelation] = await db
-      .insert(shotCharactersTable)
-      .values({
-        shotId,
-        actorId: parseInt(actorId, 10),
-        role: role || "appearing",
-      })
-      .returning();
-
-    res.status(201).json(newRelation);
-  } catch (error: any) {
-    // معالجة قيد الفرادة الفريد في حال حاول المستخدم إضافة الممثل مرتين لنفس اللقطة
-    if (error.code === "23505") {
-      res.status(409).json({ error: "This character is already added to this shot" });
-      return;
-    }
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// 3. [DELETE] حذف وإلغاء ارتباط شخصية من لقطة معينة — إصلاح 12
-router.delete("/shots/:id/characters/:actorId", async (req, res): Promise<void> => {
-  const shotId = parseInt(req.params.id, 10);
-  const actorId = parseInt(req.params.actorId, 10);
-
-  if (isNaN(shotId) || !isNaN(actorId) === false) {
-    res.status(400).json({ error: "Invalid shotId or actorId" });
-    return;
-  }
-
-  const [deleted] = await db
-    .delete(shotCharactersTable)
-    .where(
-      and(
-        eq(shotCharactersTable.shotId, shotId),
-        eq(shotCharactersTable.actorId, actorId)
-      )
-    )
+  const [shot] = await db
+    .delete(shotsTable)
+    .where(eq(shotsTable.id, params.data.id))
     .returning();
 
-  if (!deleted) {
-    res.status(404).json({ error: "Character relation not found in this shot" });
+  if (!shot) {
+    res.status(404).json({ error: "Shot not found" });
     return;
   }
-
   res.sendStatus(204);
 });
 

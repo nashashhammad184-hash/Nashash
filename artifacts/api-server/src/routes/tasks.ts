@@ -30,6 +30,8 @@ router.get("/projects/:id/tasks", async (req, res): Promise<void> => {
     ListProjectTasksResponse.parse(
       tasks.map((t) => ({
         ...t,
+        assignedActorId: t.assignedActorId ?? null,
+        dueDate: t.dueDate ?? null,
         createdAt: t.createdAt.toISOString(),
       }))
     )
@@ -45,11 +47,19 @@ router.post("/tasks", async (req, res): Promise<void> => {
   }
   const [task] = await db
     .insert(productionTasksTable)
-    .values({ status: "pending", ...parsed.data })
+    .values({
+      projectId: parsed.data.projectId,
+      title: parsed.data.title,
+      status: parsed.data.status ?? "pending",
+      assignedActorId: parsed.data.assignedActorId ?? null,
+      dueDate: parsed.data.dueDate ?? null,
+    })
     .returning();
   res.status(201).json(
     CreateTaskResponse.parse({
       ...task,
+      assignedActorId: task.assignedActorId ?? null,
+      dueDate: task.dueDate ?? null,
       createdAt: task.createdAt.toISOString(),
     })
   );
@@ -67,9 +77,16 @@ router.patch("/tasks/:id", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+
+  const updateData: Record<string, any> = {};
+  if (parsed.data.title !== undefined) updateData.title = parsed.data.title;
+  if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
+  if (parsed.data.assignedActorId !== undefined) updateData.assignedActorId = parsed.data.assignedActorId ?? null;
+  if (parsed.data.dueDate !== undefined) updateData.dueDate = parsed.data.dueDate ?? null;
+
   const [task] = await db
     .update(productionTasksTable)
-    .set(parsed.data)
+    .set(updateData)
     .where(eq(productionTasksTable.id, params.data.id))
     .returning();
   if (!task) {
@@ -79,6 +96,8 @@ router.patch("/tasks/:id", async (req, res): Promise<void> => {
   res.json(
     UpdateTaskResponse.parse({
       ...task,
+      assignedActorId: task.assignedActorId ?? null,
+      dueDate: task.dueDate ?? null,
       createdAt: task.createdAt.toISOString(),
     })
   );
