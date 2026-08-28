@@ -1,42 +1,9 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter } from "express";
 import { db, projectsTable, scriptsTable, actorsTable, shotsTable } from "@workspace/db";
 import { GetStudioStatsResponse } from "@workspace/api-zod";
 import { count, sql } from "drizzle-orm";
-import { createRenderJob, getRenderJobStatus } from "../lib/renderEngine";
 
 const router: IRouter = Router();
-
-// مسار بدء تشغيل الـ Final Render الحقيقي على السيرفر
-router.post("/projects/:id/render/start", async (req: Request, res: Response): Promise<void> => {
-  const projectId = Number(req.params.id);
-  if (!Number.isInteger(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "A valid project id is required." });
-    return;
-  }
-
-  try {
-    const job = await createRenderJob(projectId);
-    res.json({ success: true, ...job });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "فشلت عملية تهيئة رندرة الفيلم."
-    });
-  }
-});
-
-// مسار تتبع حالة التصدير الحالية لـ Kayan AI Productions (إصلاح نوع البيانات صراحة)
-router.get("/render/status/:jobId", async (req: Request, res: Response): Promise<void> => {
-  const jobId = String(req.params.jobId);
-  const job = getRenderJobStatus(jobId);
-  
-  if (!job) {
-    res.status(404).json({ error: "Render job not found" });
-    return;
-  }
-
-  res.json({ success: true, ...job });
-});
 
 router.get("/studio/stats", async (_req, res): Promise<void> => {
   const [projectCounts] = await db
@@ -67,9 +34,9 @@ router.get("/studio/stats", async (_req, res): Promise<void> => {
       totalScripts: Number(scriptCount?.total ?? 0),
       totalActors: Number(actorCount?.total ?? 0),
       totalShots: Number(shotCount?.total ?? 0),
-      projectsByWorld: worldCounts.map((w) => ({
-        worldId: w.worldId,
-        count: Number(w.count),
+      projectsByWorld: (worldCounts || []).map((w: any) => ({
+        worldId: String(w.worldId || ""),
+        count: Number(w.count || 0),
       })),
     })
   );
