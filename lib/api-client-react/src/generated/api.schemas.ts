@@ -209,6 +209,14 @@ export interface EditClip {
   notes?: string | null;
   clipOrder: number;
   createdAt: string;
+  /** @nullable */
+  assetId?: string | null;
+  trackType?: string;
+  startTime?: number;
+  endTime?: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  volume?: number;
 }
 
 export interface ClipInput {
@@ -218,6 +226,13 @@ export interface ClipInput {
   durationSeconds?: number;
   notes?: string;
   clipOrder: number;
+  assetId?: string;
+  trackType?: string;
+  startTime?: number;
+  endTime?: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  volume?: number;
 }
 
 export interface ClipPatch {

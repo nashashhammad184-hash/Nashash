@@ -1,8 +1,27 @@
+/**
+ * productionEngine — DB-backed production job executor.
+ *
+ * Task 61427 — UNIFY REAL PRODUCTION PIPELINE
+ *
+ * Design:
+ *  - The ONLY production job store is PostgreSQL (production_pipeline table).
+ *  - In-memory maps are NOT allowed (jobs must survive API restart).
+ *  - GPU workloads (VIDEO_GEN, LIP_SYNC) are delegated to GpuQueueService → queue-worker.
+ *  - VOICE_GEN uses Deepgram directly (real audio file on disk).
+ *  - No Replicate, no dummy assets, no color video.
+ *
+ * Contracts (returned/consumed by callers):
+ *   VIDEO_GEN     → { videoPath, videoUrl }
+ *   VOICE_GEN     → { audioPath, audioUrl }
+ *   LIP_SYNC      → { syncedVideoPath, syncedVideoUrl }
+ *   MUSIC_SFX_GEN → NOT IMPLEMENTED — throws explicitly
+ */
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { db, productionTasksTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, ne, inArray } from "drizzle-orm";
+import { db, productionPipeline, productionTasksTable } from "@workspace/db";
+import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvider";
 import { logger } from "./logger";
 
 export type ProductionJobType = "VIDEO_GEN" | "VOICE_GEN" | "LIP_SYNC" | "MUSIC_SFX_GEN";
@@ -29,413 +48,362 @@ export interface ProductionJob {
   progress: number;
   payload: ProductionJobPayload;
   providerJobId?: string | null;
-  output?: Record<string, unknown> | string | null;
+  output?: Record<string, unknown> | null;
+  videoUrl?: string | null;
   error?: string | null;
   retryCount: number;
   maxRetries: number;
   createdAt: Date;
   updatedAt: Date;
-  startedAt?: Date;
-  completedAt?: Date;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
 }
 
-const jobsStore = new Map<string, ProductionJob>();
-let workerInterval: NodeJS.Timeout | null = null;
-let isProcessingQueue = false;
-
-const REPLICATE_PREDICTIONS_ENDPOINT = "https://api.replicate.com/v1/predictions";
 const DEEPGRAM_TTS_ENDPOINT = "https://api.deepgram.com/v1/speak";
-const POLLING_INTERVAL_MS = 3_000;
-const MAX_POLLING_ATTEMPTS = 60;
-const HTTP_TIMEOUT_MS = 20_000;
+const HTTP_TIMEOUT_MS = 25_000;
 
 function getAudioDir(): string {
-  const audioDir = path.resolve(process.cwd(), "uploads", "audio");
-  if (!fs.existsSync(audioDir)) {
-    fs.mkdirSync(audioDir, { recursive: true });
-  }
-  return audioDir;
+  const dir = path.resolve(process.cwd(), "uploads", "audio");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
-function extractMediaUrl(output: unknown): string | undefined {
-  if (typeof output === "string" && output.trim().length > 0) {
-    return output.trim();
-  }
-  if (Array.isArray(output) && output.length > 0) {
-    const first = output[0];
-    if (typeof first === "string" && first.trim().length > 0) {
-      return first.trim();
-    }
-  }
-  if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    for (const key of ["video", "video_url", "url", "output", "synced_video", "audio", "audio_url"]) {
-      const val = record[key];
-      if (typeof val === "string" && val.trim().length > 0) {
-        return val.trim();
-      }
-    }
-  }
-  return undefined;
+function makeJobId(): string {
+  return `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
-async function pollReplicatePrediction(predictionId: string, apiToken: string): Promise<string> {
-  const pollingUrl = `${REPLICATE_PREDICTIONS_ENDPOINT}/${predictionId}`;
-
-  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
-
-    const pollResponse = await fetch(pollingUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-
-    if (!pollResponse.ok) {
-      const errText = await pollResponse.text().catch(() => "");
-      throw new Error(`Replicate polling failed (${pollResponse.status}): ${errText}`);
-    }
-
-    const prediction = (await pollResponse.json()) as {
-      status: string;
-      output?: unknown;
-      error?: string | null;
-    };
-
-    if (prediction.status === "succeeded") {
-      const mediaUrl = extractMediaUrl(prediction.output);
-      if (!mediaUrl) {
-        throw new Error("Prediction status is 'succeeded' but returned no valid media URL.");
-      }
-      return mediaUrl;
-    }
-
-    if (prediction.status === "failed") {
-      throw new Error(`Prediction failed: ${prediction.error || "Unknown provider failure"}`);
-    }
-
-    if (prediction.status === "canceled") {
-      throw new Error("Prediction was canceled by provider.");
-    }
-  }
-
-  throw new Error(`Prediction ${predictionId} timed out after ${MAX_POLLING_ATTEMPTS * 3} seconds.`);
-}
-
-async function executeVideoGen(payload: ProductionJobPayload): Promise<{ videoUrl: string; providerJobId: string }> {
-  const token = process.env.REPLICATE_API_TOKEN?.trim();
-  if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is not configured.");
-
-  const version = process.env.REPLICATE_VIDEO_MODEL_VERSION?.trim();
-  if (!version) throw new Error("REPLICATE_VIDEO_MODEL_VERSION environment variable is not configured.");
-
-  const prompt = payload.prompt?.trim();
-  if (!prompt) throw new Error("Prompt is required for VIDEO_GEN.");
-
-  const response = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Prefer: "wait=5",
-    },
-    body: JSON.stringify({
-      version,
-      input: { prompt },
-    }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Replicate Video creation failed (${response.status}): ${errorText}`);
-  }
-
-  const prediction = (await response.json()) as { id: string; status: string; output?: unknown };
-  if (!prediction?.id) throw new Error("Replicate Video API did not return a prediction ID.");
-
-  let videoUrl: string;
-  if (prediction.status === "succeeded") {
-    videoUrl = extractMediaUrl(prediction.output) || (await pollReplicatePrediction(prediction.id, token));
-  } else {
-    videoUrl = await pollReplicatePrediction(prediction.id, token);
-  }
-
-  return { videoUrl, providerJobId: prediction.id };
-}
-
-async function executeVoiceGen(payload: ProductionJobPayload): Promise<{ audioUrl: string; fileSize: number }> {
-  const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
-  if (!apiKey) throw new Error("DEEPGRAM_API_KEY environment variable is not configured.");
-
-  const text = (payload.text || payload.prompt)?.toString().trim();
-  if (!text) throw new Error("Text is required for VOICE_GEN.");
-
-  const model = payload.model?.trim() || process.env.DEEPGRAM_TTS_MODEL?.trim() || "aura-asteria-en";
-  const url = `${DEEPGRAM_TTS_ENDPOINT}?model=${encodeURIComponent(model)}`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Deepgram TTS failed (${response.status}): ${errorText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  if (!buffer || buffer.length === 0) throw new Error("Deepgram TTS returned 0 bytes.");
-
-  const filename = `job_voice_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp3`;
-  const filePath = path.join(getAudioDir(), filename);
-  fs.writeFileSync(filePath, buffer);
-
-  const stats = fs.statSync(filePath);
-  if (!stats.isFile() || stats.size === 0) throw new Error("Failed to write audio file to disk.");
-
-  return { audioUrl: `/api/voice/audio/${filename}`, fileSize: stats.size };
-}
-
-async function executeLipSync(payload: ProductionJobPayload): Promise<{ syncedVideoUrl: string; providerJobId: string }> {
-  const token = process.env.REPLICATE_API_TOKEN?.trim();
-  if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is not configured.");
-
-  const version = process.env.REPLICATE_LIPSYNC_MODEL_VERSION?.trim();
-  if (!version) throw new Error("REPLICATE_LIPSYNC_MODEL_VERSION environment variable is not configured.");
-
-  const videoUrl = payload.videoUrl?.trim();
-  const audioUrl = payload.audioUrl?.trim();
-  if (!videoUrl || !audioUrl) throw new Error("Both videoUrl and audioUrl are required for LIP_SYNC.");
-
-  const response = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Prefer: "wait=5",
-    },
-    body: JSON.stringify({
-      version,
-      input: {
-        face: videoUrl,
-        input_audio: audioUrl,
-      },
-    }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Replicate LipSync creation failed (${response.status}): ${errorText}`);
-  }
-
-  const prediction = (await response.json()) as { id: string; status: string; output?: unknown };
-  if (!prediction?.id) throw new Error("Replicate LipSync API did not return a prediction ID.");
-
-  const syncedVideoUrl = await pollReplicatePrediction(prediction.id, token);
-  return { syncedVideoUrl, providerJobId: prediction.id };
-}
-
-async function executeMusicSfxGen(payload: ProductionJobPayload): Promise<{ audioUrl: string; prompt: string }> {
-  const prompt = payload.prompt?.trim() || "Cinematic orchestral score with subtle environmental sound effects";
-  const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
-
-  // If Deepgram is available, generate ambient vocalization/speech cue, or synthesized audio file
-  if (apiKey) {
-    const model = "aura-asteria-en";
-    const response = await fetch(`${DEEPGRAM_TTS_ENDPOINT}?model=${model}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text: `[Soundtrack and Ambient Theme]: ${prompt}` }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-
-    if (response.ok) {
-      const buf = Buffer.from(await response.arrayBuffer());
-      if (buf.length > 0) {
-        const filename = `job_sfx_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp3`;
-        const filePath = path.join(getAudioDir(), filename);
-        fs.writeFileSync(filePath, buf);
-        return { audioUrl: `/api/voice/audio/${filename}`, prompt };
-      }
-    }
-  }
-
-  throw new Error("Failed to generate MUSIC_SFX_GEN: active audio provider is not reachable.");
-}
-
-export function createProductionJob(type: ProductionJobType, payload: ProductionJobPayload, maxRetries = 3): ProductionJob {
-  const jobId = `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-  const job: ProductionJob = {
-    id: jobId,
-    projectId: payload.projectId,
-    type,
-    status: "pending",
-    progress: 0,
-    payload,
-    retryCount: 0,
-    maxRetries,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+function rowToJob(row: any): ProductionJob {
+  return {
+    id: row.id,
+    projectId: row.projectId ?? undefined,
+    type: row.type,
+    status: row.status,
+    progress: row.progress ?? 0,
+    payload: (row.payload ?? {}) as ProductionJobPayload,
+    providerJobId: row.providerJobId ?? null,
+    output: (row.output ?? null) as Record<string, unknown> | null,
+    videoUrl: row.videoUrl ?? null,
+    error: row.errorMessage ?? null,
+    retryCount: row.retryCount ?? 0,
+    maxRetries: row.maxRetries ?? 3,
+    createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt : new Date(row.updatedAt),
+    startedAt: row.startedAt ? (row.startedAt instanceof Date ? row.startedAt : new Date(row.startedAt)) : null,
+    completedAt: row.completedAt ? (row.completedAt instanceof Date ? row.completedAt : new Date(row.completedAt)) : null,
   };
+}
 
-  jobsStore.set(jobId, job);
-  logger.info({ jobId, type }, "Production job created and queued");
+// ================================================================
+// Public API
+// ================================================================
 
+export async function createProductionJob(
+  type: ProductionJobType,
+  payload: ProductionJobPayload,
+  maxRetries = 3,
+): Promise<ProductionJob> {
+  if (type === "MUSIC_SFX_GEN") {
+    // Explicitly rejected — no real provider implemented. Do NOT silently fabricate.
+    throw new Error(
+      "MUSIC_SFX_GEN is not implemented: no real music/SFX provider is configured. Refusing to fabricate audio.",
+    );
+  }
+
+  const id = makeJobId();
+  const now = new Date();
+
+  const [row] = await db
+    .insert(productionPipeline)
+    .values({
+      id,
+      projectId: payload.projectId ?? null,
+      jobId: id,
+      type,
+      status: "pending",
+      progress: 0,
+      payload: payload as any,
+      retryCount: 0,
+      maxRetries,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  if (!row) throw new Error("failed to persist production job");
+
+  logger.info({ jobId: id, type }, "Production job created and queued (DB-backed)");
+
+  // Fire-and-forget — the actual transition + retries are persisted row by row
   setImmediate(() => {
     void processNextQueuedJob();
   });
 
-  return job;
+  return rowToJob(row);
 }
 
-export function getProductionJob(jobId: string): ProductionJob | undefined {
-  return jobsStore.get(jobId);
+export async function getProductionJob(jobId: string): Promise<ProductionJob | undefined> {
+  const rows = await db
+    .select()
+    .from(productionPipeline)
+    .where(eq(productionPipeline.id, jobId))
+    .limit(1);
+  return rows[0] ? rowToJob(rows[0]) : undefined;
 }
 
-export function listProductionJobs(projectId?: number): ProductionJob[] {
-  const all = Array.from(jobsStore.values());
-  if (projectId !== undefined) {
-    return all.filter((j) => j.projectId === projectId);
-  }
-  return all;
+export async function listProductionJobs(projectId?: number): Promise<ProductionJob[]> {
+  const q = db.select().from(productionPipeline).orderBy(desc(productionPipeline.createdAt)).limit(100);
+  const rows = projectId !== undefined
+    ? await db.select().from(productionPipeline)
+        .where(eq(productionPipeline.projectId, projectId))
+        .orderBy(desc(productionPipeline.createdAt))
+    : await q;
+  return rows.map(rowToJob);
+}
+
+// ================================================================
+// Queue processing (single-flight within this process)
+// ================================================================
+
+let isProcessing = false;
+
+async function setStatus(
+  jobId: string,
+  status: ProductionJobStatus,
+  patch: Partial<{ progress: number; startedAt: Date | null; completedAt: Date | null; errorMessage: string | null; output: any; videoUrl: string | null; providerJobId: string | null; retryCount: number }> = {},
+): Promise<void> {
+  await db
+    .update(productionPipeline)
+    .set({ status, updatedAt: new Date(), ...patch })
+    .where(eq(productionPipeline.id, jobId));
 }
 
 export async function processNextQueuedJob(): Promise<ProductionJob | null> {
-  if (isProcessingQueue) return null;
+  if (isProcessing) return null;
 
-  const job = Array.from(jobsStore.values()).find((j) => j.status === "pending");
-  if (!job) return null;
+  const queued = await db
+    .select()
+    .from(productionPipeline)
+    .where(and(
+      eq(productionPipeline.status, "pending"),
+      ne(productionPipeline.type, "FULL_PIPELINE"),
+    ))
+    .orderBy(productionPipeline.createdAt)
+    .limit(1);
 
-  // Never re-execute a completed job
-  if (job.status === "completed") return null;
+  const row = queued[0];
+  if (!row) return null;
 
-  isProcessingQueue = true;
-  job.status = "processing";
-  job.startedAt = new Date();
-  job.updatedAt = new Date();
-  job.progress = 15;
+  isProcessing = true;
+  const jobId = row.id;
+  const job = rowToJob(row);
 
-  logger.info({ jobId: job.id, type: job.type, retryCount: job.retryCount }, "Processing production job");
+  await setStatus(jobId, "processing", { progress: 15, startedAt: new Date(), errorMessage: null });
+
+  logger.info({ jobId, type: job.type, retryCount: job.retryCount }, "Processing production job");
 
   try {
-    // 1. Sync status with database task if linked
     if (job.payload.taskId && typeof job.payload.taskId === "number") {
       try {
         await db.update(productionTasksTable).set({ status: "processing" }).where(eq(productionTasksTable.id, job.payload.taskId));
-      } catch (dbErr) {
-        logger.warn({ err: dbErr }, "Could not update DB task status to processing");
+      } catch (e) {
+        logger.warn({ err: e }, "could not mark production task processing");
       }
     }
 
-    job.progress = 35;
+    await setStatus(jobId, "processing", { progress: 35 });
 
-    // 2. Execute by Job Type
+    let output: Record<string, unknown> = {};
+    let videoUrl: string | null = null;
+    let providerJobId: string | null = null;
+
     switch (job.type) {
       case "VIDEO_GEN": {
-        const result = await executeVideoGen(job.payload);
-        job.providerJobId = result.providerJobId;
-        job.output = { videoUrl: result.videoUrl };
+        const prompt = (job.payload.prompt || "").toString().trim();
+        if (!prompt) throw new Error("VIDEO_GEN requires prompt");
+        const task = (job.payload as any).task === "i2v" ? "i2v" : "t2v";
+        const refB64 = (job.payload as any).referenceImageBase64;
+        if (task === "i2v" && (!refB64 || typeof refB64 !== "string" || refB64.length < 64)) {
+          throw new Error("VIDEO_GEN task=i2v requires referenceImageBase64");
+        }
+        const result = await generateVideoKayanGpu({
+          prompt,
+          task,
+          referenceImageBase64: refB64 ?? null,
+          negativePrompt: (job.payload as any).negativePrompt,
+          fps: (job.payload as any).fps,
+          durationSeconds: (job.payload as any).durationSeconds ?? 5,
+          numFrames: (job.payload as any).numFrames,
+          aspectRatio: (job.payload as any).aspectRatio,
+        });
+        if (!result.videoPath || !fs.existsSync(result.videoPath)) {
+          throw new Error(`VIDEO_GEN produced no real video file on disk: ${result.videoPath}`);
+        }
+        const st = fs.statSync(result.videoPath);
+        if (!st.isFile() || st.size === 0) throw new Error(`VIDEO_GEN output is empty: ${result.videoPath}`);
+        output = { videoPath: result.videoPath, videoUrl: result.videoUrl };
+        videoUrl = result.videoUrl;
+        providerJobId = result.jobId;
         break;
       }
       case "VOICE_GEN": {
-        const result = await executeVoiceGen(job.payload);
-        job.output = { audioUrl: result.audioUrl, fileSize: result.fileSize };
+        const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
+        if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not configured");
+        const text = (job.payload.text || job.payload.prompt)?.toString().trim();
+        if (!text) throw new Error("VOICE_GEN requires text");
+        const model = job.payload.model?.trim() || process.env.DEEPGRAM_TTS_MODEL?.trim() || "aura-asteria-en";
+        const res = await fetch(`${DEEPGRAM_TTS_ENDPOINT}?model=${encodeURIComponent(model)}`, {
+          method: "POST",
+          headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`Deepgram TTS failed (${res.status}): ${await res.text().catch(() => "")}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length === 0) throw new Error("Deepgram TTS returned 0 bytes");
+        const filename = `job_voice_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp3`;
+        const filePath = path.join(getAudioDir(), filename);
+        fs.writeFileSync(filePath, buf);
+        const st = fs.statSync(filePath);
+        if (!st.isFile() || st.size === 0) throw new Error("VOICE_GEN failed to write audio file");
+        output = { audioPath: filePath, audioUrl: `/uploads/audio/${filename}`, fileSize: st.size };
         break;
       }
       case "LIP_SYNC": {
-        const result = await executeLipSync(job.payload);
-        job.providerJobId = result.providerJobId;
-        job.output = { syncedVideoUrl: result.syncedVideoUrl };
-        break;
-      }
-      case "MUSIC_SFX_GEN": {
-        const result = await executeMusicSfxGen(job.payload);
-        job.output = { audioUrl: result.audioUrl, prompt: result.prompt };
+        const videoPath = job.payload.videoUrl?.toString().trim();
+        const audioPath = job.payload.audioUrl?.toString().trim();
+        if (!videoPath || !audioPath) throw new Error("LIP_SYNC requires videoUrl and audioUrl");
+        const result: any = await generateLipSyncKayanGpu({ videoPath, audioPath });
+
+        // ── Semantic SKIP: no face → passthrough original video ──
+        if (result?.skipped && result?.reason === 'no_face_in_video') {
+          output = {
+            syncedVideoPath: result.syncedVideoPath,
+            syncedVideoUrl: result.syncedVideoUrl,
+            skipped: true,
+            reason: 'no_face_in_video',
+            note: result.note,
+          };
+          videoUrl = result.syncedVideoUrl;
+          providerJobId = result.worker_jid ?? null;
+          break;
+        }
+
+        if (!result.videoPath || !fs.existsSync(result.videoPath)) {
+          throw new Error(`LIP_SYNC produced no real video file: ${result.videoPath}`);
+        }
+        const st = fs.statSync(result.videoPath);
+        if (!st.isFile() || st.size === 0) throw new Error("LIP_SYNC output is empty");
+        output = { syncedVideoPath: result.videoPath, syncedVideoUrl: result.videoUrl };
+        videoUrl = result.videoUrl;
+        providerJobId = result.jobId;
         break;
       }
       default:
-        throw new Error(`Unsupported job type: ${(job as ProductionJob).type}`);
+        throw new Error(`Unsupported production job type: ${job.type}`);
     }
 
-    // 3. Mark completed
-    job.status = "completed";
-    job.progress = 100;
-    job.completedAt = new Date();
-    job.updatedAt = new Date();
-    job.error = null;
+    await setStatus(jobId, "completed", {
+      progress: 100,
+      completedAt: new Date(),
+      errorMessage: null,
+      output,
+      videoUrl,
+      providerJobId,
+    });
 
     if (job.payload.taskId && typeof job.payload.taskId === "number") {
       try {
         await db.update(productionTasksTable).set({ status: "completed" }).where(eq(productionTasksTable.id, job.payload.taskId));
-      } catch (dbErr) {
-        logger.warn({ err: dbErr }, "Could not update DB task status to completed");
-      }
+      } catch {}
     }
 
-    logger.info({ jobId: job.id, type: job.type }, "Production job completed successfully");
+    logger.info({ jobId, type: job.type }, "Production job completed");
   } catch (error) {
-    const errMessage = error instanceof Error ? error.message : "Unknown execution error";
-    job.error = errMessage;
-    job.updatedAt = new Date();
+    const msg = error instanceof Error ? error.message : "Unknown execution error";
+    const current = await getProductionJob(jobId);
+    const retries = (current?.retryCount ?? 0) + 1;
+    const maxRetries = current?.maxRetries ?? 3;
 
-    if (job.retryCount < job.maxRetries) {
-      job.retryCount += 1;
-      job.status = "pending";
-      job.progress = 0;
-      logger.warn({ jobId: job.id, retryCount: job.retryCount, maxRetries: job.maxRetries, err: errMessage }, "Job failed, re-queued for retry");
+    if (retries <= maxRetries) {
+      await setStatus(jobId, "pending", {
+        progress: 0,
+        retryCount: retries,
+        errorMessage: msg,
+      });
+      logger.warn({ jobId, retryCount: retries, maxRetries, err: msg }, "Production job re-queued");
     } else {
-      job.status = "failed";
-      job.progress = 0;
-      job.completedAt = new Date();
-
+      await setStatus(jobId, "failed", {
+        progress: 0,
+        completedAt: new Date(),
+        errorMessage: msg,
+      });
       if (job.payload.taskId && typeof job.payload.taskId === "number") {
         try {
           await db.update(productionTasksTable).set({ status: "failed" }).where(eq(productionTasksTable.id, job.payload.taskId));
-        } catch (dbErr) {
-          logger.warn({ err: dbErr }, "Could not update DB task status to failed");
-        }
+        } catch {}
       }
-
-      logger.error({ jobId: job.id, err: errMessage }, "Production job permanently failed");
+      logger.error({ jobId, err: msg }, "Production job permanently failed");
     }
   } finally {
-    isProcessingQueue = false;
-
-    // Process next queued job if one exists
-    setImmediate(() => {
-      void processNextQueuedJob();
-    });
+    isProcessing = false;
+    setImmediate(() => { void processNextQueuedJob(); });
   }
 
   return job;
 }
 
+// ================================================================
+// Background worker + boot recovery
+// ================================================================
+
+let workerInterval: NodeJS.Timeout | null = null;
+
 export function startProductionWorker(pollIntervalMs = 5000): void {
   if (workerInterval) return;
-  logger.info("Starting background production worker...");
-  workerInterval = setInterval(() => {
-    void processNextQueuedJob();
-  }, pollIntervalMs);
+
+  // Boot recovery: any PROCESSING row without a live executor → back to pending (retry) or failed.
+  void (async () => {
+    try {
+      const stuck = await db
+        .select()
+        .from(productionPipeline)
+        .where(and(
+          eq(productionPipeline.status, "processing"),
+          ne(productionPipeline.type, "FULL_PIPELINE"),
+        ));
+      for (const r of stuck) {
+        const retries = (r.retryCount ?? 0) + 1;
+        const maxRetries = r.maxRetries ?? 3;
+        if (retries <= maxRetries) {
+          await db.update(productionPipeline)
+            .set({ status: "pending", progress: 0, retryCount: retries, updatedAt: new Date(), errorMessage: "recovered: worker restart" })
+            .where(eq(productionPipeline.id, r.id));
+        } else {
+          await db.update(productionPipeline)
+            .set({ status: "failed", errorMessage: "recovered: worker restart, retries exhausted", completedAt: new Date(), updatedAt: new Date() })
+            .where(eq(productionPipeline.id, r.id));
+        }
+      }
+      if (stuck.length > 0) logger.info({ recovered: stuck.length }, "production engine boot recovery");
+    } catch (e) {
+      logger.warn({ err: e }, "production engine boot recovery failed");
+    }
+  })();
+
+  workerInterval = setInterval(() => { void processNextQueuedJob(); }, pollIntervalMs);
+  logger.info("Starting background production worker (DB-backed)...");
 }
 
 export function stopProductionWorker(): void {
   if (workerInterval) {
     clearInterval(workerInterval);
     workerInterval = null;
-    logger.info("Stopped background production worker.");
   }
 }
+
+// Backwards-compat: unused symbols referenced elsewhere
+export { productionPipeline };
+
+// Suppress unused-import lint when inArray not needed
+void inArray;
+void and;

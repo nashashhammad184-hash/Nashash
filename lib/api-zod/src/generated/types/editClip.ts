@@ -16,4 +16,12 @@ export interface EditClip {
   notes?: string | null;
   clipOrder: number;
   createdAt: string;
+  /** @nullable */
+  assetId?: string | null;
+  trackType?: string;
+  startTime?: number;
+  endTime?: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  volume?: number;
 }

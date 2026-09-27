@@ -1,4 +1,4 @@
-import { Project, useArchiveProject, getGetProjectQueryKey } from "@workspace/api-client-react";
+import { Project, useArchiveProject, getGetProjectQueryKey, getListProjectsQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Archive, Loader2, RefreshCcw } from "lucide-react";
@@ -13,17 +13,24 @@ export default function ArchiveTab({ project }: { project: Project }) {
 
   const handleToggleArchive = () => {
     const isArchived = !project.isArchived;
-    
-    archiveProject.mutate({ 
-      id: project.id, 
-      data: { isArchived } 
+    archiveProject.mutate({
+      id: project.id,
+      data: { isArchived }
     }, {
       onSuccess: () => {
+        // إبطال كاش المشروع الفردي وكاش قوائم المشاريع بشكل فوري ومتقاطع
         queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(project.id) });
-        toast.success(isArchived ? "تم أرشفة المشروع" : "تم استعادة المشروع من الأرشيف");
+        queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ archived: true }) });
+        queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ archived: false }) });
+        queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+        
+        toast.success(isArchived ? "تم أرشفة المشروع بنجاح" : "تم استعادة المشروع من الأرشيف بنجاح");
         if (isArchived) {
-          setLocation("/projects"); // Redirect to projects list if archived
+          setLocation("/projects");
         }
+      },
+      onError: (err: any) => {
+        toast.error("فشلت عملية تحديث حالة الأرشيف: " + (err?.message || "خطأ مجهول"));
       }
     });
   };
@@ -37,8 +44,8 @@ export default function ArchiveTab({ project }: { project: Project }) {
             {project.isArchived ? "استعادة المشروع" : "أرشفة المشروع"}
           </CardTitle>
           <CardDescription>
-            {project.isArchived 
-              ? "استعادة المشروع ستجعله نشطاً وتسمح بالتعديل عليه مجدداً." 
+            {project.isArchived
+              ? "استعادة المشروع ستجعله نشطاً وتسمح بالتعديل عليه مجدداً."
               : "أرشفة المشروع ستخفيه من قائمة المشاريع النشطة ولوحة التحكم."}
           </CardDescription>
         </CardHeader>
@@ -46,9 +53,8 @@ export default function ArchiveTab({ project }: { project: Project }) {
           <div className="p-4 bg-background/50 rounded-lg border border-white/5 mb-6 text-sm text-muted-foreground leading-relaxed">
             ملاحظة: الأرشفة لا تقوم بحذف بيانات المشروع، بل فقط تقوم بإخفائه عن مساحة العمل النشطة. يمكنك دائماً استعادته من صفحة الأرشيف.
           </div>
-          
-          <Button 
-            variant={project.isArchived ? "default" : "destructive"} 
+          <Button
+            variant={project.isArchived ? "default" : "destructive"}
             className="w-full h-12 text-lg font-bold gap-2"
             onClick={handleToggleArchive}
             disabled={archiveProject.isPending}

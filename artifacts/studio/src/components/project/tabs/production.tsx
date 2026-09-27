@@ -1,533 +1,257 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  Project, useListProjectTasks, useCreateTask, useUpdateTask, useDeleteTask, useListProjectActors,
-  getListProjectTasksQueryKey, getListProjectActorsQueryKey, useGenerateVideo,
-  useGetProductionPrompt, getGetProductionPromptQueryKey
-} from "@workspace/api-client-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { VideoPlayerPanel } from "./video-player-panel";
+import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Loader2, Plus, CheckCircle2, Circle, Trash2, Calendar, User,
-  PlayCircle, Mic2, Clapperboard, Sparkles, Download
-} from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2, Film, Video, AudioLines, Sparkles, AlertCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-// ── Dark HTML5 Video Player ───────────────────────────────────────────────────
-function VideoPlayerPanel({
-  project,
-  microExpression,
-  prompt,
-  activeActorName,
-}: {
-  project: Project;
-  microExpression: string;
-  prompt: string;
-  activeActorName: string;
-}) {
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [videoError, setVideoError] = useState<string | null>(null);
-  const [mergeStatus, setMergeStatus] = useState<"idle" | "processing" | "completed">("idle");
-  const [mergeStage, setMergeStage] = useState("");
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const mergeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const generateVideo = useGenerateVideo();
+interface ProductionJob {
+  id: string;
+  projectId?: number;
+  type: "VIDEO_GEN" | "VOICE_GEN" | "LIP_SYNC" | "MUSIC_SFX_GEN";
+  status: "pending" | "processing" | "completed" | "failed";
+  progress: number;
+  error?: string | null;
+  retryCount: number;
+  output?: any;
+}
 
-  useEffect(() => {
-    if (!videoUrl || !videoRef.current) return;
+interface ProductionTabProps {
+  project: {
+    id: number;
+    title: string;
+    worldId: string;
+    projectType?: string;
+    style?: string;
+    status?: string;
+    createdAt?: string;
+  };
+}
 
-    // Muted autoplay is allowed by browsers; the user can enable audio from
-    // the native controls after the completed MP4 is visible.
-    videoRef.current.load();
-    void videoRef.current.play().catch(() => {
-      // Autoplay may be blocked by browser policy. Controls remain available.
-    });
-  }, [videoUrl]);
+export function ProductionTab({ project }: ProductionTabProps) {
+  const projectId = project.id;
+  const [jobs, setJobs] = useState<ProductionJob[]>([]);
+  const [loadingList, setLoadingList] = useState<boolean>(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [videoPrompt, setVideoPrompt] = useState(`Cinematic shot of ${project.title}, masterpieces, 4k`);
+  const [voiceText, setVoiceText] = useState("مرحباً بكم في استوديو كيان للإنتاج السينمائي.");
+  const [syncVideoUrl, setSyncVideoUrl] = useState("");
+  const [syncAudioUrl, setSyncAudioUrl] = useState("");
 
-  useEffect(() => {
-    return () => {
-      if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
-    };
-  }, []);
-
-  const handleGenerate = () => {
-    setVideoUrl(null);
-    setVideoError(null);
-    setMergeStatus("idle");
-    setMergeStage("");
-    generateVideo.mutate(
-      {
-        data: {
-          projectId: project.id,
-          prompt: prompt.trim() || `مشهد سينمائي من مشروع ${project.title}`,
-          worldId: project.worldId,
-          microExpression: microExpression || undefined,
-        },
-      },
-      {
-        onSuccess: (result) => {
-          if (!result.videoUrl) {
-            setVideoError("لم يُرجع محرك الفيديو رابط MP4 صالحاً.");
-            return;
-          }
-          const playbackUrl = result.streamUrl || result.videoUrl;
-          setVideoUrl(playbackUrl);
-          setDownloadUrl(result.downloadUrl || null);
-          toast.success("اكتمل توليد الفيديو — يمكنك تشغيله الآن");
-        },
-        onError: (error) => {
-          setVideoError(
-            error instanceof Error
-              ? error.message
-              : "تعذر الاتصال بمحرك الفيديو. حاول مرة أخرى.",
-          );
-        },
-      },
-    );
+  const fetchJobs = async () => {
+    if (!projectId) return;
+    try {
+      const res = await fetch(`/api/production/projects/${projectId}/jobs`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.jobs)) {
+        setJobs(data.jobs);
+      }
+    } catch {
+      console.error("فشل تحديث سجلات مهمات التوليد.");
+    } finally {
+      setLoadingList(false);
+    }
   };
 
-  const handleAutoEditAndMerge = () => {
-    if (generateVideo.isPending || mergeStatus === "processing") return;
+  useEffect(() => {
+    fetchJobs();
+    const interval = setInterval(fetchJobs, 3000);
+    return () => clearInterval(interval);
+  }, [projectId]);
 
-    if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
-
-    const stages = [
-      "تجميع مسار الفيديو...",
-      `إضافة صوت ${activeActorName} عبر ElevenLabs...`,
-      "مزج الموسيقى والترجمة الإنجليزية...",
-    ];
-    let stageIndex = 0;
-
-    setMergeStatus("processing");
-    setMergeStage(stages[stageIndex]);
-    mergeTimerRef.current = setInterval(() => {
-      stageIndex += 1;
-      if (stageIndex >= stages.length) {
-        if (mergeTimerRef.current) clearInterval(mergeTimerRef.current);
-        mergeTimerRef.current = null;
-        setMergeStatus("completed");
-        setMergeStage("تم الدمج تلقائياً — الفيديو والصوت والموسيقى جاهزة");
-        toast.success("اكتمل Auto-Edit & Merge");
+  const handleStartJob = async (type: string) => {
+    setActionLoading(type);
+    let payload: Record<string, any> = { type, projectId };
+    if (type === "VIDEO_GEN") payload.prompt = videoPrompt;
+    if (type === "VOICE_GEN") payload.text = voiceText;
+    if (type === "LIP_SYNC") {
+      if (!syncVideoUrl || !syncAudioUrl) {
+        toast.error("خطأ: يجب إدخال روابط الفيديو والصوت لبدء تركيب الشفاه.");
+        setActionLoading(null);
         return;
       }
-      setMergeStage(stages[stageIndex]);
-    }, 700);
-  };
-
-  return (
-    <div className="rounded-xl border border-white/8 bg-black/60 overflow-hidden">
-      {/* Player header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-black/40">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white/80">
-          <Clapperboard className="w-4 h-4 text-primary" />
-          غرفة الإنتاج والإخراج
-        </div>
-        {microExpression && (
-          <span className="text-[10px] font-mono bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded-full">
-            {microExpression}
-          </span>
-        )}
-      </div>
-
-      {/* Viewport */}
-      <div className="relative aspect-video bg-black/80 flex items-center justify-center overflow-hidden">
-        {/* Scan-line overlay */}
-        <div
-          className="absolute inset-0 pointer-events-none opacity-10"
-          style={{
-            backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
-          }}
-        />
-
-        {/* Render loading overlay: this is tied to the real mutation, not a timer */}
-        <AnimatePresence>
-          {generateVideo.isPending && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10"
-            >
-              <div className="relative">
-                <div className="w-16 h-16 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
-                <div className="w-10 h-10 rounded-full border-2 border-primary/20 border-b-primary animate-spin absolute inset-3" style={{ animationDirection: "reverse" }} />
-              </div>
-              <div className="text-center">
-                <p className="text-primary font-semibold text-sm">جاري توليد المشهد...</p>
-                <p className="text-muted-foreground text-xs mt-1 font-mono">Waiting for completed MP4</p>
-                <p className="text-muted-foreground/60 text-[10px] mt-2">لن يبقى الطلب في حلقة لا نهائية</p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Completed video: only mount after the server returns a URL */}
-        {videoUrl && !generateVideo.isPending && (
-          <video
-            key={videoUrl}
-            ref={videoRef}
-            className="absolute inset-0 h-full w-full object-contain bg-black"
-            src={videoUrl}
-            controls
-            autoPlay
-            muted
-            playsInline
-            preload="auto"
-            onLoadedData={() => setVideoError(null)}
-            onCanPlay={() => {
-              void videoRef.current?.play().catch(() => {
-                // The native play control remains available if autoplay is blocked.
-              });
-            }}
-            onError={() => {
-              setVideoUrl(null);
-              setVideoError("تعذر تشغيل ملف MP4 الذي أعاده محرك الفيديو.");
-            }}
-          />
-        )}
-
-        {/* Empty / error state */}
-        {!videoUrl && !generateVideo.isPending && (
-          <div className="flex flex-col items-center gap-4 text-center px-8">
-            <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-              {videoError ? (
-                <span className="text-primary text-2xl">!</span>
-              ) : (
-                <PlayCircle className="w-8 h-8 text-white/20" />
-              )}
-            </div>
-            <div>
-              <p className={videoError ? "text-primary/80 text-sm font-semibold" : "text-white/30 text-sm font-semibold"}>
-                {videoError ? "فشل تشغيل الفيديو" : "جاهز للتوليد"}
-              </p>
-              <p className="text-white/15 text-xs mt-1 font-mono">
-                {videoError ?? "اضغط توليد الفيديو لبدء المشهد"}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Corner watermarks */}
-        <div className="absolute top-3 right-3 text-[9px] font-mono text-white/20 select-none">
-          KAYAN AI PRODUCTIONS
-        </div>
-        <div className="absolute bottom-3 left-3 text-[9px] font-mono text-primary/30 select-none">
-          ● REC &nbsp; 00:00:00
-        </div>
-      </div>
-
-      {/* Player controls bar */}
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-black/60 border-t border-white/5">
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 gap-2 text-white/60 hover:text-white hover:bg-white/10"
-          onClick={handleGenerate}
-          disabled={generateVideo.isPending}
-        >
-          {generateVideo.isPending ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <PlayCircle className="w-4 h-4" />
-          )}
-          {generateVideo.isPending ? "جاري التوليد" : "توليد الفيديو"}
-        </Button>
-        {/* Timeline scrubber */}
-        <div className="order-3 sm:order-none flex-1 min-w-[100px] h-1.5 bg-white/10 rounded-full relative cursor-pointer group">
-          <div className="absolute inset-y-0 left-0 w-0 bg-primary rounded-full group-hover:w-1/4 transition-all duration-300" />
-          <div className="absolute top-1/2 left-0 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-primary scale-0 group-hover:scale-100 transition-transform" />
-        </div>
-        <span className="order-4 sm:order-none text-[11px] font-mono text-muted-foreground/60">
-          {videoUrl ? "MP4 READY" : "00:00 / 00:05"}
-        </span>
-        <Mic2 className="w-4 h-4 text-muted-foreground/40" />
-        <Button
-          size="sm"
-          onClick={handleAutoEditAndMerge}
-          disabled={generateVideo.isPending || mergeStatus === "processing"}
-          className="order-2 sm:order-none h-9 w-full sm:w-auto gap-2 bg-primary text-primary-foreground font-semibold shadow-[0_0_18px_rgba(212,175,55,0.18)] hover:bg-primary/90"
-        >
-          {mergeStatus === "processing" ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Sparkles className="w-4 h-4" />
-          )}
-          {mergeStatus === "processing" ? "جاري الدمج..." : "Auto-Edit & Merge"}
-        </Button>
-        {downloadUrl && (
-          <a
-            href={downloadUrl}
-            download="kayan-production.mp4"
-            className="order-1 sm:order-none inline-flex h-9 w-full sm:w-auto items-center justify-center gap-2 rounded-md border border-white/10 px-3 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
-          >
-            <Download className="w-4 h-4" />
-            Download Video
-          </a>
-        )}
-      </div>
-      <AnimatePresence initial={false}>
-        {mergeStatus !== "idle" && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="border-t border-primary/10 bg-primary/5 px-4 py-2.5"
-          >
-            <div className="flex items-center gap-2 text-xs">
-              {mergeStatus === "processing" ? (
-                <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
-              ) : (
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-primary" />
-              )}
-              <span className={mergeStatus === "completed" ? "text-primary/90" : "text-white/60"}>
-                {mergeStage}
-              </span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ── Main Component ────────────────────────────────────────────────────────────
-export default function ProductionTab({ project }: { project: Project }) {
-  const queryClient = useQueryClient();
-  const [title, setTitle] = useState("");
-  const [assignedActorId, setAssignedActorId] = useState("unassigned");
-  const [microExpression, setMicroExpression] = useState("");
-  const [scenePrompt, setScenePrompt] = useState("");
-
-  const { data: tasks, isLoading } = useListProjectTasks(project.id, {
-    query: { enabled: !!project.id, queryKey: getListProjectTasksQueryKey(project.id) }
-  });
-
-  const { data: projectActors } = useListProjectActors(project.id, {
-    query: { enabled: !!project.id, queryKey: getListProjectActorsQueryKey(project.id) }
-  });
-
-  const { data: productionPrompt } = useGetProductionPrompt(project.id, {
-    query: {
-      enabled: !!project.id,
-      queryKey: getGetProductionPromptQueryKey(project.id),
-      staleTime: 0,
-      refetchOnMount: true,
-    },
-  });
-
-  useEffect(() => {
-    if (productionPrompt?.prompt) {
-      setScenePrompt(productionPrompt.prompt);
+      payload.videoUrl = syncVideoUrl;
+      payload.audioUrl = syncAudioUrl;
     }
-  }, [productionPrompt?.prompt]);
-
-  const createTask = useCreateTask();
-  const updateTask = useUpdateTask();
-  const deleteTask = useDeleteTask();
-
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    createTask.mutate({
-      data: {
-        projectId: project.id,
-        title,
-        status: "pending",
-        assignedActorId: assignedActorId !== "unassigned" ? parseInt(assignedActorId, 10) : undefined
+    try {
+      const res = await fetch("/api/production/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(`تم إطلاق مَهمة الإنتاج [${type}] بنجاح وجدولتها في الـ Queue.`);
+        fetchJobs();
+      } else {
+        throw new Error(data.error || "فشلت جدولة المهمة.");
       }
-    }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) });
-        setTitle("");
-        setAssignedActorId("unassigned");
-        toast.success("تمت إضافة المهمة");
-      }
-    });
+    } catch (err: any) {
+      toast.error("فشل إطلاق المَهمة: " + err.message);
+    } finally {
+      setActionLoading(null);
+    }
   };
-
-  const toggleStatus = (taskId: number, currentStatus: string) => {
-    const newStatus = currentStatus === "completed" ? "pending" : "completed";
-    updateTask.mutate({ id: taskId, data: { status: newStatus } }, {
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) })
-    });
-  };
-
-  const handleDelete = (id: number) => {
-    deleteTask.mutate({ id }, {
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: getListProjectTasksQueryKey(project.id) })
-    });
-  };
-
-  if (isLoading) {
-    return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
-  }
-
-  const getActorName = (id: number) =>
-    projectActors?.find(pa => pa.actorId === id)?.actor?.name?.split("(")[0]?.trim() || "غير معروف";
-
-  const completedCount = tasks?.filter(t => t.status === "completed").length || 0;
-  const totalCount = tasks?.length || 0;
-  const progress = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
-
-  const microExpressions = [
-    { value: "غضب_مكتوم",      label: "غضب مكتوم",           en: "Suppressed Rage" },
-    { value: "نظرة_حب_دافئة", label: "نظرة حب دافئة",       en: "Warm Loving Gaze" },
-    { value: "صدمة",            label: "صدمة",                en: "Shock" },
-    { value: "شك",              label: "شك",                  en: "Suspicion" },
-    { value: "ابتسامة_حذرة",   label: "ابتسامة حذرة",        en: "Cautious Smile" },
-  ];
-  const selectedActorId = assignedActorId !== "unassigned" ? Number(assignedActorId) : undefined;
-  const activeActorName =
-    projectActors?.find(pa => pa.actorId === selectedActorId)?.actor?.name?.split("(")[0]?.trim() ||
-    projectActors?.[0]?.actor?.name?.split("(")[0]?.trim() ||
-    "الشخصية النشطة";
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-
-      {/* Micro-Expression + Video Player section */}
-      <div className="space-y-4">
-        {/* Micro-Expression selector */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 rounded-xl bg-card/20 border border-white/5">
-          <div className="shrink-0 space-y-0.5">
-            <p className="text-sm font-bold text-white/80">نوع التعبير الحركي</p>
-            <p className="text-xs text-muted-foreground">(Micro-Expression)</p>
-          </div>
-          <Select value={microExpression} onValueChange={setMicroExpression}>
-            <SelectTrigger className="flex-1 h-11 bg-background/50 border-white/10 focus:border-primary/50">
-              <SelectValue placeholder="اختر نوع التعبير الوجهي للمشهد..." />
-            </SelectTrigger>
-            <SelectContent>
-              {microExpressions.map(expr => (
-                <SelectItem key={expr.value} value={expr.value}>
-                  <span>{expr.label}</span>
-                  <span className="mr-2 text-xs text-muted-foreground font-mono">— {expr.en}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Scene prompt + Video Player */}
-        <div className="rounded-xl border border-white/8 bg-card/20 p-4 space-y-2">
-          <label className="text-sm font-semibold text-white/80">وصف المشهد المراد توليده</label>
-          <Input
-            value={scenePrompt}
-            onChange={(event) => setScenePrompt(event.target.value)}
-            placeholder={`مشهد سينمائي من مشروع ${project.title}...`}
-            className="h-11 bg-background/50 border-white/10"
-          />
-        </div>
-        <VideoPlayerPanel
-          microExpression={microExpressions.find(e => e.value === microExpression)?.label ?? ""}
-          project={project}
-          prompt={scenePrompt}
-          activeActorName={activeActorName}
-        />
-
-      </div>
-
-      {/* Progress card */}
-      <div className="bg-card/20 p-6 rounded-xl border border-white/5 space-y-4">
-        <div className="flex justify-between items-end">
-          <div>
-            <h2 className="text-2xl font-bold">مهام الإنتاج</h2>
-            <p className="text-muted-foreground mt-1">قائمة المراجعة لضمان جاهزية كل شيء.</p>
-          </div>
-          <div className="text-right">
-            <div className="text-3xl font-black text-primary">{progress}%</div>
-            <div className="text-xs text-muted-foreground">مكتمل</div>
-          </div>
-        </div>
-        <div className="w-full h-2 bg-background rounded-full overflow-hidden">
-          <motion.div
-            className="h-full bg-primary"
-            initial={{ width: 0 }}
-            animate={{ width: `${progress}%` }}
-            transition={{ duration: 0.5 }}
-          />
-        </div>
-        <div className="text-xs text-muted-foreground font-mono">
-          {completedCount} / {totalCount} مهمة مكتملة
+    <div className="space-y-6 text-white" dir="rtl">
+      <div className="rounded-xl border border-white/10 bg-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2 text-primary">
+            <Film className="w-6 h-6" /> غرفة الإنتاج المركزي والتحكم بالـ Queue
+          </h2>
+          <p className="text-sm text-zinc-400 mt-1">إطلاق مهام التوليد السينمائي الحقيقي (Replicate & Deepgram) وتتبع تتابع خط الإنتاج.</p>
         </div>
       </div>
 
-      {/* Task list */}
-      <Card className="bg-card/40 border-white/5 overflow-hidden">
-        <CardContent className="p-0">
-          <form onSubmit={handleAdd} className="flex flex-col md:flex-row gap-3 p-4 border-b border-white/10 bg-black/20">
-            <Input
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="إضافة مهمة جديدة..."
-              className="flex-1 bg-background/50 border-white/10 h-12"
-            />
-            <Select value={assignedActorId} onValueChange={setAssignedActorId}>
-              <SelectTrigger className="w-full md:w-[200px] h-12 bg-background/50 border-white/10">
-                <SelectValue placeholder="الممثل المكلف" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unassigned">غير مكلف بممثل</SelectItem>
-                {projectActors?.map(pa => (
-                  <SelectItem key={pa.actorId} value={pa.actorId.toString()}>
-                    {pa.actor?.name?.split("(")[0]?.trim()} ({pa.roleName})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button type="submit" disabled={createTask.isPending || !title.trim()} className="h-12 px-6">
-              {createTask.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-5 h-5" />}
-            </Button>
-          </form>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <Card className="bg-zinc-900 border-zinc-800 shadow-lg">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2 text-zinc-200">
+                <Video className="w-4 h-4 text-blue-500" /> محرك توليد الفيديو السينمائي (Video Generation)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <textarea
+                value={videoPrompt}
+                onChange={e => setVideoPrompt(e.target.value)}
+                rows={2}
+                className="w-full rounded-md border border-zinc-700 bg-zinc-800 p-2 text-xs text-white"
+                placeholder="ادخل برومبت توليد المشهد البصري..."
+              />
+              <Button
+                onClick={() => handleStartJob("VIDEO_GEN")}
+                disabled={actionLoading === "VIDEO_GEN"}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold w-full text-xs py-1"
+              >
+                {actionLoading === "VIDEO_GEN" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <Sparkles className="w-3.5 h-3.5 mr-2" />} 
+                إطلاق توليد لقطة الفيديو
+              </Button>
+            </CardContent>
+          </Card>
 
-          <div className="flex flex-col">
-            {tasks?.length === 0 ? (
-              <div className="p-12 text-center text-muted-foreground">
-                لا توجد مهام حالياً. ابدأ بإضافة مهام للإنتاج.
+          <Card className="bg-zinc-900 border-zinc-800 shadow-lg">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2 text-zinc-200">
+                <AudioLines className="w-4 h-4 text-green-500" /> محرك تركيب الحوارات الصوتية (Voice TTS)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <textarea
+                value={voiceText}
+                onChange={e => setVoiceText(e.target.value)}
+                rows={2}
+                className="w-full rounded-md border border-zinc-700 bg-zinc-800 p-2 text-xs text-white"
+                placeholder="ادخل نص الحوار الصوتي لتوليده عبر Deepgram..."
+              />
+              <Button
+                onClick={() => handleStartJob("VOICE_GEN")}
+                disabled={actionLoading === "VOICE_GEN"}
+                className="bg-green-600 hover:bg-green-700 text-white font-bold w-full text-xs py-1"
+              >
+                {actionLoading === "VOICE_GEN" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <Sparkles className="w-3.5 h-3.5 mr-2" />} 
+                إطلاق توليد مسار الحوار الصوتي
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card className="bg-zinc-900 border-zinc-800 shadow-lg">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2 text-zinc-200">
+                <Sparkles className="w-4 h-4 text-purple-500" /> محرك مزامنة حركة الشفاه (Lip Sync Audio Visual)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input
+                  value={syncVideoUrl}
+                  onChange={e => setSyncVideoUrl(e.target.value)}
+                  type="text"
+                  className="h-8 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-[11px] text-white"
+                  placeholder="رابط فيديو المصدر (MP4 URL)..."
+                />
+                <input
+                  value={syncAudioUrl}
+                  onChange={e => setSyncAudioUrl(e.target.value)}
+                  type="text"
+                  className="h-8 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-[11px] text-white"
+                  placeholder="رابط صوت الحوار (MP3 URL)..."
+                />
               </div>
-            ) : (
-              tasks?.map((task) => (
-                <div key={task.id} className="flex items-center justify-between p-4 border-b border-white/5 hover:bg-white/5 transition-colors group">
-                  <div className="flex items-center gap-4 flex-1">
-                    <button onClick={() => toggleStatus(task.id, task.status)} className="shrink-0 transition-transform hover:scale-110">
-                      {task.status === "completed"
-                        ? <CheckCircle2 className="w-6 h-6 text-primary" />
-                        : <Circle className="w-6 h-6 text-muted-foreground" />}
-                    </button>
-                    <div className={`flex-1 transition-all ${task.status === "completed" ? "opacity-50 line-through" : ""}`}>
-                      <p className="text-lg font-medium text-white/90">{task.title}</p>
-                      {task.assignedActorId && (
-                        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                          <User className="w-3 h-3" /> المكلف: {getActorName(task.assignedActorId)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    {task.dueDate && (
-                      <span className="text-xs text-muted-foreground flex items-center gap-1 bg-white/5 px-2 py-1 rounded">
-                        <Calendar className="w-3 h-3" /> {new Date(task.dueDate).toLocaleDateString()}
-                      </span>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
-                      onClick={() => handleDelete(task.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
+              <Button
+                onClick={() => handleStartJob("LIP_SYNC")}
+                disabled={actionLoading === "LIP_SYNC"}
+                className="bg-purple-600 hover:bg-purple-700 text-white font-bold w-full text-xs py-1"
+              >
+                {actionLoading === "LIP_SYNC" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <Sparkles className="w-3.5 h-3.5 mr-2" />} 
+                بدء معالجة ومزامنة الشفاه الفعلية
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader className="border-b border-zinc-800 py-3">
+              <CardTitle className="text-xs font-semibold flex items-center justify-between text-zinc-300">
+                <span>شاشة مراقبة الـ Queue الخلفي</span>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-zinc-600" />
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 max-h-[350px] overflow-y-auto divide-y divide-zinc-800">
+              {loadingList && jobs.length === 0 ? (
+                <div className="p-4 text-center text-zinc-500 text-[11px] flex items-center justify-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> جاري الاتصال بمحرك الإنتاج...
                 </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              ) : jobs.length === 0 ? (
+                <p className="text-[11px] text-zinc-500 p-4 text-center">لا توجد مَهمات نشطة في الـ Queue حالياً.</p>
+              ) : (
+                jobs.map((job) => (
+                  <div key={job.id} className="p-3 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-zinc-200 uppercase font-mono">{job.type}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono ${
+                        job.status === "completed" ? "bg-green-950 text-green-400 border border-green-900" :
+                        job.status === "failed" ? "bg-red-950 text-red-400 border border-red-900" :
+                        "bg-blue-950 text-blue-400 border border-blue-900"
+                      }`}>
+                        {job.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[9px] text-zinc-500 font-mono">
+                      <span>ID: {job.id}</span>
+                      <span>Retries: {job.retryCount}</span>
+                    </div>
+                    <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-350 ${job.status === "failed" ? "bg-red-600" : job.status === "completed" ? "bg-green-500" : "bg-blue-500"}`}
+                        style={{ width: `${job.progress}%` }}
+                      />
+                    </div>
+                    {job.status === "completed" && job.output && (
+                      <div className="bg-zinc-950 p-1.5 rounded border border-zinc-800 text-[9px] text-zinc-400 break-all font-mono">
+                        المخرج: {job.output.videoUrl || job.output.audioUrl || job.output.syncedVideoUrl}
+                      </div>
+                    )}
+                    {job.status === "failed" && job.error && (
+                      <div className="text-[9px] text-red-400 font-mono flex items-center gap-1">
+                        <AlertCircle className="w-2.5 h-2.5 shrink-0" /> {job.error}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <div className="mt-6 pt-6 border-t border-border">
+        <VideoPlayerPanel project={project as any} microExpression="neutral" prompt="Default video generation prompt" />
+      </div>
     </div>
   );
 }
+
+export default ProductionTab;

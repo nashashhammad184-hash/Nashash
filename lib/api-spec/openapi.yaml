@@ -983,6 +983,20 @@ components:
           type: number
         createdAt:
           type: string
+        assetId:
+          type: ["string", "null"]
+        trackType:
+          type: string
+        startTime:
+          type: number
+        endTime:
+          type: number
+        sourceStart:
+          type: number
+        sourceEnd:
+          type: number
+        volume:
+          type: number
 
     ClipInput:
       type: object
@@ -998,6 +1012,20 @@ components:
         notes:
           type: string
         clipOrder:
+          type: number
+        assetId:
+          type: string
+        trackType:
+          type: string
+        startTime:
+          type: number
+        endTime:
+          type: number
+        sourceStart:
+          type: number
+        sourceEnd:
+          type: number
+        volume:
           type: number
 
     ClipPatch:

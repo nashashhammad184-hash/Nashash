@@ -1,17 +1,20 @@
 import { useState } from "react";
-import { 
-  Project, useListProjectActors, useListActors, useAssignActorToProject, useRemoveActorFromProject,
+import {
+  Project,
+  useListProjectActors,
+  useListActors,
   getListProjectActorsQueryKey
 } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
+import axios from "axios";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Plus, UserMinus, User, Sparkles, Users } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Loader2, Plus, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
 
 export default function CharactersTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
@@ -20,42 +23,40 @@ export default function CharactersTab({ project }: { project: Project }) {
   const [roleName, setRoleName] = useState("");
   const [roleType, setRoleType] = useState("protagonist");
 
-  const { data: projectActors, isLoading: paLoading } = useListProjectActors(project.id, {
-    query: { enabled: !!project.id, queryKey: getListProjectActorsQueryKey(project.id) }
+  const { data: projectActors, isLoading: paLoading } = useListProjectActors(project?.id, {
+    query: { enabled: !!project?.id, queryKey: getListProjectActorsQueryKey(project?.id) }
   });
-  
   const { data: allActors, isLoading: actorsLoading } = useListActors();
   
-  const assignActor = useAssignActorToProject();
-  const removeActor = useRemoveActorFromProject();
+  // الـ Mutations الصارمة للتفاعل الفعلي مع جداول العلاقات في قاعدة البيانات
+  const assignMutation = useMutation({
+    mutationFn: (data: any) => axios.post(`/api/projects/${project.id}/actors`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListProjectActorsQueryKey(project.id) });
+      setIsDialogOpen(false);
+      setSelectedActorId("");
+      setRoleName("");
+      setRoleType("protagonist");
+      toast.success("تم تعيين الشخصية وحفظ سجل العلاقة الرقمية في قاعدة البيانات.");
+    },
+    onError: (error: any) => {
+      toast.error("فشل تعيين الشخصية: " + (error?.response?.data?.error || error?.message));
+    }
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (actorId: number) => axios.delete(`/api/projects/${project.id}/actors/${actorId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListProjectActorsQueryKey(project.id) });
+      toast.success("تمت إزالة الشخصية من طاقم المشروع حقيقياً.");
+    },
+    onError: () => toast.error("تعذر مسح سجل الشخصية من السيرفر.")
+  });
 
   const handleAssign = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedActorId || !roleName) return;
-
-    assignActor.mutate({ 
-      id: project.id, 
-      data: { actorId: parseInt(selectedActorId, 10), roleName, roleType } 
-    }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListProjectActorsQueryKey(project.id) });
-        setIsDialogOpen(false);
-        setSelectedActorId("");
-        setRoleName("");
-        setRoleType("protagonist");
-        toast.success("تم تعيين الممثل بنجاح");
-      }
-    });
-  };
-
-  const handleRemove = (actorId: number) => {
-    if (!confirm("هل أنت متأكد من إزالة هذا الممثل من المشروع؟")) return;
-    removeActor.mutate({ id: project.id, actorId }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListProjectActorsQueryKey(project.id) });
-        toast.success("تمت الإزالة بنجاح");
-      }
-    });
+    if (!selectedActorId || !roleName.trim() || !project?.id) return;
+    assignMutation.mutate({ actorId: parseInt(selectedActorId, 10), roleName: roleName.trim(), roleType });
   };
 
   const availableActors = allActors?.filter(a => !projectActors?.some(pa => pa.actorId === a.id)) || [];
@@ -73,131 +74,85 @@ export default function CharactersTab({ project }: { project: Project }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center bg-card/20 p-6 rounded-xl border border-white/5">
+      <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold">طاقم التمثيل</h2>
-          <p className="text-muted-foreground mt-1">الممثلون الرقميون المعينون لهذا المشروع.</p>
+          <h3 className="text-lg font-medium text-white">طاقم الممثلين والشخصيات</h3>
+          <p className="text-sm text-zinc-400">إدارة الممثلين الرقميين وأدوارهم السينمائية داخل المشروع.</p>
         </div>
-        
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="w-4 h-4" />
-              تعيين ممثل
+            <Button size="sm" className="gap-2 bg-red-600 hover:bg-red-700 text-white">
+              <Plus className="w-4 h-4" /> إضافة شخصية للمشروع
             </Button>
           </DialogTrigger>
-          <DialogContent className="border-white/10 bg-card/95 backdrop-blur-xl sm:max-w-[500px]">
-            <DialogHeader>
-              <DialogTitle>تعيين ممثل للدور</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleAssign} className="space-y-4 mt-4">
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-white">
+            <DialogHeader><DialogTitle>تعيين ممثل للمشروع</DialogTitle></DialogHeader>
+            <form onSubmit={handleAssign} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">الممثل (من قائمة الاستوديو)</label>
-                <Select value={selectedActorId} onValueChange={setSelectedActorId} required>
-                  <SelectTrigger className="bg-background/50 border-white/10">
-                    <SelectValue placeholder="اختر الممثل" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableActors.map(a => (
-                      <SelectItem key={a.id} value={a.id.toString()}>
-                        {a.name} - {a.age} سنة - {a.style}
-                      </SelectItem>
-                    ))}
-                    {availableActors.length === 0 && (
-                      <div className="p-2 text-sm text-muted-foreground text-center">لا يوجد ممثلين متاحين</div>
-                    )}
-                  </SelectContent>
-                </Select>
+                <Label>اختر الممثل الرقمي</Label>
+                <select value={selectedActorId} onChange={e => setSelectedActorId(e.target.value)} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-white" required>
+                  <option value="">اختر ممثلاً من القائمة...</option>
+                  {availableActors.map((actor) => (
+                    <option key={actor.id} value={actor.id}>{actor.name} ({actor.age} سنة)</option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">اسم الشخصية في القصة</label>
-                <Input 
-                  value={roleName} 
-                  onChange={e => setRoleName(e.target.value)} 
-                  placeholder="مثال: القائد طارق"
-                  className="bg-background/50 border-white/10"
-                  required
-                />
+                <Label>اسم الشخصية (في السكربت)</Label>
+                <Input value={roleName} onChange={(e) => setRoleName(e.target.value)} placeholder="مثال: القائد أحمد" className="bg-zinc-800 border-zinc-700 text-white" required />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">نوع الدور</label>
-                <Select value={roleType} onValueChange={setRoleType}>
-                  <SelectTrigger className="bg-background/50 border-white/10">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="protagonist">{roleLabels["protagonist"]}</SelectItem>
-                    <SelectItem value="antagonist">{roleLabels["antagonist"]}</SelectItem>
-                    <SelectItem value="supporting">{roleLabels["supporting"]}</SelectItem>
-                    <SelectItem value="cameo">{roleLabels["cameo"]}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>نوع الدور السينمائي</Label>
+                <select value={roleType} onChange={e => setRoleType(e.target.value)} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-white">
+                  <option value="protagonist">البطل الرئيسي</option>
+                  <option value="antagonist">الخصم / الشرير</option>
+                  <option value="supporting">دور مساعد</option>
+                  <option value="cameo">ضيف شرف</option>
+                </select>
               </div>
-              <DialogFooter className="mt-6">
-                <Button type="button" variant="ghost" onClick={() => setIsDialogOpen(false)}>إلغاء</Button>
-                <Button type="submit" disabled={assignActor.isPending}>
-                  {assignActor.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "تعيين للدور"}
-                </Button>
-              </DialogFooter>
+              <Button type="submit" disabled={assignMutation.isPending} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">
+                {assignMutation.isPending ? "جاري الحفظ والربط..." : "تأكيد تعيين الشخصية"}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
       </div>
 
-      {projectActors?.length === 0 ? (
-        <Card className="bg-card/20 border-dashed border-white/10 h-64 flex flex-col items-center justify-center">
-          <Users className="w-12 h-12 text-muted-foreground/30 mb-4" />
-          <p className="text-muted-foreground text-lg">لم يتم تعيين أي ممثلين بعد.</p>
+      {!projectActors || projectActors.length === 0 ? (
+        <Card className="bg-zinc-900 border-zinc-800 border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-zinc-500">
+            <User className="w-12 h-12 mb-4 stroke-1" />
+            <p>لا يوجد ممثلين معينين لهذا المشروع حتى الآن.</p>
+          </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projectActors?.map((pa, idx) => (
-            <motion.div
-              key={pa.id}
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: idx * 0.05 }}
-            >
-              <Card className="h-full bg-card/40 border-white/5 hover:border-primary/30 transition-colors overflow-hidden relative group">
-                <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                  <Button 
-                    variant="destructive" 
-                    size="icon" 
-                    className="h-8 w-8 rounded-full shadow-lg"
-                    onClick={() => handleRemove(pa.actorId)}
-                    disabled={removeActor.isPending}
-                  >
-                    <UserMinus className="w-4 h-4" />
-                  </Button>
-                </div>
-                
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start">
-                    <div className="space-y-1">
-                      <CardTitle className="text-xl font-bold text-primary">{pa.roleName}</CardTitle>
-                      <CardDescription className="text-white/60">
-                        {roleLabels[pa.roleType || "supporting"]}
-                      </CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="mt-4 p-4 rounded-lg bg-background/50 border border-white/5 flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
-                      <User className="w-6 h-6" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {projectActors.map((pa) => {
+            const actorDetail = allActors?.find(a => a.id === pa.actorId);
+            return (
+              <Card key={pa.id} className="bg-zinc-900 border-zinc-800 overflow-hidden group">
+                <CardContent className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 font-bold overflow-hidden border border-zinc-700">
+                      {actorDetail?.imageUrl ? (
+                        <img src={actorDetail.imageUrl} alt={actorDetail.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <User className="w-6 h-6" />
+                      )}
                     </div>
                     <div>
-                      <p className="font-bold text-foreground">{pa.actor?.name}</p>
-                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" />
-                        {pa.actor?.style} • {pa.actor?.age} سنة
-                      </p>
+                      <h4 className="font-medium text-white">{actorDetail?.name || "ممثل رقمي"}</h4>
+                      <p className="text-xs text-red-400 font-medium">{pa.roleName}</p>
+                      <p className="text-[10px] text-zinc-500">{roleLabels[pa.roleType] || pa.roleType}</p>
                     </div>
                   </div>
+                  <Button variant="ghost" size="icon" onClick={() => removeMutation.mutate(pa.actorId)} className="text-zinc-500 hover:text-red-400 hover:bg-zinc-800 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </CardContent>
               </Card>
-            </motion.div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

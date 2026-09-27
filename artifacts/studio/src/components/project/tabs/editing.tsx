@@ -1,229 +1,199 @@
-import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Film, Shuffle, ArrowUp, ArrowDown, CheckCircle, Loader2, Play, EyeOff } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Project, useListProjectClips, useCreateClip, useDeleteClip,
+  getListProjectClipsQueryKey
+} from "@workspace/api-client-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Loader2, Plus, Film, Scissors, Trash2, Clock, Sparkles, AudioLines } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { motion } from "framer-motion";
 
-interface EditClip {
-  id: number;
-  projectId: number;
-  title: string;
-  clipOrder: number;
-  durationSeconds: number;
-  videoUrl: string | null;
-}
+function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: { totalDuration: number; clips: any[]; project: Project; onSyncSuccess: () => void; }) {
+  const [renderStatus, setRenderStatus] = useState("IDLE");
+  const [renderProgress, setRenderProgress] = useState(0);
+  const [finalMp4Url, setFinalMp4Url] = useState<string | null>(null);
 
-export default function EditingTab({ projectId }: { projectId: number }) {
-  const queryClient = useQueryClient();
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [activePreviewClip, setActivePreviewClip] = useState<EditClip | null>(null);
+  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 
-  // 1. جلب مقاطع المونتاج الحالية للمشروع بسلام
-  const { data: clips, isLoading } = useQuery<EditClip[]>({
-    queryKey: ["project-clips", projectId],
-    queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/clips`);
-      if (!res.ok) throw new Error("Failed to fetch clips");
-      return res.json();
-    }
-  });
-
-  // ترتيب المقاطع بناءً على الـ clipOrder الفعلي لخط المونتاج
-  const sortedClips = useMemo(() => {
-    if (!clips) return [];
-    return [...clips].sort((a, b) => a.clipOrder - b.clipOrder);
-  }, [clips]);
-
-  // تحديث الترتيب الفعلي في قاعدة البيانات
-  const updateOrderMutation = useMutation({
-    mutationFn: async (updatedClips: EditClip[]) => {
-      const res = await fetch(`/api/projects/${projectId}/clips/reorder`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clips: updatedClips.map(c => ({ id: c.id, clipOrder: c.clipOrder }))
-        })
-      });
-      if (!res.ok) throw new Error("Failed to save new timeline order");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-clips", projectId] });
-    }
-  });
-
-  // المونتاج التلقائي الصادق والحقيقي للـ Timeline فقط
-  const handleAutoEdit = async () => {
-    if (!clips || clips.length === 0) return;
-    setIsProcessing(true);
-    setSuccessMessage(null);
-
+  const handleStartFinalRender = async () => {
+    setRenderStatus("PROCESSING");
+    setRenderProgress(30);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      const reordered = [...clips].map((clip, index) => ({
-        ...clip,
-        clipOrder: index + 1
-      }));
-      await updateOrderMutation.mutateAsync(reordered);
-      setSuccessMessage("تمت إعادة ترتيب وتسلسل المقاطع وتحديث خط المونتاج (Timeline) بنجاح!");
-    } catch (err) {
-      console.error("Auto edit failed:", err);
-    } finally {
-      setIsProcessing(false);
-    }
+      const response = await fetch(`/api/projects/${project.id}/timeline/sync`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setRenderProgress(100); setRenderStatus("COMPLETED"); setFinalMp4Url(data.outputVideoUrl);
+        toast.success("تمت مزامنة خط التايم لاين وإطلاق الرندر الخلفي الحقيقي بنجاح 100%.");
+        onSyncSuccess();
+      } else { throw new Error(); }
+    } catch { setRenderStatus("FAILED"); toast.error("فشلت عملية مزامنة ورندرة أصول التايم لاين."); }
   };
 
-  // تحريك المقاطع يدوياً
-  const moveClip = async (index: number, direction: "up" | "down") => {
-    if (!clips) return;
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= sortedClips.length) return;
+  return (
+    <div className="relative rounded-xl overflow-hidden border border-white/8 bg-black/60 p-4 mb-4">
+      <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/5 pb-3 gap-2">
+        <div className="inline-flex items-center gap-2 text-xs font-mono text-white/50 uppercase tracking-wider"><Film className="w-3.5 h-3.5 text-primary" /> مخطط المسارات الحقيقية والإنتاج المزامَن (Timeline Sync)</div>
+        <div className="flex items-center gap-3">
+          <div className="text-sm font-mono text-primary font-bold">إجمالي: {formatTime(totalDuration)}</div>
+          <Button type="button" size="sm" onClick={handleStartFinalRender} disabled={renderStatus === "PROCESSING" || clips.length === 0} className="h-8 gap-1.5 bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg text-xs rounded animate-pulse">{renderStatus === "PROCESSING" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} مزامنة ورندرة الفيلم</Button>
+        </div>
+      </div>
+      {renderStatus !== "IDLE" && (
+        <div className="mb-4 p-3 rounded-lg border bg-black/40 border-white/5 space-y-2">
+          <div className="flex justify-between items-center text-[11px] font-mono"><span className="text-white/60">حالة الرندر الخلفي: <strong className="text-primary">{renderStatus}</strong></span><span className="text-primary font-bold">{renderProgress}%</span></div>
+          <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-primary transition-all duration-300" style={{ width: `${renderProgress}%` }} /></div>
+          {finalMp4Url && <div className="pt-2"><p className="text-[10px] text-green-400 font-mono">✅ تم إنشاء الـ Manifest واستقرت أصول الـ MP4 المدمجة حقيقياً.</p></div>}
+        </div>
+      )}
+      <div className="space-y-2 font-mono text-xs opacity-75">
+        <div className="grid grid-cols-6 items-center gap-2 bg-white/2 p-2 rounded border border-white/5"><span className="col-span-1 text-white/60 flex items-center gap-1"><Film className="w-3 h-3 text-blue-400" /> VIDEO</span><div className="col-span-5 bg-blue-500/10 border border-blue-500/30 rounded p-1 text-[10px] text-blue-300 truncate">{clips.filter(c => c.trackType === "video" || !c.trackType).length} مقاطع مرئية مسجلة حقيقياً</div></div>
+        <div className="grid grid-cols-6 items-center gap-2 bg-white/2 p-2 rounded border border-white/5"><span className="col-span-1 text-white/60 flex items-center gap-1"><AudioLines className="w-3 h-3 text-green-400" /> VOICE</span><div className="col-span-5 bg-green-500/10 border border-green-500/30 rounded p-1 text-[10px] text-green-300 truncate">{clips.filter(c => c.trackType === "voice").length} مسارات حوارية حية</div></div>
+      </div>
+    </div>
+  );
+}
 
-    const newClips = [...sortedClips];
-    const tempOrder = newClips[index].clipOrder;
-    newClips[index].clipOrder = newClips[targetIndex].clipOrder;
-    newClips[targetIndex].clipOrder = tempOrder;
+export default function EditingTab({ project }: { project: Project }) {
+  const queryClient = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [duration, setDuration] = useState("5");
+  const [trackType, setTrackType] = useState("video");
+  const [volume, setVolume] = useState("1.0");
+  const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
 
-    try {
-      await updateOrderMutation.mutateAsync(newClips);
-    } catch (err) {
-      console.error("Manual reorder failed:", err);
+  const { data: clips, isLoading, refetch } = useListProjectClips(project.id, {
+    query: { enabled: !!project.id, queryKey: getListProjectClipsQueryKey(project.id) }
+  });
+
+  const createClip = useCreateClip();
+  const deleteClip = useDeleteClip();
+
+  const sortedClips = useMemo(() => clips ? [...clips].sort((a, b) => a.clipOrder - b.clipOrder) : [], [clips]);
+  const selectedClip = sortedClips.find(clip => clip.id === selectedClipId);
+
+  useEffect(() => {
+    if (!sortedClips.length) { setSelectedClipId(null); return; }
+    if (!selectedClipId || !sortedClips.some(clip => clip.id === selectedClipId)) {
+      setSelectedClipId(sortedClips[0].id);
     }
+  }, [selectedClipId, sortedClips]);
+
+  const handleAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    const nextOrder = (clips?.length || 0) + 1;
+    const durNum = parseInt(duration, 10) || 5;
+
+    createClip.mutate({
+      data: {
+        projectId: project.id,
+        title: title.trim(),
+        durationSeconds: durNum,
+        clipOrder: nextOrder,
+        trackType: trackType,
+        startTime: 0,
+        endTime: durNum,
+        sourceStart: 0,
+        sourceEnd: durNum,
+        volume: parseFloat(volume) || 1.0,
+      }
+    }, {
+      onSuccess: (newClip) => {
+        queryClient.invalidateQueries({ queryKey: getListProjectClipsQueryKey(project.id) });
+        setSelectedClipId(newClip.id);
+        setTitle("");
+        toast.success("تم تحديث وحفظ سجل المونتاج في قاعدة البيانات.");
+      }
+    });
+  };
+
+  const handleDelete = (id: number) => {
+    deleteClip.mutate({ id }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListProjectClipsQueryKey(project.id) });
+        if (selectedClipId === id) setSelectedClipId(null);
+        toast.success("تم مسح مقطع التايم لاين من قاعدة البيانات.");
+      }
+    });
   };
 
   if (isLoading) {
-    return (
-      <div className="flex h-48 items-center justify-center text-muted-foreground gap-2">
-        <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        <span>جاري تحميل مقاطع غرفة المونتاج...</span>
-      </div>
-    );
+    return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
-  return (
-    <div dir="rtl" className="space-y-6 text-right">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/5 pb-4">
-        <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Film className="h-5 w-5 text-primary" />
-            غرفة المونتاج ومعاينة مقاطع الـ Timeline الحقيقية
-          </h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            اضغط على أي مقطع لمعاينته مباشرة عبر مشغل الفيديو الفعلي والتأكد من جودة الإنتاج السينمائي.
-          </p>
-        </div>
+  const totalDuration = sortedClips.reduce((acc, clip) => acc + (clip.durationSeconds || 0), 0);
 
-        <Button
-          onClick={handleAutoEdit}
-          disabled={isProcessing || !clips || clips.length === 0}
-          className="gap-2 font-semibold h-11"
-        >
-          {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shuffle className="h-4 w-4" />}
-          توليد ترتيب تلقائي للـ Timeline
-        </Button>
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center bg-card/20 p-6 rounded-xl border border-white/5">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2"><Scissors className="w-6 h-6 text-primary" /> غرفة المونتاج والتايم لاين الفعال</h2>
+          <p className="text-muted-foreground mt-1">تنظيم المسارات ومزامنتها حقيقياً داخل خادم قاعدة البيانات والـ Rendering Pipeline.</p>
+        </div>
       </div>
 
-      {successMessage && (
-        <div className="flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 p-4 text-sm text-green-400">
-          <CheckCircle className="h-5 w-5 shrink-0" />
-          <span>{successMessage}</span>
-        </div>
-      )}
+      <TimelinePreviewArea totalDuration={totalDuration} clips={sortedClips} project={project} onSyncSuccess={() => refetch()} />
 
-      {sortedClips.length === 0 ? (
-        <Card className="border-dashed border-white/10 bg-card/20">
-          <CardContent className="flex min-h-[200px] flex-col items-center justify-center text-center p-6">
-            <Film className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <h3 className="font-semibold text-md">لا توجد مقاطع مونتاج حتّى الآن</h3>
-            <p className="text-xs text-muted-foreground mt-1">قم بتوليد مقاطع من غرفة الإنتاج لتظهر هنا.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* العمود الأيمن: قائمة التحكم وترتيب المقاطع */}
-          <div className="lg:col-span-2 space-y-4">
-            {sortedClips.map((clip, index) => (
-              <Card 
-                key={clip.id} 
-                className={`border-white/10 bg-card/30 transition-all duration-200 cursor-pointer ${
-                  activePreviewClip?.id === clip.id ? "border-primary/50 bg-primary/5" : "hover:border-white/20"
-                }`}
-                onClick={() => setActivePreviewClip(clip)}
-              >
-                <CardContent className="flex items-center justify-between p-4 gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-background font-mono text-xs border border-white/5">
-                      #{clip.clipOrder}
+      <Card className="bg-card/40 border-white/5">
+        <CardContent className="p-0">
+          <form onSubmit={handleAdd} className="flex flex-col gap-3 p-4 border-b border-white/10 bg-black/20">
+            <div className="flex flex-col md:flex-row gap-3">
+              <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="اسم الأصل المونتاجي أو المسار..." className="flex-1 bg-background/50 border-white/10 text-white" required />
+              <div className="relative w-full md:w-32">
+                <Clock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                <Input type="number" min="1" value={duration} onChange={e => setDuration(e.target.value)} className="pr-9 bg-background/50 border-white/10 text-white" required />
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 items-center">
+              <div className="w-full sm:flex-1 flex items-center gap-2">
+                <label className="text-xs text-zinc-400 shrink-0">نوع المسار الفعال:</label>
+                <select value={trackType} onChange={e => setTrackType(e.target.value)} className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm text-white">
+                  <option value="video">🎬 VIDEO (فيديو مرئي)</option>
+                  <option value="voice">🗣️ VOICE (حوار صوتي)</option>
+                  <option value="music">🎵 MUSIC (موسيقى تصويرية)</option>
+                  <option value="sfx">🔊 SFX (مؤثرات محيطية)</option>
+                </select>
+              </div>
+              <div className="w-full sm:w-44 flex items-center gap-2">
+                <label className="text-xs text-zinc-400 shrink-0">شدة الصوت:</label>
+                <select value={volume} onChange={e => setVolume(e.target.value)} className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm text-white">
+                  <option value="1.0">100% (طبيعي)</option>
+                  <option value="0.5">50% (خلفية)</option>
+                  <option value="0.0">0% (كتم)</option>
+                </select>
+              </div>
+              <Button type="submit" disabled={createClip.isPending} className="w-full sm:w-auto shrink-0 bg-primary text-white font-bold gap-2">
+                {createClip.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} إضافة للمسار
+              </Button>
+            </div>
+          </form>
+          <div className="p-6">
+            {sortedClips.length === 0 ? (
+              <div className="py-12 flex flex-col items-center text-zinc-500 border-2 border-dashed border-white/10 rounded-xl">
+                <Film className="w-12 h-12 mb-4 opacity-20" /><p>التايم لاين فارغ حالياً في قاعدة البيانات.</p>
+              </div>
+            ) : (
+              <div className="flex overflow-x-auto pb-2 gap-2 snap-x">
+                {sortedClips.map((clip) => (
+                  <div key={clip.id} onClick={() => setSelectedClipId(clip.id)} className={`shrink-0 snap-center w-44 h-20 bg-zinc-950 border rounded-lg p-3 flex flex-col justify-between relative cursor-pointer ${selectedClipId === clip.id ? "border-primary ring-1 ring-primary/40" : "border-white/10"}`}>
+                    <div className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                      <Button type="button" variant="destructive" size="icon" className="h-5 w-5 rounded" onClick={(e) => { e.stopPropagation(); handleDelete(clip.id); }}><Trash2 className="w-3 h-3" /></Button>
                     </div>
-                    <div>
-                      <h4 className="font-semibold text-sm text-foreground">{clip.title}</h4>
-                      <p className="text-xs text-muted-foreground mt-1">المدة الفعلية: {clip.durationSeconds} ثانية</p>
+                    <span className="font-medium text-white text-xs line-clamp-1 block text-right">{clip.title}</span>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-500 font-mono pt-1.5 border-t border-white/5">
+                      <span className="text-primary uppercase font-bold">{clip.trackType}</span>
+                      <span>{clip.durationSeconds}s</span>
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => moveClip(index, "up")}
-                      disabled={index === 0 || updateOrderMutation.isPending}
-                      className="h-8 w-8 border border-white/5 bg-background/40"
-                    >
-                      <ArrowUp className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => moveClip(index, "down")}
-                      disabled={index === sortedClips.length - 1 || updateOrderMutation.isPending}
-                      className="h-8 w-8 border border-white/5 bg-background/40"
-                    >
-                      <ArrowDown className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                ))}
+              </div>
+            )}
           </div>
-
-          {/* العمود الأيسر: منطقة المعاينة السينمائية الحقيقية (إصلاح 19) */}
-          <Card className="border-white/10 bg-black/40 overflow-hidden h-fit sticky top-6">
-            <CardHeader className="border-b border-white/5 bg-card/50">
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <Play className="h-4 w-4 text-primary" />
-                معاينة الأصول الحقيقية المحددة
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 flex flex-col items-center justify-center min-h-[240px] text-center">
-              
-              {activePreviewClip ? (
-                activePreviewClip.videoUrl ? (
-                  // استبدال المكون الوهمي بمشغل فيديو حقيقي HTML5 فيديو عند توفر الأصل الفعلي
-                  <div className="w-full space-y-3">
-                    <video
-                      key={activePreviewClip.videoUrl}
-                      src={activePreviewClip.videoUrl}
-                      controls
-                      autoPlay
-                      className="w-full aspect-video rounded-lg bg-black border border-white/10 shadow-xl"
-                    />
-                    <div className="text-right px-1">
-                      <h4 className="font-semibold text-xs text-primary">{activePreviewClip.title}</h4>
-                      <p className="text-[10px] text-muted-foreground mt-1">الرابط المباشر: {activePreviewClip.videoUrl}</p>
-                    </div>
-                  </div>
-                ) : (
-                  // إذا لم يوجد فيديو فعلي للأصل الرقمي المختار
-                  <div className="flex flex-col items-center gap-3 text-muted-foreground p-6">
-                    <EyeOff className="h-10 w-10 opacity-30 text-yellow-500" />
-                    <h4 className="font-semibold text-sm">لا يوجد فيديو</h4>
-                    <p className="text-xs text-muted-foreground max-w-[180px]">
-                      هذا المقطع لا يمتلك ملف فيديو حقيقي مسجل في التخزين حالياً.
-                    </p>
-                  </div>
-                )
-              ) : (
-                // الحالة الافتراضية قبل الاختيار من خط المونتاج
-                <div className="flex flex-col items-center gap-2 text-muted-foreground/60 p-6">
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

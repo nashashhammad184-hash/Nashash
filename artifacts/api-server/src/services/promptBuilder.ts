@@ -29,7 +29,7 @@ export class ProductionPromptBuilder {
         .from(worldProfilesTable)
         .where(eq(worldProfilesTable.id, data.projectId));
       if (world) {
-        worldBibleText = `Geography: ${world.geography || "N/A"}, Architecture: ${world.architecture || "N/A"}, Tech: ${world.technology_level || "N/A"}, Style: ${world.clothing_style || "N/A"}`;
+        worldBibleText = `Geography: ${world.geography || "N/A"}, Architecture: ${world.architecture || "N/A"}, Tech: ${world.technologyLevel || "N/A"}, Style: ${world.clothingStyle || "N/A"}`;
         worldRefsText = `Master Prompt: ${world.masterPrompt || "N/A"}, Palette: ${world.colorPalette || "N/A"}`;
       }
     }

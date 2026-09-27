@@ -1,245 +1,210 @@
 import { useMemo, useState } from "react";
-import { useListActors } from "@workspace/api-client-react";
-import { Search, Users, Loader2, ImageOff, Sparkles } from "lucide-react";
+import { useListActors, getListActorsQueryKey } from "@workspace/api-client-react";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
+import axios from "axios";
+import { Search, Users, Loader2, ImageOff, Sparkles, Plus, Edit2, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 import { motion } from "framer-motion";
 
-// دالة توليد Placeholder واضح واحترافي للشخصيات التي لا تملك صورة حقيقية
 function placeholder(id: number) {
-  const colors = [
-    ["#171717", "#3f3f46"],
-    ["#111827", "#374151"],
-    ["#1e1b4b", "#4338ca"],
-    ["#18181b", "#52525b"],
-  ];
+  const colors = [["#171717", "#3f3f46"], ["#111827", "#374151"], ["#1e1b4b", "#4338ca"], ["#18181b", "#52525b"]];
   const c = colors[id % colors.length];
-  const svg = `<svg xmlns="http://w3.org" width="800" height="1000">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-  <stop offset="0" stop-color="${c[0]}"/><stop offset="1" stop-color="${c[1]}"/>
-  </linearGradient></defs>
-  <rect width="800" height="1000" fill="url(#g)"/>
-  <circle cx="400" cy="350" r="140" fill="#a1a1aa" opacity=".25"/>
-  <path d="M150 900c30-230 130-330 250-330s220 100 250 330"
-  fill="#a1a1aa" opacity=".18"/>
-  <text x="400" y="850" text-anchor="middle" fill="white"
-  opacity=".7" font-family="Arial" font-size="32">KAYAN AI PLACEHOLDER</text>
-  </svg>`;
+  const svg = `<svg xmlns="http://w3.org" width="800" height="1000"><rect width="800" height="1000" fill="${c[0]}"/><text x="400" y="500" text-anchor="middle" fill="white" opacity=".4" font-family="Arial" font-size="40">KAYAN AI ACTOR</text></svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
 export default function ActorsPage() {
+  const queryClient = useQueryClient();
   const { data: actors, isLoading, isError, refetch } = useListActors();
   const [search, setSearch] = useState("");
   const [type, setType] = useState("الكل");
 
-  const types = useMemo(
-    () => ["الكل", ...Array.from(new Set((actors ?? []).map(a => a.type)))],
-    [actors]
-  );
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [selectedActor, setSelectedActor] = useState<any>(null);
+
+  const [name, setName] = useState("");
+  const [actorType, setActorType] = useState("عربي");
+  const [age, setAge] = useState("30");
+  const [style, setStyle] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+
+  const types = useMemo(() => ["الكل", ...Array.from(new Set((actors ?? []).map(a => a.type)))], [actors]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (actors ?? []).filter(a =>
       (type === "الكل" || a.type === type) &&
-      (!q ||
-        a.name.toLowerCase().includes(q) ||
-        a.style.toLowerCase().includes(q) ||
-        a.type.toLowerCase().includes(q))
+      (!q || a.name.toLowerCase().includes(q) || a.style.toLowerCase().includes(q) || a.type.toLowerCase().includes(q))
     );
   }, [actors, search, type]);
 
+  const createMutation = useMutation({
+    mutationFn: (data: any) => axios.post("/api/actors", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListActorsQueryKey() });
+      setIsCreateOpen(false);
+      toast.success("تم تسجيل الممثل الرقمي في قاعدة البيانات.");
+    },
+    onError: () => toast.error("فشل إنشاء الممثل.")
+  });
+
+  const editMutation = useMutation({
+    mutationFn: (data: any) => axios.patch(`/api/actors/${data.id}`, data.payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListActorsQueryKey() });
+      setIsEditOpen(false);
+      toast.success("تم تحديث أسلوب أداء الممثل بنجاح.");
+    },
+    onError: () => toast.error("فشل تعديل بيانات الممثل.")
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => axios.delete(`/api/actors/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListActorsQueryKey() });
+      toast.success("تم حذف الممثل وإلغاء عقده الرقمي.");
+    },
+    onError: () => toast.error("تعذر حذف سجل الممثل.")
+  });
+
+  const openCreateDialog = () => {
+    setName(""); setActorType("عربي"); setAge("30"); setStyle(""); setImageUrl("");
+    setIsCreateOpen(true);
+  };
+
+  const openEditDialog = (actor: any) => {
+    setSelectedActor(actor);
+    setName(actor.name); setActorType(actor.type); setAge(String(actor.age)); setStyle(actor.style); setImageUrl(actor.imageUrl || "");
+    setIsEditOpen(true);
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !style.trim()) return;
+    createMutation.mutate({ name, type: actorType, age: parseInt(age, 10), style, imageUrl: imageUrl.trim() || null });
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedActor || !name.trim() || !style.trim()) return;
+    editMutation.mutate({
+      id: selectedActor.id,
+      payload: { name, type: actorType, age: parseInt(age, 10), style, imageUrl: imageUrl.trim() || null }
+    });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
-    <div dir="rtl" className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-
-        <div className="mb-8 rounded-2xl border border-white/10 bg-card/40 p-6 shadow-xl backdrop-blur-xl">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                  <Users className="h-6 w-6" />
-                </div>
-                <div>
-                  <p className="text-xs font-medium tracking-widest text-primary">
-                    KAYAN AI PRODUCTIONS
-                  </p>
-                  <h1 className="text-3xl font-bold">
-                    الممثلون الرقميون
-                  </h1>
-                </div>
-              </div>
-
-              <p className="text-sm leading-7 text-muted-foreground">
-                مكتبة الممثلين الرقمية الخاصة بالاستوديو.
-                اختر الشخصية المناسبة لمشروعك واستكشف بياناتها وأسلوب أدائها.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-background/40 px-5 py-4">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <div>
-                <div className="text-2xl font-bold">
-                  {actors?.length ?? 0}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  ممثل رقمي
-                </div>
-              </div>
-            </div>
+    <div dir="rtl" className="min-h-screen bg-background text-foreground p-4">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-6 rounded-2xl border border-white/10 bg-card/40 p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Users className="h-6 w-6 text-primary" />
+            <h1 className="text-2xl font-bold">الممثلون الرقميون</h1>
           </div>
+          <Button onClick={openCreateDialog} className="bg-red-600 hover:bg-red-700 text-white font-bold gap-2">
+            <Plus className="w-4 h-4" /> إضافة ممثل جديد
+          </Button>
         </div>
 
-        {!isLoading && !isError && (
+        {!isError && (
           <div className="mb-6 space-y-4">
-            <div className="relative">
-              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="ابحث باسم الممثل أو النوع أو أسلوب الأداء..."
-                className="h-12 border-white/10 bg-card/50 pr-10 text-right"
-              />
-            </div>
-
+            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث باسم الممثل أو النوع أو أسلوب الأداء..." className="h-11 border-white/10 bg-card/50 text-white pr-4" />
             <div className="flex gap-2 overflow-x-auto pb-1">
               {types.map(t => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setType(t)}
-                  className={
-                    "shrink-0 rounded-full border px-4 py-2 text-sm transition-all " +
-                    (type === t
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-white/10 bg-card/40 text-muted-foreground hover:border-primary/40")
-                  }
-                >
-                  {t}
-                </button>
+                <button key={t} type="button" onClick={() => setType(t)} className={"shrink-0 rounded-full border px-4 py-1.5 text-xs transition-all " + (type === t ? "border-primary bg-primary text-white" : "border-white/10 bg-card/40 text-zinc-400")}>{t}</button>
               ))}
             </div>
           </div>
         )}
 
-        {isLoading && (
-          <div className="flex min-h-[400px] items-center justify-center">
-            <div className="flex flex-col items-center gap-4 text-muted-foreground">
-              <Loader2 className="h-10 w-10 animate-spin text-primary" />
-              <p>جاري تحميل مكتبة الممثلين...</p>
-            </div>
+        {isError && (
+          <div className="text-center py-12">
+            <p className="text-destructive font-bold">تعذر جلب سجلات الممثلين</p>
+            <Button onClick={() => refetch()} className="mt-4 bg-primary text-white">إعادة المحاولة</Button>
           </div>
         )}
 
-        {isError && (
-          <Card className="border-red-500/20 bg-red-500/5">
-            <CardContent className="flex min-h-[250px] flex-col items-center justify-center gap-4 text-center">
-              <ImageOff className="h-12 w-12 text-red-400" />
-              <h2 className="font-semibold">
-                تعذر تحميل الممثلين
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                تأكد من تشغيل API Server ثم حاول مرة أخرى.
-              </p>
-              <button
-                type="button"
-                onClick={() => refetch()}
-                className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground"
-              >
-                إعادة المحاولة
-              </button>
-            </CardContent>
-          </Card>
+        {!isError && filtered.length === 0 && (
+          <p className="text-center text-zinc-500 py-12">لا توجد شخصيات مطابقة للمواصفات.</p>
         )}
 
-        {!isLoading && !isError && filtered.length === 0 && (
-          <Card className="border-dashed border-white/10 bg-card/20">
-            <CardContent className="flex min-h-[280px] flex-col items-center justify-center text-center">
-              <Search className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <h2 className="text-lg font-semibold">لا توجد نتائج</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                جرّب تغيير كلمة البحث أو الفئة.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
-        {!isLoading && !isError && filtered.length > 0 && (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filtered.map((actor, index) => {
-              const rawImg = actor.imageUrl?.trim() || "";
-              
-              // التحقق الصارم: إذا كان الرابط فارغاً، أو رابط صفحة ibb.co غير مباشر، نعتبره NULL ونشغل الـ Placeholder
-              const isInvalidImg = !rawImg || (rawImg.includes("ibb.co") && !rawImg.match(/\.(jpeg|jpg|gif|png|webp)$/i));
-              
-              const image = isInvalidImg ? placeholder(actor.id) : rawImg;
-
+        {!isError && filtered.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filtered.map((actor) => {
+              const image = actor.imageUrl || placeholder(actor.id);
               return (
-                <motion.div
-                  key={actor.id}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{
-                    duration: 0.3,
-                    delay: Math.min(index * 0.03, 0.5),
-                  }}
-                >
-                  <Card className="group h-full overflow-hidden border-white/10 bg-card/40 transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-2xl hover:shadow-primary/10">
-                    <div className="relative aspect-[4/5] overflow-hidden bg-muted">
-                      <img
-                        src={image}
-                        alt={actor.name}
-                        loading="lazy"
-                        className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-105"
-                        onError={e => {
-                          e.currentTarget.src = placeholder(actor.id);
-                        }}
-                      />
-
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
-
-                      <div className="absolute right-3 top-3 rounded-full border border-white/10 bg-black/50 px-3 py-1 text-xs text-white backdrop-blur-md">
-                        {actor.type}
-                      </div>
-
-                      {isInvalidImg && (
-                        <div className="absolute left-3 top-3 flex items-center gap-1 rounded-full border border-primary/30 bg-primary/20 px-2 py-1 text-[10px] text-primary">
-                          <ImageOff className="h-3 w-3" />
-                          Placeholder واضح
-                        </div>
-                      )}
-
-                      <div className="absolute bottom-0 right-0 left-0 p-5">
-                        <h2 className="text-xl font-bold text-white">
-                          {actor.name}
-                        </h2>
-
-                        <p className="mt-2 text-sm text-white/70">
-                          العمر: {actor.age} سنة
-                        </p>
-                      </div>
+                <Card key={actor.id} className="group overflow-hidden border-white/10 bg-card/40 hover:border-primary/40 transition-all duration-300 relative">
+                  <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
+                    <img src={image} alt={actor.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" onError={e => { e.currentTarget.src = placeholder(actor.id); }} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                    
+                    <div className="absolute left-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 z-20">
+                      <Button size="icon" className="h-7 w-7 bg-zinc-800 text-white hover:bg-zinc-700" onClick={() => openEditDialog(actor)}><Edit2 className="w-3.5 h-3.5" /></Button>
+                      <Button size="icon" variant="destructive" className="h-7 w-7" onClick={() => confirm("هل أنت متأكد من حذف هذا الممثل تماماً؟") && deleteMutation.mutate(actor.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
 
-                    <CardContent className="p-4">
-                      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        أسلوب الأداء
-                      </div>
+                    <div className="absolute bottom-0 right-0 left-0 p-4">
+                      <h2 className="text-lg font-bold text-white">{actor.name}</h2>
+                      <p className="text-xs text-zinc-400 mt-1">العمر: {actor.age} سنة | {actor.type}</p>
+                    </div>
+                  </div>
+                  <CardContent className="p-3">
+                    <p className="text-xs text-zinc-400 leading-relaxed line-clamp-2">{actor.style}</p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
 
-                      <p className="min-h-[48px] text-sm leading-6 text-muted-foreground">
-                        {actor.style}
-                      </p>
+        {/* Create Form Modal */}
+        <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-white">
+            <DialogHeader><DialogTitle>إضافة ممثل جديد</DialogTitle></DialogHeader>
+            <form onSubmit={handleCreateSubmit} className="space-y-4 pt-2">
+              <div><Label>اسم الممثل</Label><Input value={name} onChange={e => setName(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="مثال: سارة أحمد" required /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>الفئة</Label><select value={actorType} onChange={e => setActorType(e.target.value)} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-xs text-white"><option value="عربي">عربي / شرقي</option><option value="عالمي">عالمي / غربي</option><option value="كرتوني">أنيميشن</option></select></div>
+                <div><Label>العمر</Label><Input type="number" value={age} onChange={e => setAge(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
+              </div>
+              <div><Label>رابط الصورة</Label><Input value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="https://example.com" /></div>
+              <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="صوت عميق، نظرات غامضة، درامي حاد..." required /></div>
+              <Button type="submit" disabled={createMutation.isPending} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{createMutation.isPending ? "جاري الحفظ..." : "بدء تسجيل الممثل"}</Button>
+            </form>
+          </DialogContent>
+        </Dialog>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+        {/* Edit Form Modal */}
+        <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-white">
+            <DialogHeader><DialogTitle>تحديث أسلوب أداء الممثل</DialogTitle></DialogHeader>
+            <form onSubmit={handleEditSubmit} className="space-y-4 pt-2">
+              <div><Label>اسم الممثل</Label><Input value={name} onChange={e => setName(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>النوع</Label><select value={actorType} onChange={e => setActorType(e.target.value)} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-xs text-white"><option value="عربي">عربي / شرقي</option><option value="عالمي">عالمي / غربي</option><option value="كرتوني">أنيميشن</option></select></div>
+                <div><Label>العمر</Label><Input type="number" value={age} onChange={e => setAge(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
+              </div>
+              <div><Label>رابط الصورة</Label><Input value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" /></div>
+              <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
+              <Button type="submit" disabled={editMutation.isPending} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{editMutation.isPending ? "جاري التحديث..." : "تأكيد وحفظ التغييرات"}</Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </div>
+  );
+}

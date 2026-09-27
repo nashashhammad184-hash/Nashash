@@ -62,3 +62,23 @@ Thumbs.db
 # Generated/build output
 artifacts/api-server/dist.before-generation-settings/
 *.bak*
+.venvs/
+
+# KAYAN-FIX-11 — heavy runtime artifacts (never commit)
+uploads/
+storage_vault/
+*.zip
+repomix-output.xml
+repomix-*.txt
+.env
+.env.*.bak*
+*.bak
+*.bak-*
+*.pre_*
+*.stub-fix*
+
+# KAYAN-FIX-11 — large runtime artifacts
+artifacts/api-server/uploads/
+artifacts/api-server/storage_vault/
+*.AppImage
+Nashash_Clean.zip

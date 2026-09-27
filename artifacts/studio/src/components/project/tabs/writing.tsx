@@ -1,148 +1,180 @@
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileText, Sparkles, Loader2, CheckCircle, Languages, AlertCircle } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import React, { useState, useEffect } from "react";
+import { Button } from "../../ui/button";
+import { Textarea } from "../../ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../ui/alert";
+import { Sparkles, Loader2, AlertCircle, FileText, Globe, User } from "lucide-react";
+import { Project, getListProjectShotsQueryKey } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
-interface ScriptData {
+interface Script {
   id: number;
   projectId: number;
-  title: string;
-  content: string;
-  generatedContent: string | null;
+  worldId: string;
+  idea: string;
+  generatedContent: string;
+  createdAt: string;
 }
 
-export default function WritingTab({ projectId }: { projectId: number }) {
+export default function WritingTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const projectIdFromUrl = project.id;
+  const [idea, setIdea] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [scripts, setScripts] = useState<Script[]>([]);
+  const [projectActors, setProjectActors] = useState<string[]>([]);
+  const [selectedScript, setSelectedScript] = useState<Script | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // 1. جلب بيانات السيناريو الحالي للمشروع بسلام
-  const { data: script, isLoading } = useQuery<ScriptData>({
-    queryKey: ["project-script", projectId],
-    queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/script`);
-      if (!res.ok) throw new Error("Failed to fetch studio script");
-      return res.json();
-    }
-  });
+  const fetchScriptsAndActors = () => {
+    if (!projectIdFromUrl) return;
+    
+    fetch(`/api/projects/${projectIdFromUrl}/scripts`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setScripts(data);
+          if (data.length > 0 && !selectedScript) setSelectedScript(data[0]);
+        }
+      })
+      .catch((err) => console.error("Error loading scripts:", err));
 
-  // 2. دالة توليد ومعالجة السيناريو والترجمة الإنجليزية (إصلاح 24)
-  const generateScriptMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/script/generate`, {
-        method: "POST"
-      });
-      if (!res.ok) throw new Error("Generation engines failure");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-script", projectId] });
-    }
-  });
+    fetch(`/api/projects/${projectIdFromUrl}/subtitles`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && Array.isArray(data.subtitles)) {
+          const names = data.subtitles.map((a: any) => a.text).filter(Boolean);
+          setProjectActors(names);
+        }
+      })
+      .catch(() => {});
+  };
 
-  const handleGenerateScript = async () => {
-    setIsGenerating(true);
-    setSuccessMessage(null);
+  useEffect(() => {
+    fetchScriptsAndActors();
+  }, [projectIdFromUrl]);
+
+  const handleGenerate = async () => {
+    if (!projectIdFromUrl || !idea.trim()) return;
+    setLoading(true);
+    setError(null);
     try {
-      await generateScriptMutation.mutateAsync();
+      const response = await fetch("/api/scripts/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: projectIdFromUrl,
+          worldId: project.worldId,
+          idea: idea.trim(),
+        }),
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.error || "فشلت عملية التوليد الإخراجية.");
+      }
+
+      setScripts((prev) => [resData, ...prev]);
+      setSelectedScript(resData);
+      setIdea("");
       
-      // التزام صارم ومصداقية: لا ندعي المزامنة الوهمية إلا إذا كانت الـ Timestamps متواجدة حقيقة
-      setSuccessMessage("تم إنتاج النص السينمائي واستخراج نصوص الترجمة الإنجليزية بنجاح! جاهزة للجدولة والتركيب الفعلي.");
-    } catch (err) {
-      console.error("Script generation failed:", err);
+      // إبطال كاش اللقطات (Shots) فوراً ليقوم محرك الإخراج بسحب المشاهد المشتقة الجديدة تلقائياً
+      queryClient.invalidateQueries({ queryKey: getListProjectShotsQueryKey(project.id) });
+      
+      toast.success("تم توليد السيناريو السينمائي وتفكيك اللقطات بداخل PostgreSQL بنجاح حقيقي.");
+      fetchScriptsAndActors();
+    } catch (err: any) {
+      setError(err.message || "حدث خطأ غير متوقع أثناء الاتصال بخادم التوليد.");
+      toast.error("فشل التوليد: " + err.message);
     } finally {
-      setIsGenerating(false);
+      setLoading(false);
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex h-48 items-center justify-center text-muted-foreground gap-2">
-        <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        <span>جاري تحميل مستندات النص والترجمة...</span>
-      </div>
-    );
-  }
+  const splitScriptContent = (content: string) => {
+    if (!content) return { mainText: "", subtitles: "" };
+    // إذا كان المحرك يعيد الهيكل كـ JSON String من السيرفر نقوم بصياغته بشكل مقروء ونظيف للمخرج
+    try {
+      const parsed = JSON.parse(content);
+      let textBuffer = `🎬 عنوان العمل: ${parsed.title || "غير معنون"}\n\n`;
+      let subBuffer = "";
+      
+      if (Array.isArray(parsed.scenes)) {
+        parsed.scenes.forEach((scene: any) => {
+          textBuffer += `🎬 مشهد رقم [${scene.sceneNumber}]: ${scene.sceneTitle || ""}\n`;
+          textBuffer += `🔹 الوصف المرئي: ${scene.visualDescription || ""}\n`;
+          textBuffer += `💬 الحوارات: ${scene.characterDialogue || "لا يوجد"}\n`;
+          textBuffer += `🎵 المؤثرات الصوتية: ${scene.audioMusic || ""}\n\n`;
+          if (scene.englishSubtitles) {
+            subBuffer += `[Scene ${scene.sceneNumber} Subtitles]:\n${scene.englishSubtitles}\n\n`;
+          }
+        });
+      }
+      return { mainText: textBuffer.trim(), subtitles: subBuffer.trim() };
+    } catch {
+      const parts = content.split("---ENGLISH_SUBTITLES---");
+      return { mainText: parts[0]?.trim() || "", subtitles: parts[1]?.trim() || "" };
+    }
+  };
 
-  // فصل واستخراج الترجمة الإنجليزية برمجياً من المحتوى لعرضها بوضوح للمستخدم مع الحفاظ على القالب الأصلي
-  const hasSubtitles = script?.generatedContent?.includes("---ENGLISH_SUBTITLES---");
-  const subtitleParts = hasSubtitles ? script?.generatedContent?.split("---ENGLISH_SUBTITLES---") : [];
-  const scriptBody = subtitleParts[0] || script?.generatedContent || "لم يتم توليد أي محتوى سينمائي بعد.";
-  const englishSubtitlesText = subtitleParts[1]?.trim() || null;
+  const { mainText, subtitles } = splitScriptContent(selectedScript?.generatedContent || "");
 
   return (
-    <div dir="rtl" className="space-y-6 text-right">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/5 pb-4">
-        <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <FileText className="h-5 w-5 text-primary" />
-            غرفة الكتابة والتأليف السينمائي الـ AI
-          </h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            صغ نصوص الحوار، واستخرج الترجمات المبرمجة للمشاريع السينمائية بدقة عالية.
-          </p>
-        </div>
-
-        <Button
-          onClick={handleGenerateScript}
-          disabled={isGenerating || !script}
-          className="gap-2 font-semibold h-11"
-        >
-          {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          توليد النص والترجمة التلقائية
-        </Button>
-      </div>
-
-      {successMessage && (
-        <div className="flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 p-4 text-sm text-green-400">
-          <CheckCircle className="h-5 w-5 shrink-0" />
-          <span>{successMessage}</span>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* اللوحة اليمنى: النص السينمائي والحوار الأصلي */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card className="border-white/10 bg-card/40">
-            <CardHeader>
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <FileText className="h-4 w-4 text-primary" />
-                المحتوى الإبداعي والحوار الأساسي المولد
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="min-h-[250px] bg-background/50 border border-white/5 p-4 rounded-xl font-sans text-sm leading-7 text-foreground/90 whitespace-pre-wrap">
-                {scriptBody}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* اللوحة اليسرى: مسار الترجمة الإنجليزية المستقل المكتشف الفعلي (Subtitle Track Display) */}
-        <Card className="border-white/10 bg-card/40 h-fit">
-          <CardHeader className="border-b border-white/5">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Languages className="h-4 w-4 text-primary" />
-              English Subtitle Track Assets
-            </CardTitle>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-white" dir="rtl">
+      <div className="space-y-6 lg:col-span-1">
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-primary"><Sparkles className="h-5 w-5" /> AI Script Generator</CardTitle>
+            <CardDescription className="text-zinc-400">صياغة السيناريوهات واللقطات السينمائية عبر الذكاء الاصطناعي الحقيقي.</CardDescription>
           </CardHeader>
-          <CardContent className="pt-5 space-y-4">
-            {englishSubtitlesText ? (
-              <div className="space-y-3">
-                <div className="flex items-start gap-2 rounded-md bg-blue-500/10 border border-blue-500/20 p-3 text-xs text-blue-400 leading-5">
-                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                  <p>تم استخراج أصول الترجمة الإنجليزية بنجاح. سيتم تمرير الـ Timestamps وحقنها في الـ Timeline Track أثناء المونتاج الفعلي.</p>
-                </div>
-                <div className="bg-black/40 border border-white/5 p-3 rounded-lg font-mono text-xs text-left text-white/80 whitespace-pre-wrap h-48 overflow-y-auto" dir="ltr">
-                  {englishSubtitlesText}
-                </div>
+          <CardContent className="space-y-4">
+            <Textarea placeholder="مثال: نقاش حاد بين شخصيتين داخل سيارة مظلمة تحت المطر..." value={idea} onChange={(e) => setIdea(e.target.value)} rows={5} className="bg-zinc-800 border-zinc-700 text-white" disabled={loading} />
+            {error && (
+              <Alert variant="destructive" className="bg-red-950/20 border-red-900/50 py-2"><AlertCircle className="h-4 w-4" /><AlertTitle>خطأ في التوليد</AlertTitle><AlertDescription className="text-xs">{error}</AlertDescription></Alert>
+            )}
+            <Button className="w-full bg-red-600 hover:bg-red-700 text-white font-bold gap-2" onClick={handleGenerate} disabled={loading || !idea.trim()}>
+              {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> جاري صياغة النص...</> : <><Sparkles className="h-4 w-4" /> توليد السيناريو السينمائي</>}
+            </Button>
+          </CardContent>
+        </Card>
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader className="pb-3"><CardTitle className="text-sm font-semibold flex items-center gap-2 text-zinc-300"><FileText className="h-4 w-4" /> مسودات السيناريو السابقة ({scripts.length})</CardTitle></CardHeader>
+          <CardContent className="p-0 max-h-[300px] overflow-y-auto">
+            {scripts.length === 0 ? (
+              <p className="text-xs text-zinc-500 p-4 text-center">لا توجد نصوص مولدة بعد.</p>
+            ) : (
+              <div className="divide-y divide-zinc-800">
+                {scripts.map((s) => (
+                  <button key={s.id} onClick={() => setSelectedScript(s)} className={`w-full text-right p-3 text-xs transition-colors hover:bg-zinc-800/50 block ${selectedScript?.id === s.id ? "bg-zinc-800 font-medium border-r-2 border-red-500" : ""}`}>
+                    <div className="truncate text-white mb-1">{s.idea}</div>
+                    <div className="text-[10px] text-zinc-500">{new Date(s.createdAt).toLocaleString()}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      <div className="lg:col-span-2">
+        <Card className="bg-zinc-900 border-zinc-800 min-h-[500px] flex flex-col">
+          <CardHeader className="border-b border-zinc-800 bg-zinc-900/50">
+            <CardTitle className="text-md flex items-center gap-2 text-zinc-200"><FileText className="h-5 w-5 text-red-500" /> النص السينمائي النهائي الفعال</CardTitle>
+          </CardHeader>
+          <CardContent className="flex-1 p-6 space-y-4 overflow-y-auto max-h-[600px] font-mono text-sm leading-relaxed text-zinc-200">
+            {!selectedScript ? (
+              <div className="h-full flex flex-col items-center justify-center text-zinc-600 py-20">
+                <FileText className="h-12 w-12 mb-2 opacity-30" /><p className="text-xs">ادخل الفكرة التوجيهية في القائمة الجانبية لإطلاق مهام التوليد السينمائي.</p>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center p-6 text-center text-muted-foreground/60 min-h-[180px]">
-                <Languages className="h-8 w-8 opacity-20 mb-2" />
-                <p className="text-xs">لا توجد سجلات ترجمة مستقلة حتّى الآن.</p>
-                <p className="text-[10px] text-muted-foreground mt-1">اضغط على التوليد لاستخلاص مسار الترجمة الإنجليزية.</p>
+              <div className="space-y-4">
+                <div className="whitespace-pre-wrap bg-zinc-950 p-4 rounded-md border border-zinc-800 shadow-inner text-right">{mainText}</div>
+                {subtitles && (
+                  <div className="mt-6 pt-4 border-t border-zinc-800">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider"><Globe className="h-4 w-4" /> English Translation Subtitles</div>
+                    <div className="whitespace-pre-wrap bg-red-950/10 text-red-200/80 p-4 rounded-md border border-red-900/20 text-xs text-left" dir="ltr">{subtitles}</div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

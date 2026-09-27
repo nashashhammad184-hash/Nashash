@@ -1,0 +1,7 @@
+1
+00:00:00,000 --> 00:00:02,500
+Welcome to Kayan Production Studio.
+
+2
+00:00:02,500 --> 00:00:06,000
+The sub-title pipeline is fully verified and stable.

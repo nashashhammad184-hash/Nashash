@@ -10,13 +10,15 @@ export const actorsTable = pgTable("actors", {
   category: text("category").notNull().default("global"),
   age: integer("age").notNull(),
   style: text("style").notNull(),
-  imageUrl: text("image_url"),
+  imageUrl: text("image_url").$type<string>(),
   
   // ── PRESERVED COLUMNS (للمحافظة على الـ 31 ممثلاً الحاليين) ──
   gender: text("gender"),
   eyeColor: text("eye_color"),
   hairStyleOld: text("hair_style"),
   physicalDescription: text("physical_description"),
+  // KAYAN-FIX-06: fixed synthetic face reference for I2V.
+  canonicalFaceImagePath: text("canonical_face_image_path"),
   personalityTraits: text("personality_traits"),
   backstory: text("backstory"),
   clothingPrompt: text("clothing_prompt"),

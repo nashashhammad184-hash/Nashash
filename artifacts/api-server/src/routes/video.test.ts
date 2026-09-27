@@ -1,3 +1,10 @@
+/*
+ * ⚠️  KAYAN-REPLICATE-ISOLATION-V1
+ * LEGACY TEST FILE — NOT EXECUTED IN PRODUCTION BUILD.
+ * It tests the removed Replicate path. Kept for historical reference
+ * only. Excluded by tsconfig.json (src/routes/**/* is ignored).
+ */
+
 import router from "./video";
 
 // محاكاة سريعة لاختبار منطق استخراج الروابط من مخرجات Replicate

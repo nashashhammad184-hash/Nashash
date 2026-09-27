@@ -1,304 +1,157 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import fs from "node:fs";
-import path from "node:path";
-import { logger } from "../lib/logger";
+import { desc, eq, sql } from "drizzle-orm";
+import { db, renderJobsTable } from "@workspace/db";
+import { createRenderJob, getRenderJobStatus, runRenderPipeline, type RenderClipInput } from "../lib/renderEngine";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router: IRouter = Router();
 
-const DEEPGRAM_TTS_ENDPOINT = "https://api.deepgram.com/v1/speak";
-const REPLICATE_PREDICTIONS_ENDPOINT = "https://api.replicate.com/v1/predictions";
-const DEFAULT_TTS_MODEL = "aura-asteria-en";
-const MAX_POLLING_ATTEMPTS = 80;
-const POLLING_INTERVAL_MS = 3_000;
-const HTTP_TIMEOUT_MS = 25_000;
-
-interface ReplicatePrediction {
-  id: string;
-  version?: string;
-  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
-  error?: string | null;
-  output?: unknown;
-  urls?: {
-    get?: string;
-    cancel?: string;
-  };
+function looksLikeRealAsset(s: string | null | undefined): boolean {
+  if (!s || typeof s !== "string") return false;
+  const t = s.trim();
+  if (t.length === 0) return false;
+  return /^https?:\/\//i.test(t) || t.startsWith("/uploads/");
 }
 
-function extractMediaUrl(output: unknown): string | undefined {
-  if (typeof output === "string" && output.trim().length > 0) {
-    return output.trim();
-  }
-  if (Array.isArray(output) && output.length > 0) {
-    const first = output[0];
-    if (typeof first === "string" && first.trim().length > 0) {
-      return first.trim();
-    }
-  }
-  if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    for (const key of ["video", "video_url", "url", "output", "synced_video"]) {
-      const val = record[key];
-      if (typeof val === "string" && val.trim().length > 0) {
-        return val.trim();
-      }
-    }
-  }
-  return undefined;
-}
-
-function getRendersDir(): string {
-  const rendersDir = path.resolve(process.cwd(), "uploads", "renders");
-  if (!fs.existsSync(rendersDir)) {
-    fs.mkdirSync(rendersDir, { recursive: true });
-  }
-  return rendersDir;
-}
-
-/**
- * 1. Deepgram TTS Stage
- */
-async function generateAudioStage(text: string, deepgramKey: string, ttsModel: string): Promise<{ audioBuffer: Buffer; audioDataUri: string; audioPath: string }> {
-  const url = `${DEEPGRAM_TTS_ENDPOINT}?model=${encodeURIComponent(ttsModel)}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${deepgramKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Deepgram TTS failed (${response.status}): ${errorText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  if (!buffer || buffer.length === 0) {
-    throw new Error("Deepgram TTS returned 0 bytes of audio data.");
-  }
-
-  const timestamp = Date.now();
-  const audioFileName = `render_audio_${timestamp}.mp3`;
-  const audioPath = path.join(getRendersDir(), audioFileName);
-  fs.writeFileSync(audioPath, buffer);
-
-  const audioDataUri = `data:audio/mp3;base64,${buffer.toString("base64")}`;
-  return { audioBuffer: buffer, audioDataUri, audioPath };
-}
-
-/**
- * 2. Replicate Video Generation Stage
- */
-async function generateVideoStage(prompt: string, replicateToken: string, videoModelVersion: string): Promise<string> {
-  const createResponse = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${replicateToken}`,
-      "Content-Type": "application/json",
-      Prefer: "wait=5",
-    },
-    body: JSON.stringify({
-      version: videoModelVersion,
-      input: { prompt },
-    }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!createResponse.ok) {
-    const errorText = await createResponse.text().catch(() => "");
-    throw new Error(`Replicate Video API returned HTTP ${createResponse.status}: ${errorText}`);
-  }
-
-  let prediction = (await createResponse.json()) as ReplicatePrediction;
-  if (!prediction || !prediction.id) {
-    throw new Error("Replicate Video API did not return a valid prediction ID.");
-  }
-
-  const pollingUrl = prediction.urls?.get || `${REPLICATE_PREDICTIONS_ENDPOINT}/${prediction.id}`;
-
-  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
-    if (prediction.status === "succeeded") {
-      const videoUrl = extractMediaUrl(prediction.output);
-      if (!videoUrl) {
-        throw new Error("Replicate Video succeeded but returned no valid video URL.");
-      }
-      return videoUrl;
-    }
-
-    if (prediction.status === "failed") {
-      throw new Error(`Replicate Video prediction failed: ${prediction.error || "Unknown error"}`);
-    }
-
-    if (prediction.status === "canceled") {
-      throw new Error("Replicate Video prediction was canceled.");
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
-
-    const pollResponse = await fetch(pollingUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${replicateToken}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-
-    if (!pollResponse.ok) {
-      const pollErrorText = await pollResponse.text().catch(() => "");
-      throw new Error(`Replicate Video polling failed (${pollResponse.status}): ${pollErrorText}`);
-    }
-
-    prediction = (await pollResponse.json()) as ReplicatePrediction;
-  }
-
-  throw new Error(`Replicate Video generation timed out after ${MAX_POLLING_ATTEMPTS * 3} seconds.`);
-}
-
-/**
- * 3. Replicate Lip Sync Stage
- */
-async function generateLipSyncStage(videoUrl: string, audioDataUriOrUrl: string, replicateToken: string, lipsyncModelVersion: string): Promise<string> {
-  const createResponse = await fetch(REPLICATE_PREDICTIONS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${replicateToken}`,
-      "Content-Type": "application/json",
-      Prefer: "wait=5",
-    },
-    body: JSON.stringify({
-      version: lipsyncModelVersion,
-      input: {
-        face: videoUrl,
-        input_audio: audioDataUriOrUrl,
-      },
-    }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-
-  if (!createResponse.ok) {
-    const errorText = await createResponse.text().catch(() => "");
-    throw new Error(`Replicate LipSync API returned HTTP ${createResponse.status}: ${errorText}`);
-  }
-
-  let prediction = (await createResponse.json()) as ReplicatePrediction;
-  if (!prediction || !prediction.id) {
-    throw new Error("Replicate LipSync API did not return a valid prediction ID.");
-  }
-
-  const pollingUrl = prediction.urls?.get || `${REPLICATE_PREDICTIONS_ENDPOINT}/${prediction.id}`;
-
-  for (let attempt = 0; attempt < MAX_POLLING_ATTEMPTS; attempt++) {
-    if (prediction.status === "succeeded") {
-      const syncedUrl = extractMediaUrl(prediction.output);
-      if (!syncedUrl) {
-        throw new Error("Replicate LipSync succeeded but returned no valid video URL.");
-      }
-      return syncedUrl;
-    }
-
-    if (prediction.status === "failed") {
-      throw new Error(`Replicate LipSync prediction failed: ${prediction.error || "Unknown error"}`);
-    }
-
-    if (prediction.status === "canceled") {
-      throw new Error("Replicate LipSync prediction was canceled.");
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS));
-
-    const pollResponse = await fetch(pollingUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${replicateToken}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-
-    if (!pollResponse.ok) {
-      const pollErrorText = await pollResponse.text().catch(() => "");
-      throw new Error(`Replicate LipSync polling failed (${pollResponse.status}): ${pollErrorText}`);
-    }
-
-    prediction = (await pollResponse.json()) as ReplicatePrediction;
-  }
-
-  throw new Error(`Replicate LipSync timed out after ${MAX_POLLING_ATTEMPTS * 3} seconds.`);
-}
-
-async function handleRenderPipeline(req: Request, res: Response): Promise<void> {
-  const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
-  if (!deepgramKey) {
-    res.status(500).json({ error: "DEEPGRAM_API_KEY environment variable is not configured." });
+// 1. POST /api/render/projects/:id/render/start
+//    Loads REAL clip assets from timeline_items (VIDEO track only) and enqueues a render.
+router.post("/projects/:id/render/start", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(String(req.params.id));
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "Invalid project ID" });
     return;
   }
-
-  const replicateToken = process.env.REPLICATE_API_TOKEN?.trim();
-  if (!replicateToken) {
-    res.status(500).json({ error: "REPLICATE_API_TOKEN environment variable is not configured." });
-    return;
-  }
-
-  const videoModelVersion = process.env.REPLICATE_VIDEO_MODEL_VERSION?.trim();
-  if (!videoModelVersion) {
-    res.status(500).json({ error: "REPLICATE_VIDEO_MODEL_VERSION environment variable is not configured." });
-    return;
-  }
-
-  const lipsyncModelVersion = process.env.REPLICATE_LIPSYNC_MODEL_VERSION?.trim();
-  if (!lipsyncModelVersion) {
-    res.status(500).json({ error: "REPLICATE_LIPSYNC_MODEL_VERSION environment variable is not configured." });
-    return;
-  }
-
-  const { prompt, text } = req.body || {};
-  if (!prompt || !text) {
-    res.status(400).json({ error: "Both 'prompt' (for video) and 'text' (for speech) are required." });
-    return;
-  }
-
-  const ttsModel = process.env.DEEPGRAM_TTS_MODEL?.trim() || req.body?.model?.trim() || DEFAULT_TTS_MODEL;
 
   try {
-    logger.info("==> [RENDER PIPELINE] Starting Stage 1: Deepgram TTS...");
-    const { audioDataUri, audioPath } = await generateAudioStage(text, deepgramKey, ttsModel);
+    // Pull VIDEO rows from timeline_items that have a real assetUrl
+    const rowsResult: any = await db.execute(sql`
+      SELECT id, asset_url, duration, order_index
+      FROM timeline_items
+      WHERE project_id = ${projectId}
+        AND track = 'VIDEO'
+      ORDER BY order_index ASC
+    `);
 
-    logger.info("==> [RENDER PIPELINE] Starting Stage 2: Replicate Video Generation...");
-    const rawVideoUrl = await generateVideoStage(prompt, replicateToken, videoModelVersion);
+    const raw: any[] = rowsResult?.rows ?? rowsResult ?? [];
+    const clips: RenderClipInput[] = [];
+    for (const r of raw) {
+      if (!looksLikeRealAsset(r.asset_url)) continue;
+      clips.push({
+        id: r.id,
+        assetUrl: r.asset_url,
+        durationSeconds: Number(r.duration) || 5,
+        order: Number(r.order_index) || 0,
+      });
+    }
 
-    logger.info("==> [RENDER PIPELINE] Starting Stage 3: Replicate Lip Sync...");
-    const syncedVideoUrl = await generateLipSyncStage(rawVideoUrl, audioDataUri, replicateToken, lipsyncModelVersion);
+    if (clips.length === 0) {
+      res.status(409).json({
+        success: false,
+        error: "لا يوجد أي فيديو حقيقي مرتبط بمسار VIDEO. زامن التايم لاين أولاً مع أصول فيديو صالحة.",
+      });
+      return;
+    }
 
-    res.status(200).json({
+    // ── Load REQUIRED real VOICE track ──
+    const voiceResult: any = await db.execute(sql`
+      SELECT asset_url FROM timeline_items
+      WHERE project_id = ${projectId}
+        AND track = 'VOICE'
+        AND asset_url IS NOT NULL
+      ORDER BY order_index ASC
+      LIMIT 1
+    `);
+    const voiceRows: any[] = voiceResult?.rows ?? voiceResult ?? [];
+    const audioUrl = voiceRows[0]?.asset_url;
+    if (!audioUrl || !looksLikeRealAsset(audioUrl)) {
+      res.status(409).json({
+        success: false,
+        error: "Real audio asset missing: no VOICE track with real asset URL exists in the timeline. Silent render fallback is disabled.",
+      });
+      return;
+    }
+
+    const job = await createRenderJob({
+      projectId,
+      watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
+      clips,
+      audioUrl,
+    });
+
+    // Kick off background execution
+    setImmediate(() => { void runRenderPipeline(job.id); });
+
+    res.status(201).json({
       success: true,
-      status: "completed",
-      videoUrl: rawVideoUrl,
-      syncedVideoUrl,
-      renderUrl: syncedVideoUrl,
-      stages: {
-        audio: "completed",
-        video: "completed",
-        lipsync: "completed",
-      },
+      jobId: job.id,
+      status: job.status,
+      message: "Render job queued",
     });
-  } catch (error) {
-    logger.error({ err: error }, "Render Pipeline failed");
-    res.status(502).json({
-      success: false,
-      error: "Render Pipeline execution failed",
-      message: error instanceof Error ? error.message : "Unknown pipeline error",
-    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
-}
+});
 
-// Register render routes
-router.post("/", handleRenderPipeline);
-router.post("/merge", handleRenderPipeline);
-router.post("/generate", handleRenderPipeline);
+// 2. GET render job status — reads from DB
+router.get(["/status/:id", "/render/status/:id"], async (req: Request, res: Response): Promise<void> => {
+  const jobId = String(req.params.id);
+  try {
+    const job = await getRenderJobStatus(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Render job not found" });
+      return;
+    }
+    res.json({
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      outputUrl: job.outputUrl,
+      outputPath: job.outputPath,
+      duration: job.duration,
+      sizeBytes: job.sizeBytes,
+      error: job.error,
+      createdAt: job.createdAt,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. GET latest render jobs for a project
+router.get("/projects/:id/render/jobs", async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(String(req.params.id));
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "Invalid project ID" });
+    return;
+  }
+  try {
+    const rows = await db
+      .select()
+      .from(renderJobsTable)
+      .where(eq(renderJobsTable.projectId, projectId))
+      .orderBy(desc(renderJobsTable.createdAt))
+      .limit(20);
+
+    res.json({
+      success: true,
+      projectId,
+      jobs: rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        outputUrl: r.outputUrl,
+        outputPath: r.outputPath,
+        duration: r.duration,
+        sizeBytes: r.sizeBytes,
+        error: r.error,
+        createdAt: r.createdAt,
+        startedAt: r.startedAt,
+        finishedAt: r.finishedAt,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

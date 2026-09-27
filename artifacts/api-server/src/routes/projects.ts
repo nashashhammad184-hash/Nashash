@@ -1,66 +1,60 @@
 import { Router, Request, Response } from "express";
 import { db } from "@workspace/db";
-import { projectsTable, shotsTable, editClipsTable } from "@workspace/db/schema";
-import { eq } from "drizzle-orm";
+import { projectsTable, projectActorsTable } from "@workspace/db/schema";
+import { eq, and } from "drizzle-orm";
 
 const router = Router();
 
 router.get("/", async (_req: Request, res: Response): Promise<void> => {
   try {
     const allProjects = await db.select().from(projectsTable);
-    res.json({ success: true, projects: allProjects });
+    res.json(allProjects);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "فشل في جلب المشاريع: " + err.message });
   }
 });
 
-router.post("/:id/auto-edit", async (req: Request, res: Response): Promise<void> => {
-  const { id } = req.params;
-  const numericId = parseInt(String(id), 10);
+router.get("/:id", async (req: Request, res: Response): Promise<void> => {
+  const numericId = parseInt(String(String(req.params.id)), 10);
+  if (isNaN(numericId)) { res.status(400).json({ error: "معرف غير صالح." }); return; }
+  try {
+    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, numericId));
+    if (!project) { res.status(404).json({ error: "المشروع غير موجود." }); return; }
+    res.json(project);
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
 
-  if (isNaN(numericId)) {
-    res.status(400).json({ error: "Invalid project ID format. Expected numeric ID." });
+router.post("/", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { title, synopsis, worldId, projectType, style } = req.body;
+    if (!title) { res.status(400).json({ error: "عنوان المشروع مطلوب." }); return; }
+    const [newProject] = await db.insert(projectsTable).values({
+      title: title.trim(), synopsis: synopsis ? synopsis.trim() : null,
+      worldId: worldId || "drama", projectType: projectType || "film", style: style || "drama",
+      status: "pre_production", isArchived: false, updatedAt: new Date()
+    }).returning();
+    res.status(201).json(newProject);
+  } catch (err: any) { res.status(500).json({ error: "فشل الحفظ: " + err.message }); }
+});
+
+router.post("/:id/actors", async (req: Request, res: Response): Promise<void> => {
+  const projectId = parseInt(String(String(req.params.id)), 10);
+  const { actorId, roleName, roleType } = req.body;
+  if (isNaN(projectId) || !actorId || !roleName) {
+    res.status(400).json({ error: "معطيات ناقصة: يجب تحديد الممثل واسم الشخصية الرقمية." });
     return;
   }
-
   try {
-    const project = await db.select().from(projectsTable).where(eq(projectsTable.id, numericId));
-    if (!project || project.length === 0) {
-      res.status(404).json({ error: "Project not found in DB" });
-      return;
-    }
-
-    const projectShots = await db.select().from(shotsTable).where(eq(shotsTable.projectId, numericId));
-    if (!projectShots || projectShots.length === 0) {
-      res.status(400).json({ error: "No real shots found for this project" });
-      return;
-    }
-
-    const clipsToInsert = projectShots.map((shot, index) => ({
-      projectId: numericId,
-      title: `Clip for Shot ${shot.id}`,
-      durationSeconds: shot.durationSeconds || 5,
-      clipOrder: index + 1,
-      trackType: "video",
-      startTime: 0,
-      endTime: Number(shot.durationSeconds || 5),
-      sourceStart: 0,
-      sourceEnd: Number(shot.durationSeconds || 5),
-      volume: 1.0
-    }));
-
-    const insertedClips = await db.insert(editClipsTable).values(clipsToInsert).returning();
-
-    res.json({
-      success: true,
-      projectId: numericId,
-      autoEdit: {
-        status: "completed",
-        decisions: insertedClips
-      }
-    });
+    const [assigned] = await db.insert(projectActorsTable).values({
+      projectId,
+      actorId: parseInt(String(actorId), 10),
+      roleName: roleName.trim(),
+      roleType: roleType || "supporting",
+      createdAt: new Date()
+    }).returning();
+    res.status(201).json(assigned);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "فشل تعيين الشخصية: " + err.message });
   }
 });
 

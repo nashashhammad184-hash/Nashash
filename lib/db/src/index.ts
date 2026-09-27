@@ -1,29 +1,35 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
-
-// استيراد الجداول الفردية بدقة لتأمين الأسماء المستعارة للمحرك
-import { productionJobsTable } from "./schema/production_jobs";
-import { shotsTable } from "./schema/shots";
+import fs from "fs";
+import path from "path";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision the database?"
-  );
+function getDatabaseUrl(): string {
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) {
+    return process.env.DATABASE_URL;
+  }
+  const envPaths = [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "../../.env"),
+    "/home/ubuntu/Nashash/.env"
+  ];
+  for (const p of envPaths) {
+    if (fs.existsSync(p)) {
+      const content = fs.readFileSync(p, "utf-8");
+      const match = content.match(/DATABASE_URL=["']?([^"'\n\r]+)["']?/);
+      if (match && match[1]) {
+        process.env.DATABASE_URL = match[1];
+        return match[1];
+      }
+    }
+  }
+  return process.env.DATABASE_URL || "";
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const dbUrl = getDatabaseUrl();
+export const pool = new Pool({ connectionString: dbUrl });
 export const db = drizzle(pool, { schema });
 
-// --- ربط التوافقية للمحرك مع البنية الحالية في السيرفر ---
-export const generationJobsTable = productionJobsTable;
-export const finalRenderJobsTable = productionJobsTable;
-export const realShotsTable = shotsTable;
-
-// تأمين جدول المشاهد إذا كان مسجلاً باسم بديل أو تصديره مرناً للمحرك
-export const realScenesTable = (schema as any).seriesScenesTable || shotsTable;
-
-// تصدير كافة الجداول المعتمدة بشكل آمن وصحيح
 export * from "./schema";

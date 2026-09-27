@@ -16,7 +16,8 @@ import EditingTab from "@/components/project/tabs/editing";
 import ArchiveTab from "@/components/project/tabs/archive";
 
 export default function ProjectDetail() {
-  const [match, params] = useRoute("/projects/:id");
+  const [match, rawParams] = useRoute("/projects/:id");
+  const params: any = rawParams;
   const projectId = params?.id ? parseInt(params.id, 10) : 0;
   
   const { data: project, isLoading, error } = useGetProject(projectId, { 
@@ -103,7 +104,7 @@ export default function ProjectDetail() {
               <DirectingTab project={project} />
             </TabsContent>
             <TabsContent value="production" className="mt-0 outline-none">
-              <ProductionTab project={project} />
+              <ProductionTab {...{ project } as any} />
             </TabsContent>
             <TabsContent value="editing" className="mt-0 outline-none">
               <EditingTab project={project} />

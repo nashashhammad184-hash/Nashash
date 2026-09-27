@@ -342,7 +342,14 @@ export const ListProjectClipsResponseItem = zod.object({
   "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "assetId": zod.string().nullish(),
+  "trackType": zod.string().optional(),
+  "startTime": zod.number().optional(),
+  "endTime": zod.number().optional(),
+  "sourceStart": zod.number().optional(),
+  "sourceEnd": zod.number().optional(),
+  "volume": zod.number().optional()
 })
 export const ListProjectClipsResponse = zod.array(ListProjectClipsResponseItem)
 
@@ -552,7 +559,14 @@ export const CreateClipBody = zod.object({
   "title": zod.string().min(1),
   "durationSeconds": zod.number().optional(),
   "notes": zod.string().optional(),
-  "clipOrder": zod.number()
+  "clipOrder": zod.number(),
+  "assetId": zod.string().optional(),
+  "trackType": zod.string().optional(),
+  "startTime": zod.number().optional(),
+  "endTime": zod.number().optional(),
+  "sourceStart": zod.number().optional(),
+  "sourceEnd": zod.number().optional(),
+  "volume": zod.number().optional()
 })
 
 export const CreateClipResponse = zod.object({
@@ -562,7 +576,14 @@ export const CreateClipResponse = zod.object({
   "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "assetId": zod.string().nullish(),
+  "trackType": zod.string().optional(),
+  "startTime": zod.number().optional(),
+  "endTime": zod.number().optional(),
+  "sourceStart": zod.number().optional(),
+  "sourceEnd": zod.number().optional(),
+  "volume": zod.number().optional()
 })
 
 
@@ -587,7 +608,14 @@ export const UpdateClipResponse = zod.object({
   "durationSeconds": zod.number().int().nullish(),
   "notes": zod.string().nullish(),
   "clipOrder": zod.number(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "assetId": zod.string().nullish(),
+  "trackType": zod.string().optional(),
+  "startTime": zod.number().optional(),
+  "endTime": zod.number().optional(),
+  "sourceStart": zod.number().optional(),
+  "sourceEnd": zod.number().optional(),
+  "volume": zod.number().optional()
 })
 
 

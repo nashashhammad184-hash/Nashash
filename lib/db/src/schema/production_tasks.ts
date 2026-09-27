@@ -2,6 +2,7 @@ import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
+import { actorsTable } from "./actors";
 
 export const productionTasksTable = pgTable("production_tasks", {
   id: serial("id").primaryKey(),
@@ -15,7 +16,10 @@ export const productionTasksTable = pgTable("production_tasks", {
   resultUrl: text("result_url"),
   errorMessage: text("error_message"),
   retryCount: integer("retry_count").notNull().default(0),
-  assignedActorId: integer("assigned_actor_id"),
+  
+  // تحديث الحقل للربط الصارم مع الممثلين مع حماية الحذف التلقائي الآمن - إصلاح 32
+  assignedActorId: integer("assigned_actor_id").references(() => actorsTable.id, { onDelete: "set null" }),
+  
   dueDate: text("due_date"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
