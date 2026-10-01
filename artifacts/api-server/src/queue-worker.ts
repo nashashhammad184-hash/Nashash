@@ -1,6 +1,7 @@
 import './loadEnv';
 import { runScriptJob } from './lib/services/ScriptJobRunner';
 import { GpuQueueService, JobRow } from './lib/services/GpuQueueService';
+import { runExternalVideoJob } from './lib/providers/video/externalVideoProvider';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -88,14 +89,19 @@ function scpFromGpu(remotePath, localPath) {
   });
 }
 
+const VIDEO_PROVIDER = (process.env.VIDEO_PROVIDER || 'kayangpu').toLowerCase();
 async function runVideoJob(job) {
+  if (VIDEO_PROVIDER === 'external') {
+    return await runExternalVideoJob(job);
+  }
   const p = job.payload || {};
   const { status, json } = await httpJson('POST', `${VIDEO_URL}/jobs/video`, p, 180_000);
   if (status !== 200 && status !== 202) throw new Error(`video submit HTTP ${status}: ${JSON.stringify(json)}`);
   const jid = json?.job_id || json?.id;
   if (!jid) throw new Error(`video: no job_id: ${JSON.stringify(json)}`);
 
-  const done = await pollWorkerJob(VIDEO_URL, jid, 3_600_000);
+  // KAYAN-TASK-19-FIX-B+ — I2V cold-load + sampling on A10G exceeds 1h; use 3h for VIDEO_JOB only.
+  const done = await pollWorkerJob(VIDEO_URL, jid, 10_800_000);
   const remoteMp4 = done?.output_path || done?.result?.output_path
     || done?.result?.mp4_path || done?.result?.path;
   if (!remoteMp4) throw new Error(`video: no remote mp4 path: ${JSON.stringify(done).slice(0,500)}`);
@@ -145,6 +151,52 @@ async function runLlmJob(job) {
   return { result, worker_jid: jid };
 }
 
+
+const LIPSYNC_URL = process.env.LIPSYNC_WORKER_URL || VIDEO_URL;
+async function runLipSyncJob(job) {
+  const p = job.payload || {};
+  const video_path = p.video_path;
+  const audio_path = p.audio_path;
+  if (!video_path || !audio_path) {
+    throw new Error(`lipsync: missing video_path/audio_path in payload`);
+  }
+  const { status, json } = await httpJson('POST', `${LIPSYNC_URL}/jobs/lipsync`, { video_path, audio_path }, 60_000);
+  if (status !== 200 && status !== 202) throw new Error(`lipsync submit HTTP ${status}: ${JSON.stringify(json)}`);
+  const jid = json?.job_id || json?.id;
+  if (!jid) throw new Error(`lipsync: no job_id: ${JSON.stringify(json)}`);
+  const done = await pollWorkerJob(LIPSYNC_URL, jid, 3_600_000);
+  if (done?.skipped && done?.reason === 'no_face_in_video') {
+    const outPath = done?.output_path || video_path;
+    return {
+      skipped: true,
+      reason: 'no_face_in_video',
+      syncedVideoPath: outPath,
+      syncedVideoUrl: `/uploads/videos/${path.basename(outPath)}`,
+      worker_jid: jid,
+      note: done?.note || 'lipsync skipped: video contains no human face',
+    };
+  }
+  const remoteMp4 = done?.output_path || done?.result?.output_path
+    || done?.result?.mp4_path || done?.result?.path;
+  if (!remoteMp4) throw new Error(`lipsync: no remote mp4 path: ${JSON.stringify(done).slice(0,500)}`);
+  fs.mkdirSync(NASHASH_VIDEO_DIR, { recursive: true });
+  const fileName = `lipsync_${jid}.mp4`;
+  const localPath = path.join(NASHASH_VIDEO_DIR, fileName);
+  await scpFromGpu(remoteMp4, localPath);
+  if (!fs.existsSync(localPath) || fs.statSync(localPath).size === 0) {
+    throw new Error(`lipsync: scp produced missing/empty file at ${localPath}`);
+  }
+  const { stdout } = await pExec('ffprobe', [
+    '-v','error','-show_entries','format=duration','-show_entries','stream=codec_type','-of','json',
+    localPath,
+  ]);
+  const probe = JSON.parse(stdout);
+  const dur = Number(probe?.format?.duration ?? 0);
+  const hasVideo = (probe?.streams || []).some(s => s.codec_type === 'video');
+  if (!(dur > 0) || !hasVideo) throw new Error(`lipsync: ffprobe failed (dur=${dur}, hasVideo=${hasVideo})`);
+  return { mp4_path: localPath, remote_path: remoteMp4, duration: dur, worker_jid: jid, probe };
+}
+
 async function processOne() {
   const next = await GpuQueueService.nextQueued();
   if (!next) return false;
@@ -153,7 +205,20 @@ async function processOne() {
   await GpuQueueService.markRunning(next.id);
   const hb = setInterval(() => GpuQueueService.heartbeat(next.id).catch(()=>{}), HEARTBEAT_MS);
   try {
-    const result = next.kind === 'VIDEO_JOB' ? await runVideoJob(next) : await runLlmJob(next);
+    let result: any;
+    switch (next.kind) {
+      case 'VIDEO_JOB':
+        result = await runVideoJob(next);
+        break;
+      case 'LLM_JOB':
+        result = await runLlmJob(next);
+        break;
+      case 'LIP_SYNC_JOB':
+        result = await runLipSyncJob(next);
+        break;
+      default:
+        throw new Error(`Unsupported GPU job kind: ${next.kind}`);
+    }
     await GpuQueueService.markCompleted(next.id, result);
     console.log(`[queue] COMPLETED ${next.id} (${next.kind})`);
   } catch (err) {

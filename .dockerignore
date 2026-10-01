@@ -1,0 +1,43 @@
+# Node
+node_modules
+**/node_modules
+**/dist
+**/dist.before-generation-settings
+npm-debug.log*
+yarn-error.log*
+
+# Git / docs / editors
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.md
+!README.md
+
+# Local env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs / tmp / uploads (user data)
+logs/
+tmp/
+.tmp/
+uploads/
+*.log
+
+# Backups
+*.bak
+*.bak-*
+*.broken
+*.before-*
+*.pre_*
+NASHASH-MIGRATION-SAFE
+NASHASH-MIGRATION-SAFE.tar.gz
+NASHASH-MIGRATION-SAFE.sha256
+NASHASH-MIGRATION-PRIVATE
+
+# OS
+.DS_Store
+Thumbs.db
