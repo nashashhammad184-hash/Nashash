@@ -9,12 +9,14 @@
  */
 import type { VideoPayload, VideoProviderResult } from "./types";
 import { waveSpeedProvider } from "./waveSpeedProvider";
+import { mockProvider } from "./mockProvider";
 
 const PROVIDER_KIND = (process.env.VIDEO_EXTERNAL_KIND || "wavespeed").toLowerCase();
 const MAX_COST_USD = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
 
 function getProvider() {
   if (PROVIDER_KIND === "wavespeed") return waveSpeedProvider;
+  if (PROVIDER_KIND === "mock") return mockProvider;
   throw new Error(`Unknown VIDEO_EXTERNAL_KIND: ${PROVIDER_KIND}`);
 }
 
