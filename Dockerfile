@@ -65,8 +65,8 @@ RUN mkdir -p \
       logs
 
 # Non-root user
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
+RUN chown -R node:node /app
+USER node
 
 # PORT is provided by Northflank at runtime
 ENV PORT=3000
