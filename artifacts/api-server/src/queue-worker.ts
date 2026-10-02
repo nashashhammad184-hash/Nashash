@@ -152,8 +152,31 @@ async function runLlmJob(job) {
 }
 
 
-const LIPSYNC_URL = process.env.LIPSYNC_WORKER_URL || VIDEO_URL;
+const LIPSYNC_ENABLED = (process.env.LIPSYNC_ENABLED || 'false').toLowerCase() === 'true';
+const LIPSYNC_URL_EXPLICIT = process.env.LIPSYNC_WORKER_URL || '';
 async function runLipSyncJob(job) {
+  // KAYAN-B3-FIX: LipSync requires a GPU worker. When disabled, do not
+  // attempt any GPU call, do not enqueue a GPU job, and do not fail the
+  // pipeline. Mark as skipped with an explicit reason.
+  if (!LIPSYNC_ENABLED) {
+    return {
+      skipped: true,
+      reason: 'LIPSYNC_DISABLED_NO_GPU',
+      syncedVideoPath: job.payload?.video_path || null,
+      syncedVideoUrl: null,
+      worker_jid: null,
+      note: 'LIPSYNC_ENABLED=false — no GPU worker configured',
+    };
+  }
+  // Enabled: require an explicit worker URL. No silent fallback to localhost.
+  if (!LIPSYNC_URL_EXPLICIT) {
+    const err: any = new Error(
+      'lipsync MISCONFIGURATION: LIPSYNC_ENABLED=true but LIPSYNC_WORKER_URL is not set',
+    );
+    err.category = 'PERMANENT';
+    throw err;
+  }
+  const LIPSYNC_URL = LIPSYNC_URL_EXPLICIT;
   const p = job.payload || {};
   const video_path = p.video_path;
   const audio_path = p.audio_path;
