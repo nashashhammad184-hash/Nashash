@@ -1,151 +1,81 @@
 /**
- * External Video Provider — fal.ai HunyuanVideo 1.5 I2V
+ * External video provider dispatcher.
  *
- * Selected when VIDEO_PROVIDER=external in .env.
- * KayanGPU remains default (VIDEO_PROVIDER=kayangpu or unset).
+ * Reads VIDEO_PROVIDER env var. Only "external" reaches here.
+ * Inside "external", the specific provider is chosen by VIDEO_EXTERNAL_KIND.
+ * Currently: "wavespeed" (default).
  *
- * This module implements the SAME contract as queue-worker.runVideoJob:
- *   input:  job { payload }  (payload.reference_image_base64, prompt, task='i2v', ...)
- *   output: { mp4_path, remote_path, duration, worker_jid, probe, provider }
+ * Cost guard enforces MAX_VIDEO_COST_USD before any submit call.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import type { VideoPayload, VideoProviderResult } from "./types";
+import { waveSpeedProvider } from "./waveSpeedProvider";
 
-const pExec = promisify(execFile);
+const PROVIDER_KIND = (process.env.VIDEO_EXTERNAL_KIND || "wavespeed").toLowerCase();
+const MAX_COST_USD = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
 
-const FAL_KEY = process.env.EXTERNAL_VIDEO_API_KEY || "";
-const FAL_SUBMIT_URL =
-  process.env.EXTERNAL_VIDEO_SUBMIT_URL ||
-  "https://queue.fal.run/fal-ai/hunyuan-video-v1.5/image-to-video";
-const FAL_STATUS_BASE =
-  process.env.EXTERNAL_VIDEO_STATUS_BASE ||
-  "https://queue.fal.run/fal-ai/hunyuan-video-v1.5/requests";
-const NASHASH_VIDEO_DIR =
-  process.env.NASHASH_VIDEO_DIR ||
-  path.resolve(process.cwd(), "uploads", "videos");
-const POLL_MS = 5000;
-const MAX_WAIT_MS = 30 * 60 * 1000;
-
-function classifyHttp(code: number): string {
-  if (code === 401 || code === 403) return "NON_RETRYABLE";
-  if (code === 402) return "INSUFFICIENT_CREDITS";
-  if (code === 429) return "RATE_LIMIT";
-  if (code >= 500) return "PROVIDER_ERROR";
-  if (code >= 400) return "INVALID_INPUT";
-  return "PROVIDER_ERROR";
+function getProvider() {
+  if (PROVIDER_KIND === "wavespeed") return waveSpeedProvider;
+  throw new Error(`Unknown VIDEO_EXTERNAL_KIND: ${PROVIDER_KIND}`);
 }
 
-export async function runExternalVideoJob(job: { payload: any }) {
+export async function runExternalVideoJob(job: { payload: any }): Promise<VideoProviderResult> {
   const p = job.payload || {};
-  if (!FAL_KEY) throw new Error("EXTERNAL_VIDEO_API_KEY is not set");
-  if (p.task !== "i2v")
-    throw new Error(`external provider currently supports i2v only; got task=${p.task}`);
-  if (!p.reference_image_base64 || typeof p.reference_image_base64 !== "string")
-    throw new Error("external i2v requires reference_image_base64");
+  const provider = getProvider();
 
-  const imageUri = p.reference_image_base64.startsWith("data:")
-    ? p.reference_image_base64
-    : `data:image/jpeg;base64,${p.reference_image_base64}`;
-
-  const body: Record<string, unknown> = {
+  const payload: VideoPayload = {
+    task: (p.task === "i2v" ? "i2v" : "t2v"),
     prompt: p.prompt,
-    image_url: imageUri,
     seed: p.seed ?? 123,
-    num_frames: p.num_frames ?? 81,
-    fps: p.fps ?? 16,
     resolution: p.resolution ?? "480p",
-    aspect_ratio: p.aspect_ratio ?? "16:9",
+    durationSeconds: p.duration_seconds ?? p.durationSeconds ?? 5,
+    fps: p.fps ?? 16,
+    aspectRatio: p.aspect_ratio ?? p.aspectRatio ?? "16:9",
+    numFrames: p.num_frames ?? p.numFrames,
+    negativePrompt: p.negative_prompt ?? p.negativePrompt,
+    referenceImageBase64: p.reference_image_base64 ?? p.referenceImageBase64,
+    steps: p.steps,
   };
-  if (p.negative_prompt) body.negative_prompt = p.negative_prompt;
 
-  const submit = await fetch(FAL_SUBMIT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Key ${FAL_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!submit.ok) {
-    const t = await submit.text().catch(() => "");
-    const err: any = new Error(`external submit HTTP ${submit.status}: ${t.slice(0, 400)}`);
-    err.category = classifyHttp(submit.status);
+  // --- Cost guard ---
+  const estCost = await provider.estimateCost(payload);
+  if (estCost > MAX_COST_USD) {
+    const err: any = new Error(
+      `Cost guard: estimated $${estCost.toFixed(3)} exceeds MAX_VIDEO_COST_USD=$${MAX_COST_USD}`,
+    );
+    err.category = "BILLING" as const;
     throw err;
   }
-  const submitJson: any = await submit.json();
-  const requestId: string =
-    submitJson.request_id || submitJson.requestId || submitJson.id;
-  if (!requestId) throw new Error(`external: no request_id in response`);
 
-  const statusUrl = `${FAL_STATUS_BASE}/${requestId}/status`;
-  const resultUrl = `${FAL_STATUS_BASE}/${requestId}`;
-  const deadline = Date.now() + MAX_WAIT_MS;
-  let last: any = null;
+  // --- Submit ---
+  const { providerJobId } = await provider.submit(payload);
+  console.log(`[external:${provider.name}] submitted job ${providerJobId}, est $${estCost.toFixed(3)}`);
+
+  // --- Poll ---
+  const deadline = Date.now() + 30 * 60 * 1000;
+  let lastStatus = "queued";
   while (Date.now() < deadline) {
-    const r = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${FAL_KEY}` },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (r.ok) {
-      last = await r.json();
-      const st = (last?.status || "").toUpperCase();
-      if (st === "COMPLETED") break;
-      if (st === "FAILED" || st === "ERROR") {
-        throw new Error(`external job failed: ${JSON.stringify(last).slice(0, 400)}`);
-      }
+    const st = await provider.poll(providerJobId);
+    lastStatus = st.status;
+    if (st.status === "completed") break;
+    if (st.status === "failed" || st.status === "cancelled") {
+      const err: any = new Error(
+        `[external:${provider.name}] job ${providerJobId} ${st.status}: ${st.error || ""}`,
+      );
+      err.category = provider.classifyError(err);
+      throw err;
     }
-    await new Promise((res) => setTimeout(res, POLL_MS));
+    await new Promise((r) => setTimeout(r, 5000));
   }
-  if (!last || (last.status || "").toUpperCase() !== "COMPLETED") {
-    const err: any = new Error(`external job ${requestId} timed out`);
-    err.category = "TIMEOUT";
+  if (lastStatus !== "completed") {
+    const err: any = new Error(`[external:${provider.name}] timeout after ${providerJobId}`);
+    err.category = "PROVIDER_TIMEOUT";
     throw err;
   }
 
-  const rr = await fetch(resultUrl, {
-    headers: { Authorization: `Key ${FAL_KEY}` },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!rr.ok) throw new Error(`external result HTTP ${rr.status}`);
-  const result: any = await rr.json();
-  const videoUrl: string =
-    result?.video?.url || result?.output?.video?.url || result?.video_url;
-  if (!videoUrl)
-    throw new Error(`external: no video.url in result: ${JSON.stringify(result).slice(0, 400)}`);
-
-  fs.mkdirSync(NASHASH_VIDEO_DIR, { recursive: true });
-  const fileName = `ext_${requestId}.mp4`;
-  const localPath = path.join(NASHASH_VIDEO_DIR, fileName);
-  const dl = await fetch(videoUrl, { signal: AbortSignal.timeout(180_000) });
-  if (!dl.ok) throw new Error(`external download HTTP ${dl.status}`);
-  const buf = Buffer.from(await dl.arrayBuffer());
-  fs.writeFileSync(localPath, buf);
-  if (!fs.existsSync(localPath) || fs.statSync(localPath).size === 0) {
-    throw new Error(`external: downloaded file missing/empty`);
-  }
-
-  const { stdout } = await pExec("ffprobe", [
-    "-v", "error",
-    "-show_entries", "format=duration",
-    "-show_entries", "stream=codec_type",
-    "-of", "json",
-    localPath,
-  ]);
-  const probe = JSON.parse(stdout);
-  const dur = Number(probe?.format?.duration ?? 0);
-  const hasVideo = (probe?.streams || []).some((s: any) => s.codec_type === "video");
-  if (!(dur > 0) || !hasVideo)
-    throw new Error(`external: ffprobe failed (dur=${dur}, hasVideo=${hasVideo})`);
-
-  return {
-    mp4_path: localPath,
-    remote_path: videoUrl,
-    duration: dur,
-    worker_jid: requestId,
-    probe,
-    provider: "external-fal-hunyuan-i2v",
-  };
+  // --- Download ---
+  const outputDir =
+    process.env.NASHASH_VIDEO_DIR ||
+    require("node:path").resolve(process.cwd(), "uploads", "videos");
+  const result = await provider.download(providerJobId, outputDir);
+  return result;
 }

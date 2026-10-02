@@ -5,8 +5,12 @@ const { Pool } = pg;
 const STALE_MS = 60_000;
 
 function pool(): pg.Pool {
-  const conn = process.env.QUEUE_DATABASE_URL || process.env.DATABASE_URL
-    || 'postgresql://kayan:kayan_queue_52741@127.0.0.1:5432/kayan';
+  const conn = process.env.QUEUE_DATABASE_URL || process.env.DATABASE_URL;
+  if (!conn) {
+    throw new Error(
+      'GpuQueueService: DATABASE_URL or QUEUE_DATABASE_URL must be set',
+    );
+  }
   return new Pool({ connectionString: conn, max: 5 });
 }
 
