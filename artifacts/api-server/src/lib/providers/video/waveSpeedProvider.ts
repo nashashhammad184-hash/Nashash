@@ -32,7 +32,7 @@ const SUBMIT_URL =
   "https://api.wavespeed.ai/api/v3/wavespeed-ai/hunyuan-video-1.5/image-to-video";
 const STATUS_URL =
   process.env.WAVESPEED_STATUS_URL ||
-  "https://api.wavespeed.ai/api/v3/predictions/{id}/status";
+  "https://api.wavespeed.ai/api/v3/predictions/{id}/result";
 const RESULT_URL =
   process.env.WAVESPEED_RESULT_URL ||
   "https://api.wavespeed.ai/api/v3/predictions/{id}";
@@ -129,6 +129,9 @@ export class WaveSpeedVideoProvider implements VideoProvider {
       failed: "failed",
       error: "failed",
       cancelled: "cancelled",
+      canceled: "cancelled",
+      timeout: "failed",
+      deleted: "cancelled",
     };
     const status = map[raw] || "running";
     return { status, error: j?.data?.error || j?.error };
