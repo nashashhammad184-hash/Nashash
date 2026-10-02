@@ -221,9 +221,19 @@ async function processOne() {
     }
     await GpuQueueService.markCompleted(next.id, result);
     console.log(`[queue] COMPLETED ${next.id} (${next.kind})`);
-  } catch (err) {
-    await GpuQueueService.markFailed(next.id, err?.message || String(err));
-    console.error(`[queue] FAILED ${next.id} (${next.kind}):`, err?.message || err);
+  } catch (err: any) {
+    const category = GpuQueueService.classifyError(err);
+    const attempts = Number(next.attempts ?? 0);
+    const maxAttempts = 3;
+    if (GpuQueueService.isRetryable(category) && attempts < maxAttempts) {
+      const reason = `retry [${category}] attempt ${attempts + 1}/${maxAttempts}: ${err?.message || String(err)}`;
+      await GpuQueueService.requeue(next.id, reason);
+      console.warn(`[queue] RETRY ${next.id} (${next.kind}) category=${category}:`, err?.message || err);
+    } else {
+      const finalMsg = `[${category}] ${err?.message || String(err)}`;
+      await GpuQueueService.markFailed(next.id, finalMsg);
+      console.error(`[queue] FAILED ${next.id} (${next.kind}) category=${category}:`, err?.message || err);
+    }
   } finally {
     clearInterval(hb);
     await GpuQueueService.releaseLock(next.id);

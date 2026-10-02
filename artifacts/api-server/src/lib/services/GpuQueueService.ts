@@ -107,6 +107,42 @@ export class GpuQueueService {
     );
   }
 
+  static classifyError(err: any): string {
+    const cat = err?.category;
+    if (typeof cat === "string" && cat.length > 0) return cat;
+    const http = err?.httpStatus;
+    if (http === 401 || http === 403) return "AUTH";
+    if (http === 402) return "BILLING";
+    if (http === 429) return "TRANSIENT";
+    if (http === 400 || http === 422) {
+      const body = String(err?.body || "").toLowerCase();
+      if (body.includes("policy") || body.includes("content")) return "CONTENT_POLICY";
+      return "INVALID_INPUT";
+    }
+    if (http >= 500) return "TRANSIENT";
+    const msg = String(err?.message || err || "").toLowerCase();
+    if (msg.includes("timeout") || msg.includes("etimedout") || msg.includes("econnreset")) {
+      return "PROVIDER_TIMEOUT";
+    }
+    return "PERMANENT";
+  }
+
+  static isRetryable(category: string): boolean {
+    return category === "TRANSIENT" || category === "PROVIDER_TIMEOUT";
+  }
+
+  static async requeue(jobId: string, reason: string): Promise<void> {
+    await db().query(
+      `UPDATE gpu_jobs
+          SET status='QUEUED',
+              error=$2,
+              started_at=NULL,
+              heartbeat_at=NULL
+        WHERE id=$1 AND status='RUNNING'`,
+      [jobId, reason.slice(0, 500)],
+    );
+  }
+
   static async markFailed(jobId: string, error: string): Promise<void> {
     await db().query(
       `UPDATE gpu_jobs
