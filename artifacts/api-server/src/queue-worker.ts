@@ -70,7 +70,7 @@ const NASHASH_VIDEO_DIR = process.env.NASHASH_VIDEO_DIR
   || path.resolve(process.cwd(), 'uploads', 'videos');
 
 function scpFromGpu(remotePath, localPath) {
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const proc = spawn('scp', [
       '-i', GPU_SSH_KEY,
       '-o', 'StrictHostKeyChecking=no',
