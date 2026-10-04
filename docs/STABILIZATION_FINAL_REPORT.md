@@ -24,7 +24,7 @@ PHASE H  Retry               PASS (transient-only requeue, max 3)
 PHASE I  Queue recovery      PASS (watchdog + recoverStale)
 PHASE J  Full pipeline       PASS (multi-shot, multi-dialogue loops)
 PHASE K  LipSync             PASS (LIPSYNC_ENABLED=false, safe skip)
-PHASE L  Voice               STATIC_PASS (runtime test requires rotated key)
+PHASE L  Voice               PASS (Deepgram rotated, runtime test 200 OK, 7.2KB MP3)
 PHASE M  Rendering           PASS (drawtext + subtitles burn-in real)
 PHASE N  Database            PASS (0 orphans, no stale RUNNING)
 PHASE O  Security            PASS (fail-closed auth, SSRF guard)
@@ -51,7 +51,7 @@ RECOVERY       = PASS
 VIDEO_PROVIDER = PASS (dispatcher + 2 adapters + mock)
 WAVESPEED      = PASS (adapter ready, no key yet)
 LIPSYNC        = PASS (disabled safely)
-VOICE          = PASS (rotation pending)
+VOICE          = PASS (rotated, Docker + Northflank runtime verified)
 RENDER         = PASS (real burn-in)
 FULL_PIPELINE  = PASS (multi-shot loops)
 NORTHFLANK     = PASS
@@ -87,3 +87,22 @@ PRODUCTION READINESS
 Northflank production-ready = YES
 WaveSpeed adapter ready     = YES (awaiting API key)
 First paid video test ready = YES (pending user approval + API key)
+
+
+================================================================
+VOICE-01 (Deepgram Rotation + Runtime Verification)
+================================================================
+DEEPGRAM_ROTATION     = PASS
+VOICE_RUNTIME         = PASS (Northflank + Docker)
+OLD_KEY_EXPOSURE      = PASS (not in Git, not in Docker image FS)
+DOCKER_SECRET_SCAN    = PASS (no secrets in Config.Env, none on FS)
+NORTHFLANK_DEPLOY     = PASS (handy-came build Deployed)
+READY_FOR_WAVESPEED   = YES
+
+Evidence:
+- Northflank voice: HTTP 200, provider=deepgram-tts, base64_len=9616
+- Docker voice:     HTTP 200, provider=deepgram-tts, base64_len=9824
+- Decoded MP3:      7210 bytes, fff360 header, codec=mp3, 22050Hz, 1ch, 1.20s
+- Logs contain no Authorization header, no Token, no DEEPGRAM_API_KEY value
+- Old key (7db4...) removed from Deepgram console
+- New key stored only in Northflank Environment + local .env (not in Git)
