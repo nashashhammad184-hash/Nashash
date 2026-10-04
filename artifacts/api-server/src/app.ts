@@ -4,7 +4,22 @@ import path from 'path';
 import apiRouter from './routes/index';
 
 const app = express();
-app.use(cors());
+// KAYAN-CORS-01: match index.ts strict allow-list. This file is not
+// the build entry (build.mjs uses src/index.ts), but kept consistent.
+const NODE_ENV_VAL = (process.env.NODE_ENV || "").toLowerCase();
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",").map((o) => o.trim()).filter((o) => o.length > 0);
+app.use(cors(
+  NODE_ENV_VAL === "production"
+    ? {
+        origin: (origin, cb) => {
+          if (!origin) return cb(null, true);
+          if (CORS_ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+          return cb(null, false); // origin not allowed — no CORS headers emitted
+        },
+      }
+    : { origin: true },
+));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 

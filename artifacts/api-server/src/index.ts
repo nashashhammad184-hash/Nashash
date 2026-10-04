@@ -11,11 +11,29 @@ import { startProductionWorker } from "./lib/productionEngine";
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: "*",
+// KAYAN-CORS-01: strict allow-list in production. Dev falls back to permissive.
+const NODE_ENV_VAL = (process.env.NODE_ENV || "").toLowerCase();
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter((o) => o.length > 0);
+
+const corsOptions: Parameters<typeof cors>[0] = {
   methods: ["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+if (NODE_ENV_VAL === "production") {
+  corsOptions.origin = (origin, cb) => {
+    // Same-origin / server-to-server (no Origin header) is allowed.
+    if (!origin) return cb(null, true);
+    if (CORS_ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(null, false); // origin not allowed — no CORS headers emitted
+  };
+} else {
+  // Development: permissive.
+  corsOptions.origin = true;
+}
+app.use(cors(corsOptions));
 
 app.use(compression());
 app.use(express.json({ limit: "50mb" }));
