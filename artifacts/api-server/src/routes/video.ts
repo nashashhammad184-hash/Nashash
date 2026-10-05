@@ -106,6 +106,13 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
     return;
   }
 
+  // KAYAN-I2V-DEBUG — temporary marker to confirm the new route is deployed.
+  logger.info({
+    __marker: "KAYAN-I2V-DEBUG-v1",
+    __task_resolved: __d.task,
+    __has_ref: !!__d.referenceImageBase64,
+  }, "[I2V-DEBUG] route entry");
+
   // KAYAN-TASK-02 — explicit I2V contract validation BEFORE any GPU submission.
   const __d = parsed.data as any;
   const __task: 't2v' | 'i2v' = __d.task === 'i2v' ? 'i2v' : 't2v';
