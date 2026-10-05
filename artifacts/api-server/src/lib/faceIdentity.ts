@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { db, actorsTable } from "@workspace/db";
 import { assertSyntheticReference } from "./legalGuard";
+import { validateCanonicalFaceQuality } from "./canonicalFaceQuality";
 import { generateVideoKayanGpu } from "./kayanGpuProvider";
 import { logger } from "./logger";
 
@@ -94,6 +95,22 @@ export async function generateCanonicalFaceImage(
     characterMasterPrompt: (actor as any).characterMasterPrompt,
   });
 
+  // KAYAN-TASK-22: canonical-face uses T2V, which the external (WaveSpeed)
+  // provider does NOT support. In production with VIDEO_PROVIDER=external,
+  // refuse with a clear error instead of hitting WaveSpeed as T2V.
+  const videoProvider = (process.env.VIDEO_PROVIDER || "kayangpu").toLowerCase();
+  if (videoProvider !== "kayangpu") {
+    const err: any = new Error(
+      "CANONICAL_FACE_T2V_UNAVAILABLE: canonical face generation requires the " +
+      "KayanGPU T2V path, but VIDEO_PROVIDER=" + videoProvider + ". " +
+      "External providers (WaveSpeed) do not support T2V. Configure a KayanGPU " +
+      "worker or use an actor reference image instead.",
+    );
+    err.code = "CANONICAL_FACE_T2V_UNAVAILABLE";
+    err.statusCode = 503;
+    throw err;
+  }
+
   // 17 frames = minimum legal by worker ((n-1)%4==0, n in [17,121]).
   // ~1 second at 16fps — fastest T2V the worker accepts.
   const videoResult = await generateVideoKayanGpu({
@@ -122,11 +139,24 @@ export async function generateCanonicalFaceImage(
     throw new Error(`canonical face write failed (size=${st.size})`);
   }
 
+  // KAYAN-TASK-04 — Quality Gate BEFORE any DB write.
+  const q = await validateCanonicalFaceQuality(abs);
+  if (!q.pass) {
+    try { fs.unlinkSync(abs); } catch {}
+    logger.warn({ actorId, reasons: q.reasons, metrics: q.metrics }, "canonical face rejected by quality gate");
+    const err: any = new Error(`CANONICAL_FACE_QUALITY_REJECTED: ${q.reasons.join(", ")}`);
+    err.statusCode = 422;
+    err.code = "CANONICAL_FACE_QUALITY_REJECTED";
+    throw err;
+  }
+
   const relUrl = `/uploads/canonical_faces/${filename}`;
 
   // KAYAN-LEGAL-00 — enforce synthetic-reference policy on the produced asset.
   assertSyntheticReference(relUrl, { syntheticAcknowledged: true });
 
+  // Quality gate passed — only now persist. A previously-valid canonical face
+  // is only replaced by a passing candidate (never by a rejected one).
   await db
     .update(actorsTable)
     .set({ canonicalFaceImagePath: relUrl } as any)

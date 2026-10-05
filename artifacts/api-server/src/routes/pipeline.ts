@@ -18,6 +18,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { and, desc, eq, asc } from "drizzle-orm";
 import {
   db,
@@ -99,6 +100,35 @@ function assertFile(p: string, label: string): void {
   if (!fs.existsSync(p)) throw new Error(`${label}: file not found at ${p}`);
   const st = fs.statSync(p);
   if (!st.isFile() || st.size === 0) throw new Error(`${label}: file is empty at ${p}`);
+}
+// KAYAN-TASK-06 — verify a real audio asset (stream present, duration>0, size>0).
+async function assertRealAudioFile(p: string, label: string): Promise<{ duration: number; sizeBytes: number }> {
+  assertFile(p, label);
+  const st = fs.statSync(p);
+  const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+    const proc = spawn("ffprobe", [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=codec_type,duration",
+      "-show_entries", "format=duration",
+      "-of", "json",
+      p,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    proc.stdout.on("data", (d) => { out += d.toString(); });
+    proc.stderr.on("data", (d) => { err += d.toString(); });
+    proc.on("error", reject);
+    proc.on("close", (code) => code === 0 ? resolve({ stdout: out }) : reject(new Error(`ffprobe ${label} exit ${code}: ${err.slice(0,200)}`)));
+  });
+  const j = JSON.parse(stdout || "{}");
+  const stream = (j.streams || [])[0];
+  if (!stream || stream.codec_type !== "audio") {
+    throw new Error(`${label}: no audio stream (ffprobe=${stdout.slice(0,200)})`);
+  }
+  const dur = Number(stream.duration ?? j?.format?.duration ?? 0);
+  if (!(dur > 0)) throw new Error(`${label}: audio duration <= 0 (${dur})`);
+  if (st.size === 0) throw new Error(`${label}: audio file size 0`);
+  return { duration: dur, sizeBytes: st.size };
 }
 
 async function updateRun(
@@ -225,163 +255,282 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     await completeStage("shots", { count: shots.length, shotIds: shots.map((s) => s.id) });
 
     // ------------------------------------------------------------
-    // 4. Voice — real Deepgram TTS for the first shot with dialogue
+    // 4. Voice — real Deepgram TTS per shot that has dialogue
     // ------------------------------------------------------------
     await beginStage("voice");
-    const firstDialogue = shots.find((s) => (s.dialogue || "").trim().length > 0);
-    if (!firstDialogue) throw new Error("Voice stage requires a shot with dialogue to synthesize");
+    // KAYAN-TASK-06 — one independent VOICE_GEN per shot that has dialogue.
+    // Policy for input.voiceText: it is only honored as an override when there
+    // is EXACTLY ONE dialogue shot in the project. In multi-shot productions it
+    // is IGNORED (never masks per-shot dialogues).
+    const dialogueShots = shots.filter((s) => (s.dialogue || "").trim().length > 0);
+    if (dialogueShots.length === 0) {
+      throw new Error("Voice stage requires at least one shot with dialogue to synthesize");
+    }
+    const singleDialogueOverride =
+      dialogueShots.length === 1 && input.voiceText && input.voiceText.trim().length > 0
+        ? input.voiceText.trim()
+        : null;
 
-    const voiceText = (input.voiceText || firstDialogue.dialogue || "").trim();
-    if (!voiceText) throw new Error("Voice text is empty");
+    type VoiceEntry = { audioPath: string; audioUrl: string; text: string; duration: number; sizeBytes: number; jobId: string };
+    const perShotVoice: Record<number, VoiceEntry> = {};
 
-    const voiceJob = await createProductionJob("VOICE_GEN", {
-      projectId,
-      text: voiceText,
-    });
-    const voiceDone = await waitForJob(voiceJob.id);
-    if (voiceDone.status !== "completed") throw new Error(`VOICE_GEN failed: ${voiceDone.error || "unknown"}`);
-    const voiceOutput = (voiceDone.output || {}) as any;
-    const audioPath = voiceOutput.audioPath as string;
-    const audioUrl = voiceOutput.audioUrl as string;
-    if (!audioPath || !isRealAsset(audioUrl)) throw new Error("VOICE_GEN returned no real audio asset");
-    assertFile(audioPath, "voice audio");
-    await completeStage("voice", { audioPath, audioUrl, provider: "deepgram" });
+    for (const shot of dialogueShots) {
+      const voiceText = (singleDialogueOverride ?? shot.dialogue ?? "").trim();
+      if (!voiceText) continue;
 
-    // ------------------------------------------------------------
-    // 5. Video — real KayanGPU VIDEO_JOB (or existing shot.videoUrl if skipVideo)
-    // ------------------------------------------------------------
-    await beginStage("video");
-    let videoPath: string;
-    let videoUrl: string;
-
-    if (input.skipVideo) {
-      const shotVideo = (firstDialogue.videoUrl || "").trim();
-      if (!isRealAsset(shotVideo)) {
-        throw new Error("skipVideo=true but shot.videoUrl is not a real asset");
-      }
-      // Map /uploads/... → absolute local path
-      videoPath = shotVideo.startsWith("/uploads/")
-        ? path.resolve(process.cwd(), shotVideo.replace(/^\//, ""))
-        : shotVideo;
-      videoUrl = shotVideo;
-      assertFile(videoPath, "existing shot video");
-      await completeStage("video", { videoPath, videoUrl, provider: "existing-shot" });
-    } else {
-      const prompt = (input.prompt || firstDialogue.description || project.title || "").trim();
-      if (!prompt) throw new Error("Video prompt is empty");
-
-      const videoJob = await createProductionJob("VIDEO_GEN", {
+      const payload: Record<string, unknown> = {
         projectId,
-        prompt,
-        ...(input.task === "i2v" ? { task: "i2v" as const } : {}),
-        ...(input.referenceImageBase64 ? { referenceImageBase64: input.referenceImageBase64 } : {}),
-        ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
-        ...(input.fps != null ? { fps: input.fps } : {}),
-        ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
-        ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
-        ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
-      });
-      const videoDone = await waitForJob(videoJob.id);
-      if (videoDone.status !== "completed") throw new Error(`VIDEO_GEN failed: ${videoDone.error || "unknown"}`);
-      const videoOutput = (videoDone.output || {}) as any;
-      videoPath = videoOutput.videoPath as string;
-      videoUrl = videoOutput.videoUrl as string;
-      if (!videoPath || !isRealAsset(videoUrl)) throw new Error("VIDEO_GEN returned no real video asset");
-      assertFile(videoPath, "video");
-      await completeStage("video", { videoPath, videoUrl, provider: "kayangpu" });
+        shotId: shot.id,
+        dialogueId: shot.id,                 // shot.id is the canonical dialogue anchor in this schema
+        text: voiceText,
+      };
+      // character/voice association (schema-level: shots.voice_id, actors.voiceId)
+      const shotVoiceId = (shot as any).voice_id as string | undefined;
+      if (shotVoiceId) payload.voiceId = shotVoiceId;
+
+      const voiceJob = await createProductionJob("VOICE_GEN", payload);
+      const voiceDone = await waitForJob(voiceJob.id);
+      if (voiceDone.status !== "completed") {
+        await db.update(shotsTable)
+          .set({ audioStatus: "FAILED" } as any)
+          .where(eq(shotsTable.id, shot.id));
+        throw new Error(`VOICE_GEN failed for shot ${shot.id}: ${voiceDone.error || "unknown"}`);
+      }
+      const voiceOutput = (voiceDone.output || {}) as any;
+      const audioPath = voiceOutput.audioPath as string;
+      const audioUrl = voiceOutput.audioUrl as string;
+      if (!audioPath || !isRealAsset(audioUrl)) {
+        await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
+        throw new Error(`VOICE_GEN shot ${shot.id} returned no real audio asset`);
+      }
+      if (audioUrl.startsWith("data:")) {
+        await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
+        throw new Error(`VOICE_GEN shot ${shot.id} returned a data: URL (not allowed in production)`);
+      }
+
+      const { duration, sizeBytes } = await assertRealAudioFile(audioPath, `voice audio shot ${shot.id}`);
+
+      // Persist per-shot association in shots table
+      await db.update(shotsTable)
+        .set({ audioUrl, audioStatus: "COMPLETED" } as any)
+        .where(eq(shotsTable.id, shot.id));
+
+      perShotVoice[shot.id] = { audioPath, audioUrl, text: voiceText, duration, sizeBytes, jobId: voiceJob.id };
     }
 
-    // ------------------------------------------------------------
-    // 6. Lip Sync — real LIP_SYNC_JOB via queue (skip if requested)
-    // ------------------------------------------------------------
-    let syncedVideoPath = videoPath;
-    let syncedVideoUrl = videoUrl;
+    if (Object.keys(perShotVoice).length === 0) {
+      throw new Error("Voice stage produced no audio assets");
+    }
+    await completeStage("voice", {
+      provider: "deepgram",
+      shotsVoiced: Object.keys(perShotVoice).length,
+      perShot: Object.entries(perShotVoice).map(([id, v]) => ({
+        shotId: Number(id),
+        jobId: v.jobId,
+        audioPath: v.audioPath,
+        audioUrl: v.audioUrl,
+        duration: v.duration,
+        sizeBytes: v.sizeBytes,
+      })),
+    });
 
+    // ------------------------------------------------------------
+    // 5. Video — real KayanGPU VIDEO_JOB per shot (or existing shot.videoUrl if skipVideo)
+    // ------------------------------------------------------------
+    await beginStage("video");
+    // KAYAN-TASK-22: Full Pipeline video stage is I2V-only. Reject before
+    // creating any VIDEO_GEN job — no T2V fallback, no reference-less I2V.
+    if (!input.skipVideo) {
+      if (input.task !== "i2v") {
+        throw Object.assign(
+          new Error(
+            "VIDEO_I2V_REQUIRED: Full Pipeline video stage requires task='i2v' " +
+            "(received " + JSON.stringify(input.task) + ")"
+          ),
+          { code: "VIDEO_I2V_REQUIRED" },
+        );
+      }
+      const refB64 = (input.referenceImageBase64 || "").trim();
+      if (!refB64 || refB64.length < 64) {
+        throw Object.assign(
+          new Error(
+            "I2V_REFERENCE_IMAGE_REQUIRED: Full Pipeline requires " +
+            "referenceImageBase64 (>=64 chars) when task='i2v'"
+          ),
+          { code: "I2V_REFERENCE_IMAGE_REQUIRED" },
+        );
+      }
+    }
+    const perShotVideo: Record<number, { videoPath: string; videoUrl: string }> = {};
+    for (const shot of shots) {
+      if (input.skipVideo) {
+        const shotVideo = (shot.videoUrl || "").trim();
+        if (!isRealAsset(shotVideo)) {
+          throw new Error(`skipVideo=true but shot ${shot.id}.videoUrl is not a real asset`);
+        }
+        const vp = shotVideo.startsWith("/uploads/")
+          ? path.resolve(process.cwd(), shotVideo.replace(/^\//, ""))
+          : shotVideo;
+        assertFile(vp, `existing shot ${shot.id} video`);
+        perShotVideo[shot.id] = { videoPath: vp, videoUrl: shotVideo };
+      } else {
+        const prompt = (shot.description || project.title || "").trim();
+        if (!prompt) throw new Error(`Video prompt is empty for shot ${shot.id}`);
+        const videoJob = await createProductionJob("VIDEO_GEN", {
+          projectId,
+          prompt,
+          shotId: shot.id,
+          task: "i2v" as const,
+          referenceImageBase64: input.referenceImageBase64,
+          ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
+          ...(input.fps != null ? { fps: input.fps } : {}),
+          ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
+          ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
+          ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+        });
+        const videoDone = await waitForJob(videoJob.id);
+        if (videoDone.status !== "completed") {
+          throw new Error(`VIDEO_GEN failed for shot ${shot.id}: ${videoDone.error || "unknown"}`);
+        }
+        const videoOutput = (videoDone.output || {}) as any;
+        const vp = videoOutput.videoPath as string;
+        const vu = videoOutput.videoUrl as string;
+        if (!vp || !isRealAsset(vu)) throw new Error(`VIDEO_GEN shot ${shot.id} returned no real video asset`);
+        assertFile(vp, `video shot ${shot.id}`);
+        perShotVideo[shot.id] = { videoPath: vp, videoUrl: vu };
+      }
+    }
+    await completeStage("video", {
+      provider: input.skipVideo ? "existing-shot" : "kayangpu",
+      shotsVideod: Object.keys(perShotVideo).length,
+      perShot: Object.entries(perShotVideo).map(([id, v]) => ({ shotId: Number(id), videoPath: v.videoPath, videoUrl: v.videoUrl })),
+    });
+
+    // ------------------------------------------------------------
+    // 6. Lip Sync — real LIP_SYNC_JOB per shot with audio (skip if requested)
+    // ------------------------------------------------------------
     await beginStage("lipsync");
+    const perShotSynced: Record<number, { syncedVideoPath: string; syncedVideoUrl: string }> = {};
     if (input.skipLipSync) {
+      for (const shot of shots) {
+        const v = perShotVideo[shot.id];
+        if (!v) throw new Error(`lipsync: shot ${shot.id} has no video`);
+        perShotSynced[shot.id] = { syncedVideoPath: v.videoPath, syncedVideoUrl: v.videoUrl };
+      }
       stages.lipsync = { status: "skipped", completedAt: new Date().toISOString(), output: { reason: "skipLipSync=true" } };
       await persistStages();
     } else {
-      const lipJob = await createProductionJob("LIP_SYNC", {
-        projectId,
-        videoUrl: videoPath,
-        audioUrl: audioPath,
-      });
-      const lipDone = await waitForJob(lipJob.id);
-      if (lipDone.status !== "completed") throw new Error(`LIP_SYNC failed: ${lipDone.error || "unknown"}`);
-      const lipOutput = (lipDone.output || {}) as any;
-      syncedVideoPath = lipOutput.syncedVideoPath as string;
-      syncedVideoUrl = lipOutput.syncedVideoUrl as string;
-      if (!syncedVideoPath || !isRealAsset(syncedVideoUrl)) {
-        throw new Error("LIP_SYNC returned no real synced video");
+      for (const shot of shots) {
+        const v = perShotVideo[shot.id];
+        const a = perShotVoice[shot.id];
+        if (!v) throw new Error(`lipsync: shot ${shot.id} has no video`);
+        if (!a) {
+          // KAYAN-TASK-07 — explicit production decision made BEFORE creating
+          // any GPU job: this shot has no dialogue/audio, so Lip Sync is not
+          // required. This is NOT a passthrough-after-failure; the job is
+          // simply never created for a shot that has no voice track.
+          perShotSynced[shot.id] = { syncedVideoPath: v.videoPath, syncedVideoUrl: v.videoUrl };
+          continue;
+        }
+        const lipJob = await createProductionJob("LIP_SYNC", {
+          projectId,
+          shotId: shot.id,
+          videoUrl: v.videoPath,
+          audioUrl: a.audioPath,
+        });
+        const lipDone = await waitForJob(lipJob.id);
+        if (lipDone.status !== "completed") {
+          throw new Error(`LIP_SYNC failed for shot ${shot.id}: ${lipDone.error || "unknown"}`);
+        }
+        const lipOutput = (lipDone.output || {}) as any;
+        const sp = lipOutput.syncedVideoPath as string;
+        const su = lipOutput.syncedVideoUrl as string;
+        if (!sp || !isRealAsset(su)) throw new Error(`LIP_SYNC shot ${shot.id} returned no real synced video`);
+        assertFile(sp, `synced video shot ${shot.id}`);
+        // KAYAN-TASK-07 — synced output must differ from the input video.
+        if (path.resolve(sp) === path.resolve(v.videoPath)) {
+          throw new Error(`LIP_SYNC shot ${shot.id}: synced output equals input video — no actual sync performed`);
+        }
+        perShotSynced[shot.id] = { syncedVideoPath: sp, syncedVideoUrl: su };
       }
-      assertFile(syncedVideoPath, "synced video");
-      await completeStage("lipsync", { syncedVideoPath, syncedVideoUrl, provider: "kayangpu" });
+      await completeStage("lipsync", {
+        provider: "kayangpu",
+        shotsSynced: Object.keys(perShotSynced).length,
+        perShot: Object.entries(perShotSynced).map(([id, v]) => ({ shotId: Number(id), syncedVideoPath: v.syncedVideoPath, syncedVideoUrl: v.syncedVideoUrl })),
+      });
     }
 
     // ------------------------------------------------------------
-    // 7. Timeline — build real rows in timeline_items
+    // 7. Timeline — cumulative VIDEO + VOICE rows for every shot
     // ------------------------------------------------------------
     await beginStage("timeline");
     await db.delete(timelineItemsTable).where(eq(timelineItemsTable.projectId, projectId));
-
     let currentTime = 0;
     let order = 1;
-    const timelineInserted: { assetUrl: string; duration: number; order: number }[] = [];
-
-    // VIDEO item for the synced video (single shot scenario for the E2E test)
-    const videoDuration = shots[0]?.durationSeconds || 5;
-    const [vItem] = await db.insert(timelineItemsTable).values({
-      projectId,
-      shotId: shots[0]?.id ?? null,
-      track: "VIDEO",
-      startTime: currentTime,
-      duration: videoDuration,
-      endTime: currentTime + videoDuration,
-      order: order++,
-      content: shots[0]?.description || "Primary video",
-      assetUrl: syncedVideoUrl,
-    }).returning();
-    timelineInserted.push({ assetUrl: syncedVideoUrl, duration: videoDuration, order: vItem.order });
-    currentTime += videoDuration;
-
-    // VOICE item mapped over the same window
-    const [aItem] = await db.insert(timelineItemsTable).values({
-      projectId,
-      shotId: shots[0]?.id ?? null,
-      track: "VOICE",
-      startTime: 0,
-      duration: videoDuration,
-      endTime: videoDuration,
-      order: order++,
-      content: voiceText,
-      assetUrl: audioUrl,
-    }).returning();
-    void aItem;
-
+    const timelineInserted: { assetUrl: string; duration: number; order: number; shotId: number }[] = [];
+    for (const shot of shots) {
+      const synced = perShotSynced[shot.id];
+      if (!synced) throw new Error(`timeline: shot ${shot.id} has no synced video`);
+      const dur = shot.durationSeconds || 5;
+      const [vItem] = await db.insert(timelineItemsTable).values({
+        projectId,
+        shotId: shot.id,
+        track: "VIDEO",
+        startTime: currentTime,
+        duration: dur,
+        endTime: currentTime + dur,
+        order: order++,
+        content: shot.description || `Shot ${shot.id}`,
+        assetUrl: synced.syncedVideoUrl,
+      }).returning();
+      timelineInserted.push({ assetUrl: synced.syncedVideoUrl, duration: dur, order: vItem.order, shotId: shot.id });
+      const voice = perShotVoice[shot.id];
+      if (voice) {
+        const [aItem] = await db.insert(timelineItemsTable).values({
+          projectId,
+          shotId: shot.id,
+          track: "VOICE",
+          startTime: currentTime,
+          duration: dur,
+          endTime: currentTime + dur,
+          order: order++,
+          content: voice.text,
+          assetUrl: voice.audioUrl,
+        }).returning();
+        void aItem;
+      }
+      currentTime += dur;
+    }
     if (timelineInserted.length === 0) throw new Error("Timeline produced no real VIDEO assets");
     await completeStage("timeline", {
       totalDuration: currentTime,
       videoItems: timelineInserted.length,
+      shotIds: shots.map((s) => s.id),
     });
 
     // ------------------------------------------------------------
-    // 8. Auto Edit — persist one edit_clip per VIDEO timeline item
+    // 8. Auto Edit — one edit_clip per VIDEO item, cumulative timing
     // ------------------------------------------------------------
     await beginStage("auto_edit");
-    const clipsToInsert = timelineInserted.map((t, idx) => ({
-      projectId,
-      title: `Auto-edit clip ${idx + 1}`,
-      durationSeconds: Math.round(t.duration),
-      clipOrder: idx + 1,
-      trackType: "video",
-      startTime: 0,
-      endTime: t.duration,
-      sourceStart: 0,
-      sourceEnd: t.duration,
-      volume: 1.0,
-      assetId: t.assetUrl,
-    }));
+    let editCursor = 0;
+    const clipsToInsert = timelineInserted.map((t, idx) => {
+      const start = editCursor;
+      const end = editCursor + t.duration;
+      editCursor = end;
+      return {
+        projectId,
+        title: `Auto-edit clip ${idx + 1}`,
+        durationSeconds: Math.round(t.duration),
+        clipOrder: idx + 1,
+        trackType: "video",
+        startTime: start,
+        endTime: end,
+        sourceStart: 0,
+        sourceEnd: t.duration,
+        volume: 1.0,
+        assetId: t.assetUrl,
+      };
+    });
     await db.delete(editClipsTable).where(eq(editClipsTable.projectId, projectId));
     const insertedClips = await db.insert(editClipsTable).values(clipsToInsert).returning();
     await completeStage("auto_edit", { clipsInserted: insertedClips.length });
@@ -437,10 +586,46 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       order: t.order,
     }));
 
+    // Build the full audio track = concatenation of per-shot voice, in shot order.
+    const orderedVoicePaths = shots
+      .map((sh) => perShotVoice[sh.id]?.audioPath)
+      .filter((p): p is string => !!p);
+    if (orderedVoicePaths.length === 0) {
+      throw new Error("render: no real voice audio assets available");
+    }
+    let renderAudioUrl: string;
+    if (orderedVoicePaths.length === 1) {
+      renderAudioUrl = perShotVoice[shots.find((sh) => perShotVoice[sh.id])!.id].audioUrl;
+    } else {
+      const listPath = path.join(uploadsDir("voice"), `concat_${runId}.txt`);
+      fs.writeFileSync(
+        listPath,
+        orderedVoicePaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"),
+        "utf-8",
+      );
+      const mergedName = `merged_${runId}.mp3`;
+      const mergedPath = path.join(uploadsDir("voice"), mergedName);
+      await new Promise<void>((resolve, reject) => {
+        const proc = spawn("ffmpeg", [
+          "-y", "-hide_banner", "-loglevel", "error",
+          "-f", "concat", "-safe", "0", "-i", listPath,
+          "-c:a", "libmp3lame", "-q:a", "4", mergedPath,
+        ], { stdio: ["ignore", "ignore", "pipe"] });
+        let err = "";
+        proc.stderr.on("data", (d) => { err += d.toString(); });
+        proc.on("error", reject);
+        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg concat failed (${code}): ${err.slice(0, 400)}`)));
+      });
+      assertFile(mergedPath, "merged voice audio");
+      renderAudioUrl = `/uploads/voice/${mergedName}`;
+    }
+    if (!isRealAsset(renderAudioUrl)) {
+      throw new Error("render: no real voice audio asset available");
+    }
     const renderJob = await createRenderJob({
       projectId,
       clips: renderClips,
-      audioUrl, // real audio from voice stage
+      audioUrl: renderAudioUrl,
       watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
     });
 
@@ -485,6 +670,15 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         duration: finalStatus.duration,
         sizeBytes: finalStatus.sizeBytes,
         renderJobId: renderJob.id,
+        shotIds: shots.map((sh) => sh.id),
+        perShot: shots.map((sh) => ({
+          shotId: sh.id,
+          sceneNumber: sh.sceneNumber,
+          hasVoice: !!perShotVoice[sh.id],
+          voiceAsset: perShotVoice[sh.id]?.audioUrl ?? null,
+          videoAsset: perShotVideo[sh.id]?.videoUrl ?? null,
+          syncedAsset: perShotSynced[sh.id]?.syncedVideoUrl ?? null,
+        })),
       },
       videoUrl: finalStatus.outputUrl,
       errorMessage: null,

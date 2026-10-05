@@ -24,8 +24,27 @@ export async function runExternalVideoJob(job: { payload: any }): Promise<VideoP
   const p = job.payload || {};
   const provider = getProvider();
 
+  // KAYAN-TASK-22: external provider (WaveSpeed) supports I2V only.
+  // Reject anything that is not explicitly task="i2v" — no silent t2v fallback.
+  if (p.task !== "i2v") {
+    const err: any = new Error(
+      "VIDEO_I2V_REQUIRED: external provider requires task='i2v' (received " +
+      JSON.stringify(p.task) + ")",
+    );
+    err.category = "INVALID_INPUT";
+    throw err;
+  }
+  if (!p.reference_image_base64 || typeof p.reference_image_base64 !== "string"
+      || p.reference_image_base64.length < 64) {
+    const err: any = new Error(
+      "I2V_REFERENCE_IMAGE_REQUIRED: reference_image_base64 is required for external I2V",
+    );
+    err.category = "INVALID_INPUT";
+    throw err;
+  }
+
   const payload: VideoPayload = {
-    task: (p.task === "i2v" ? "i2v" : "t2v"),
+    task: "i2v",
     prompt: p.prompt,
     seed: p.seed ?? 123,
     resolution: p.resolution ?? "480p",
