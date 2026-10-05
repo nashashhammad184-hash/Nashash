@@ -57,6 +57,7 @@ RUN pnpm install --frozen-lockfile --prod
 # Copy built artifacts from stage 1
 COPY --from=build /repo/artifacts/api-server/dist ./artifacts/api-server/dist
 COPY --from=build /repo/artifacts/studio/dist     ./artifacts/studio/dist
+COPY entrypoint.sh ./entrypoint.sh
 
 # Runtime directories (uploads expected by api-server)
 RUN mkdir -p \
@@ -65,11 +66,11 @@ RUN mkdir -p \
       logs
 
 # Non-root user
-RUN chown -R node:node /app
+RUN chmod +x /app/entrypoint.sh && chown -R node:node /app
 USER node
 
 # PORT is provided by Northflank at runtime
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+CMD ["/app/entrypoint.sh"]
