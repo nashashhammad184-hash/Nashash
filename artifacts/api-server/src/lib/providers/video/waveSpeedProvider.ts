@@ -175,7 +175,7 @@ export class WaveSpeedVideoProvider implements VideoProvider {
     }
 
     fs.mkdirSync(outputDir, { recursive: true });
-    const fileName = `ws_${providerJobId}.mp4`;
+    const fileName = `ws_${splitJobId(providerJobId).id}.mp4`;
     const localPath = path.join(outputDir, fileName);
     const dl = await fetch(videoUrl, { signal: AbortSignal.timeout(180_000) });
     if (!dl.ok) throw new Error(`WaveSpeed download HTTP ${dl.status}`);
