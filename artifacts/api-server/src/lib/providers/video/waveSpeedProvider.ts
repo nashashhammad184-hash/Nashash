@@ -46,6 +46,13 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+
+function splitJobId(providerJobId: string): { id: string; url?: string } {
+  const idx = providerJobId.indexOf("::");
+  if (idx === -1) return { id: providerJobId };
+  return { id: providerJobId.slice(0, idx), url: providerJobId.slice(idx + 2) };
+}
+
 function urlWithId(template: string, id: string): string {
   return template.replace("{id}", encodeURIComponent(id));
 }
@@ -98,19 +105,27 @@ export class WaveSpeedVideoProvider implements VideoProvider {
     } catch {
       throw new Error(`WaveSpeed submit: invalid JSON: ${text.slice(0, 200)}`);
     }
-    // WaveSpeed typically returns { data: { id: "..." } } or { id: "..." }
+    // WaveSpeed typically returns { data: { id, urls: { get, cancel } } }.
+    // We capture the full `urls.get` URL so polling always uses the exact
+    // endpoint WaveSpeed returned — no path guessing, no 404s.
     const id: string | undefined = j?.data?.id || j?.id || j?.task_id;
     if (!id) {
       throw new Error(`WaveSpeed submit: no job id in response: ${text.slice(0, 300)}`);
     }
-    return { providerJobId: id };
+    const getUrl: string | undefined =
+      j?.data?.urls?.get || j?.urls?.get || undefined;
+    // Encode as "id::url" when url is present, otherwise plain id.
+    const providerJobId = getUrl ? `${id}::${getUrl}` : id;
+    return { providerJobId };
   }
 
   async poll(providerJobId: string): Promise<{
     status: "queued" | "running" | "completed" | "failed" | "cancelled";
     error?: string;
   }> {
-    const r = await fetch(urlWithId(STATUS_URL, providerJobId), {
+    const { id: jobId, url: jobUrl } = splitJobId(providerJobId);
+    const pollUrl = jobUrl || urlWithId(STATUS_URL, jobId);
+    const r = await fetch(pollUrl, {
       headers: authHeaders(),
       signal: AbortSignal.timeout(15_000),
     });
@@ -141,7 +156,9 @@ export class WaveSpeedVideoProvider implements VideoProvider {
     providerJobId: string,
     outputDir: string,
   ): Promise<VideoProviderResult> {
-    const r = await fetch(urlWithId(RESULT_URL, providerJobId), {
+    const { id: jobId, url: jobUrl } = splitJobId(providerJobId);
+    const resultUrl = jobUrl || urlWithId(RESULT_URL, jobId);
+    const r = await fetch(resultUrl, {
       headers: authHeaders(),
       signal: AbortSignal.timeout(30_000),
     });
@@ -186,7 +203,7 @@ export class WaveSpeedVideoProvider implements VideoProvider {
       mp4_path: localPath,
       remote_path: videoUrl,
       duration,
-      worker_jid: providerJobId,
+      worker_jid: splitJobId(providerJobId).id,
       probe,
       provider: "wavespeed-hunyuan-i2v",
     };
