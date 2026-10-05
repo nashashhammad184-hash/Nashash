@@ -247,7 +247,7 @@ async function processOne() {
   } catch (err: any) {
     const category = GpuQueueService.classifyError(err);
     const attempts = Number(next.attempts ?? 0);
-    const maxAttempts = 3;
+    const maxAttempts = parseInt(process.env.VIDEO_MAX_ATTEMPTS || "3", 10);
     if (GpuQueueService.isRetryable(category) && attempts < maxAttempts) {
       const reason = `retry [${category}] attempt ${attempts + 1}/${maxAttempts}: ${err?.message || String(err)}`;
       await GpuQueueService.requeue(next.id, reason);
