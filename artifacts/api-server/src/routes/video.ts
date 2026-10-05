@@ -106,6 +106,24 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
     return;
   }
 
+  // KAYAN-TASK-02 — explicit I2V contract validation BEFORE any GPU submission.
+  const __d = parsed.data as any;
+  const __task: 't2v' | 'i2v' = __d.task === 'i2v' ? 'i2v' : 't2v';
+  if (__task === 'i2v') {
+    if (!__d.referenceImageBase64 || typeof __d.referenceImageBase64 !== 'string' || __d.referenceImageBase64.length < 64) {
+      res.status(400).json({ error: 'i2v requires referenceImageBase64 (>=64 chars)' });
+      return;
+    }
+  }
+  if (__d.numFrames != null && (__d.numFrames - 1) % 4 !== 0) {
+    res.status(400).json({ error: `numFrames=${__d.numFrames} violates (n-1)%4==0` });
+    return;
+  }
+  if (__d.durationSeconds != null && !(__d.durationSeconds > 0 && __d.durationSeconds <= 10)) {
+    res.status(400).json({ error: `durationSeconds out of range: ${__d.durationSeconds}` });
+    return;
+  }
+
   try {
     logger.info({ projectId: parsed.data.projectId, prompt: parsed.data.prompt }, "Dispatching video generation to KayanGPU Production Engine...");
 
@@ -113,7 +131,17 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
       projectId: parsed.data.projectId,
       prompt: parsed.data.prompt,
       worldId: parsed.data.worldId,
-      microExpression: parsed.data.microExpression
+      microExpression: parsed.data.microExpression,
+      task: __task,
+      referenceImageBase64: __d.referenceImageBase64,
+      negativePrompt: __d.negativePrompt,
+      fps: __d.fps,
+      durationSeconds: __d.durationSeconds,
+      numFrames: __d.numFrames,
+      aspectRatio: __d.aspectRatio,
+      seed: __d.seed,
+      resolution: __d.resolution,
+      steps: __d.steps
     }, 0);
 
     let currentJob = job;
