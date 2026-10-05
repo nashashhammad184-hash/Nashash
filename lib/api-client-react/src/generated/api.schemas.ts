@@ -98,12 +98,76 @@ export interface ScriptGenerateInput {
   actors?: string[];
 }
 
+export type VideoGenerateInputTask = typeof VideoGenerateInputTask[keyof typeof VideoGenerateInputTask];
+
+
+export const VideoGenerateInputTask = {
+  t2v: 't2v',
+  i2v: 'i2v',
+} as const;
+
+export type VideoGenerateInputAspectRatio = typeof VideoGenerateInputAspectRatio[keyof typeof VideoGenerateInputAspectRatio];
+
+
+export const VideoGenerateInputAspectRatio = {
+  '16:9': '16:9',
+  '9:16': '9:16',
+  '1:1': '1:1',
+  '4:3': '4:3',
+  '3:4': '3:4',
+  '21:9': '21:9',
+} as const;
+
+export type VideoGenerateInputResolution = typeof VideoGenerateInputResolution[keyof typeof VideoGenerateInputResolution];
+
+
+export const VideoGenerateInputResolution = {
+  '480p': '480p',
+  '720p': '720p',
+  '1080p': '1080p',
+} as const;
+
 export interface VideoGenerateInput {
   projectId: number;
   /** @minLength 1 */
   prompt: string;
   worldId: string;
   microExpression?: string;
+  task?: VideoGenerateInputTask;
+  /**
+     * @minLength 64
+     * @maxLength 15000000
+     */
+  referenceImageBase64?: string;
+  /** @maxLength 1000 */
+  negativePrompt?: string;
+  /**
+     * @minimum 4
+     * @maximum 30
+     */
+  fps?: number;
+  /**
+     * @minimum 0.5
+     * @maximum 10
+     */
+  durationSeconds?: number;
+  /**
+     * @minimum 1
+     * @maximum 1000
+     */
+  numFrames?: number;
+  aspectRatio?: VideoGenerateInputAspectRatio;
+  /**
+     * @minimum 0
+     * @maximum 2147483647
+     */
+  seed?: number;
+  resolution?: VideoGenerateInputResolution;
+  /**
+     * @minimum 1
+     * @maximum 50
+     */
+  steps?: number;
 }
 
 export type VideoGenerateResponseStatus = typeof VideoGenerateResponseStatus[keyof typeof VideoGenerateResponseStatus];

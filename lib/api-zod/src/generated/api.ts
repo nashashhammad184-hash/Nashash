@@ -381,13 +381,44 @@ export const GenerateScriptResponse = zod.object({
  * @summary Generate a cinematic MP4 clip
  */
 
+export const generateVideoBodyTaskDefault = `t2v`;
+export const generateVideoBodyReferenceImageBase64Min = 64;
+export const generateVideoBodyReferenceImageBase64Max = 15000000;
+
+export const generateVideoBodyNegativePromptMax = 1000;
+
+export const generateVideoBodyFpsDefault = 16;
+export const generateVideoBodyFpsMin = 4;
+export const generateVideoBodyFpsMax = 30;
+
+export const generateVideoBodyDurationSecondsDefault = 5;
+export const generateVideoBodyDurationSecondsMin = 0.5;
+export const generateVideoBodyDurationSecondsMax = 10;
+
+export const generateVideoBodyNumFramesMax = 1000;
+
+export const generateVideoBodySeedMin = 0;
+export const generateVideoBodySeedMax = 2147483647;
+
+export const generateVideoBodyStepsMax = 50;
+
 
 
 export const GenerateVideoBody = zod.object({
   "projectId": zod.number(),
   "prompt": zod.string().min(1),
   "worldId": zod.string(),
-  "microExpression": zod.string().optional()
+  "microExpression": zod.string().optional(),
+  "task": zod.enum(['t2v', 'i2v']).default(generateVideoBodyTaskDefault),
+  "referenceImageBase64": zod.string().min(generateVideoBodyReferenceImageBase64Min).max(generateVideoBodyReferenceImageBase64Max).optional(),
+  "negativePrompt": zod.string().max(generateVideoBodyNegativePromptMax).optional(),
+  "fps": zod.number().int().min(generateVideoBodyFpsMin).max(generateVideoBodyFpsMax).default(generateVideoBodyFpsDefault),
+  "durationSeconds": zod.number().min(generateVideoBodyDurationSecondsMin).max(generateVideoBodyDurationSecondsMax).default(generateVideoBodyDurationSecondsDefault),
+  "numFrames": zod.number().int().min(1).max(generateVideoBodyNumFramesMax).optional(),
+  "aspectRatio": zod.enum(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).optional(),
+  "seed": zod.number().int().min(generateVideoBodySeedMin).max(generateVideoBodySeedMax).optional(),
+  "resolution": zod.enum(['480p', '720p', '1080p']).optional(),
+  "steps": zod.number().int().min(1).max(generateVideoBodyStepsMax).optional()
 })
 
 export const GenerateVideoResponse = zod.object({

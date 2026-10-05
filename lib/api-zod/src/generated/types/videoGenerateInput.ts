@@ -5,6 +5,9 @@
  * AI Production Studio API
  * OpenAPI spec version: 0.1.0
  */
+import type { VideoGenerateInputAspectRatio } from './videoGenerateInputAspectRatio';
+import type { VideoGenerateInputResolution } from './videoGenerateInputResolution';
+import type { VideoGenerateInputTask } from './videoGenerateInputTask';
 
 export interface VideoGenerateInput {
   projectId: number;
@@ -12,4 +15,39 @@ export interface VideoGenerateInput {
   prompt: string;
   worldId: string;
   microExpression?: string;
+  task?: VideoGenerateInputTask;
+  /**
+     * @minLength 64
+     * @maxLength 15000000
+     */
+  referenceImageBase64?: string;
+  /** @maxLength 1000 */
+  negativePrompt?: string;
+  /**
+     * @minimum 4
+     * @maximum 30
+     */
+  fps?: number;
+  /**
+     * @minimum 0.5
+     * @maximum 10
+     */
+  durationSeconds?: number;
+  /**
+     * @minimum 1
+     * @maximum 1000
+     */
+  numFrames?: number;
+  aspectRatio?: VideoGenerateInputAspectRatio;
+  /**
+     * @minimum 0
+     * @maximum 2147483647
+     */
+  seed?: number;
+  resolution?: VideoGenerateInputResolution;
+  /**
+     * @minimum 1
+     * @maximum 50
+     */
+  steps?: number;
 }

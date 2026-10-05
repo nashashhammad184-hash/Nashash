@@ -826,6 +826,45 @@ components:
           type: string
         microExpression:
           type: string
+        task:
+          type: string
+          enum: [t2v, i2v]
+          default: t2v
+        referenceImageBase64:
+          type: string
+          minLength: 64
+          maxLength: 15000000
+        negativePrompt:
+          type: string
+          maxLength: 1000
+        fps:
+          type: integer
+          minimum: 4
+          maximum: 30
+          default: 16
+        durationSeconds:
+          type: number
+          minimum: 0.5
+          maximum: 10
+          default: 5
+        numFrames:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        aspectRatio:
+          type: string
+          enum: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+        seed:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        resolution:
+          type: string
+          enum: ["480p", "720p", "1080p"]
+        steps:
+          type: integer
+          minimum: 1
+          maximum: 50
 
     VideoGenerateResponse:
       type: object
