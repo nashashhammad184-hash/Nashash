@@ -41,6 +41,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# KAYAN-FFMPEG: runtime needs ffmpeg + ffprobe for MP4 validation.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # Manifests for prod install
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY artifacts/api-server/package.json       artifacts/api-server/
