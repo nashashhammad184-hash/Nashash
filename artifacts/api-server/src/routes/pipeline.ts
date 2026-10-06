@@ -410,8 +410,24 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // 6. Lip Sync — real LIP_SYNC_JOB per shot with audio (skip if requested)
     // ------------------------------------------------------------
     await beginStage("lipsync");
+    // KAYAN-TASK-23: when LIPSYNC_ENABLED=false, the GPU worker path is
+    // unavailable. Skip the stage cleanly — no LIP_SYNC jobs created, no GPU
+    // calls, pipeline continues with original videos as "synced" passthrough.
+    const LIPSYNC_ENABLED_CFG = (process.env.LIPSYNC_ENABLED || "false").toLowerCase() === "true";
     const perShotSynced: Record<number, { syncedVideoPath: string; syncedVideoUrl: string }> = {};
-    if (input.skipLipSync) {
+    if (!LIPSYNC_ENABLED_CFG) {
+      for (const shot of shots) {
+        const v = perShotVideo[shot.id];
+        if (!v) throw new Error(`lipsync: shot ${shot.id} has no video`);
+        perShotSynced[shot.id] = { syncedVideoPath: v.videoPath, syncedVideoUrl: v.videoUrl };
+      }
+      stages.lipsync = {
+        status: "skipped",
+        completedAt: new Date().toISOString(),
+        output: { reason: "LIPSYNC_DISABLED", source: "env" },
+      };
+      await persistStages();
+    } else if (input.skipLipSync) {
       for (const shot of shots) {
         const v = perShotVideo[shot.id];
         if (!v) throw new Error(`lipsync: shot ${shot.id} has no video`);
