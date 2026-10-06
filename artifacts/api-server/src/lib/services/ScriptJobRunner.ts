@@ -1,5 +1,6 @@
 import { db, scriptsTable, shotsTable } from '@workspace/db';
 import { generateScript } from '../scriptGenerator';
+import { syncProjectSubtitles } from './subtitleSyncService';
 
 export interface ScriptJobPayload {
   projectId: number;
@@ -52,5 +53,25 @@ export async function runScriptJob(payload: ScriptJobPayload): Promise<object> {
     }
   }
 
-  return { scriptId: script.id, text: generated.text, shotsInserted };
+  // KAYAN-TASK-26: auto-sync subtitles after shots are persisted.
+  // Failure here does NOT fail the script stage — script persistence is
+  // already committed above. Subtitle state is surfaced in the result.
+  let subtitles: {
+    status: "SYNCED" | "FAILED";
+    count?: number;
+    error?: string;
+  };
+  try {
+    const sync = await syncProjectSubtitles(payload.projectId);
+    subtitles = { status: "SYNCED", count: sync.count };
+  } catch (e: any) {
+    subtitles = { status: "FAILED", error: String(e?.message || e).slice(0, 300) };
+    // eslint-disable-next-line no-console
+    console.error(
+      `[ScriptJobRunner] subtitle sync failed for project ${payload.projectId}:`,
+      subtitles.error,
+    );
+  }
+
+  return { scriptId: script.id, text: generated.text, shotsInserted, subtitles };
 }
