@@ -6,6 +6,7 @@ import http from "node:http";
 import { logger } from "../lib/logger";
 import { validateProxyUrl, requireProductionAuth } from "../lib/securityMiddleware";
 import { createProductionJob, getProductionJob } from "../lib/productionEngine";
+import { getActiveVideoProvider } from "../lib/providers/video/activeProvider";
 import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
@@ -173,7 +174,7 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
         downloadUrl: isLocal ? videoUrl : getDownloadUrl(videoUrl),
         streamUrl: isLocal ? videoUrl : `/api/video/stream?url=${encodeURIComponent(videoUrl)}`,
         status: "completed",
-        provider: "kayan-gpu-worker",
+        provider: getActiveVideoProvider(),
         jobId: currentJob.id,
       });
       return;
@@ -188,7 +189,7 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
         videoUrl: "",
         downloadUrl: "",
         status: "timeout",
-        provider: "kayan-gpu-worker",
+        provider: getActiveVideoProvider(),
         jobId: currentJob.id,
         message: "Job still processing on KayanGPU worker after 5 hours."
       });
