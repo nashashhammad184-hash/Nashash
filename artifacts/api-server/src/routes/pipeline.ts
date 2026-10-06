@@ -480,9 +480,44 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // 7. Timeline — cumulative VIDEO + VOICE rows for every shot
     // ------------------------------------------------------------
     await beginStage("timeline");
-    await db.delete(timelineItemsTable).where(eq(timelineItemsTable.projectId, projectId));
+    // KAYAN-TASK-24: preserve MANUAL timeline items on pipeline rerun.
+    // Only rows classified as "generated" (or legacy without origin) are
+    // removed and rebuilt. Rows with metadata.origin === "manual" are kept
+    // untouched. Classification mirrors routes/timeline.ts.
+    const existingRows = await db
+      .select()
+      .from(timelineItemsTable)
+      .where(eq(timelineItemsTable.projectId, projectId));
+    const isManualRow = (row: any): boolean => {
+      const raw = row?.metadata;
+      if (!raw || typeof raw !== "string") return false;
+      try {
+        const m = JSON.parse(raw);
+        return m && m.origin === "manual";
+      } catch {
+        return false;
+      }
+    };
+    const manualRows = existingRows.filter(isManualRow);
+    const generatedRows = existingRows.filter((r) => !isManualRow(r));
+    if (generatedRows.length > 0) {
+      const { inArray } = await import("drizzle-orm");
+      await db
+        .delete(timelineItemsTable)
+        .where(inArray(timelineItemsTable.id, generatedRows.map((r) => r.id)));
+    }
+    // Manual rows stay untouched. Generated rows will be re-created below.
+    // Order begins after the last manual row's order to keep manual edits visible.
+    const maxManualOrder = manualRows.reduce(
+      (m: number, r: any) => Math.max(m, Number(r.order) || 0),
+      0,
+    );
+    const firstShotRow = existingRows[0];
+    const firstShotTime = Number(firstShotRow?.startTime ?? 0);
+    void firstShotTime;
     let currentTime = 0;
-    let order = 1;
+    let order = maxManualOrder + 1;
+    const genMeta = JSON.stringify({ origin: "generated" });
     const timelineInserted: { assetUrl: string; duration: number; order: number; shotId: number }[] = [];
     for (const shot of shots) {
       const synced = perShotSynced[shot.id];
@@ -498,6 +533,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         order: order++,
         content: shot.description || `Shot ${shot.id}`,
         assetUrl: synced.syncedVideoUrl,
+        metadata: genMeta,
       }).returning();
       timelineInserted.push({ assetUrl: synced.syncedVideoUrl, duration: dur, order: vItem.order, shotId: shot.id });
       const voice = perShotVoice[shot.id];
@@ -512,6 +548,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           order: order++,
           content: voice.text,
           assetUrl: voice.audioUrl,
+          metadata: genMeta,
         }).returning();
         void aItem;
       }
