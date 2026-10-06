@@ -263,16 +263,23 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // is EXACTLY ONE dialogue shot in the project. In multi-shot productions it
     // is IGNORED (never masks per-shot dialogues).
     const dialogueShots = shots.filter((s) => (s.dialogue || "").trim().length > 0);
+    const perShotVoice: Record<number, VoiceEntry> = {};
+    type VoiceEntry = { audioPath: string; audioUrl: string; text: string; duration: number; sizeBytes: number; jobId: string };
+    // KAYAN-TASK-27: no dialogue anywhere in the project → Voice stage SKIPPED.
+    // No VOICE_GEN jobs are created. No fake audio. Pipeline continues.
     if (dialogueShots.length === 0) {
-      throw new Error("Voice stage requires at least one shot with dialogue to synthesize");
-    }
+      stages.voice = {
+        status: "skipped",
+        completedAt: new Date().toISOString(),
+        output: { reason: "NO_DIALOGUE", source: "shots" },
+      };
+      await persistStages();
+    } else {
     const singleDialogueOverride =
       dialogueShots.length === 1 && input.voiceText && input.voiceText.trim().length > 0
         ? input.voiceText.trim()
         : null;
 
-    type VoiceEntry = { audioPath: string; audioUrl: string; text: string; duration: number; sizeBytes: number; jobId: string };
-    const perShotVoice: Record<number, VoiceEntry> = {};
 
     for (const shot of dialogueShots) {
       const voiceText = (singleDialogueOverride ?? shot.dialogue ?? "").trim();
@@ -333,6 +340,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         sizeBytes: v.sizeBytes,
       })),
     });
+    }
 
     // ------------------------------------------------------------
     // 5. Video — real KayanGPU VIDEO_JOB per shot (or existing shot.videoUrl if skipVideo)
