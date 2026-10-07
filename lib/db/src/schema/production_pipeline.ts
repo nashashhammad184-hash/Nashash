@@ -13,6 +13,9 @@ export const productionPipeline = pgTable("production_pipeline", {
   progress: integer("progress").notNull().default(0),
   payload: jsonb("payload").default({}),
   providerJobId: text("provider_job_id"),
+  // KAYAN-TASK-32: pipeline recovery foundation
+  parentRunId: text("parent_run_id"),
+  jobKey: text("job_key"),
   videoUrl: text("video_url"),
   output: jsonb("output"),
   errorMessage: text("error_message"),

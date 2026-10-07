@@ -35,6 +35,7 @@ import {
   getProductionJob,
   type ProductionJobType,
 } from "../lib/productionEngine";
+import { buildPipelineJobKey } from "../lib/pipeline/jobKeys";
 import {
   createRenderJob,
   runRenderPipeline,
@@ -295,7 +296,10 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       const shotVoiceId = (shot as any).voice_id as string | undefined;
       if (shotVoiceId) payload.voiceId = shotVoiceId;
 
-      const voiceJob = await createProductionJob("VOICE_GEN", payload);
+      const voiceJob = await createProductionJob("VOICE_GEN", payload, 3, {
+        parentRunId: runId,
+        jobKey: buildPipelineJobKey(runId, "VOICE_GEN", shot.id),
+      });
       const voiceDone = await waitForJob(voiceJob.id);
       if (voiceDone.status !== "completed") {
         await db.update(shotsTable)
@@ -395,6 +399,9 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
           ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
           ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+        }, 3, {
+          parentRunId: runId,
+          jobKey: buildPipelineJobKey(runId, "VIDEO_GEN", shot.id),
         });
         const videoDone = await waitForJob(videoJob.id);
         if (videoDone.status !== "completed") {
@@ -461,6 +468,9 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           shotId: shot.id,
           videoUrl: v.videoPath,
           audioUrl: a.audioPath,
+        }, 3, {
+          parentRunId: runId,
+          jobKey: buildPipelineJobKey(runId, "LIP_SYNC", shot.id),
         });
         const lipDone = await waitForJob(lipJob.id);
         if (lipDone.status !== "completed") {
@@ -787,12 +797,14 @@ async function recoverStalePipelineRuns(): Promise<void> {
         eq(productionPipeline.type, "FULL_PIPELINE"),
       ));
     for (const r of stale) {
+      // KAYAN-TASK-32: mark as 'interrupted' instead of 'failed'.
+      // Completed stages + child jobs are preserved; a future TASK-33
+      // resume endpoint will continue from the last completed stage.
       await updateRun(r.id, {
-        status: "failed",
-        completedAt: new Date(),
-        errorMessage: "recovered: API restart during pipeline execution",
+        status: "interrupted",
+        errorMessage: "recovered: API restart during pipeline execution (interrupted, resumable)",
       });
-      logger.warn({ runId: r.id }, "Recovered stale pipeline run → failed (API restart)");
+      logger.warn({ runId: r.id }, "Recovered stale pipeline run → interrupted (API restart)");
     }
   } catch (e) {
     logger.warn({ err: e }, "recoverStalePipelineRuns failed");

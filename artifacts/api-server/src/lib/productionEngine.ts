@@ -14,7 +14,7 @@
  *   VIDEO_GEN     → { videoPath, videoUrl }
  *   VOICE_GEN     → { audioPath, audioUrl }
  *   LIP_SYNC      → { syncedVideoPath, syncedVideoUrl }
- *   MUSIC_SFX_GEN → NOT IMPLEMENTED — throws explicitly
+ *   MUSIC_SFX_GEN → OPEN_DEPENDENCY — throws explicitly with code="OPEN_DEPENDENCY"
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -48,6 +48,9 @@ export interface ProductionJob {
   progress: number;
   payload: ProductionJobPayload;
   providerJobId?: string | null;
+  // KAYAN-TASK-32: pipeline recovery fields
+  parentRunId?: string | null;
+  jobKey?: string | null;
   output?: Record<string, unknown> | null;
   videoUrl?: string | null;
   error?: string | null;
@@ -81,6 +84,8 @@ function rowToJob(row: any): ProductionJob {
     progress: row.progress ?? 0,
     payload: (row.payload ?? {}) as ProductionJobPayload,
     providerJobId: row.providerJobId ?? null,
+    parentRunId: row.parentRunId ?? null,
+    jobKey: row.jobKey ?? null,
     output: (row.output ?? null) as Record<string, unknown> | null,
     videoUrl: row.videoUrl ?? null,
     error: row.errorMessage ?? null,
@@ -97,16 +102,59 @@ function rowToJob(row: any): ProductionJob {
 // Public API
 // ================================================================
 
+// KAYAN-TASK-16 — Retry classification.
+//
+// Policy (DB is source of truth; provider idempotency matters):
+//   - NO_RETRY       → validation / config / input errors; retrying won't help.
+//   - NO_RETRY_ACCEPTED → provider already accepted a job (providerJobId set)
+//                         before the failure; NEVER blindly re-submit.
+//   - RETRY_LIMITED  → transient error BEFORE provider acceptance.
+export type RetryDecision = 'NO_RETRY' | 'NO_RETRY_ACCEPTED' | 'RETRY_LIMITED';
+
+export function classifyRetry(
+  errMsg: string,
+  ctx: { providerJobId?: string | null; type: string },
+): RetryDecision {
+  const m = (errMsg || '').toLowerCase();
+  if (ctx.providerJobId && ctx.providerJobId.trim().length > 0) {
+    return 'NO_RETRY_ACCEPTED';
+  }
+  const noRetryPatterns = [
+    'requires ', 'not configured', 'not implemented', 'is not implemented',
+    'open_dependency', 'invalid', 'validation', 'schema', 'unsupported',
+    'not found', 'missing', 'empty', 'out of range', 'exceeds', 'violates',
+    'no real audio', 'silent', 'forbidden',
+  ];
+  for (const pat of noRetryPatterns) {
+    if (m.includes(pat)) return 'NO_RETRY';
+  }
+  return 'RETRY_LIMITED';
+}
+
+export interface CreateProductionJobOptions {
+  /** KAYAN-TASK-32: id of the parent FULL_PIPELINE run (if any). */
+  parentRunId?: string;
+  /** KAYAN-TASK-32: deterministic idempotency key. */
+  jobKey?: string;
+}
+
 export async function createProductionJob(
   type: ProductionJobType,
   payload: ProductionJobPayload,
   maxRetries = 3,
+  options: CreateProductionJobOptions = {},
 ): Promise<ProductionJob> {
   if (type === "MUSIC_SFX_GEN") {
-    // Explicitly rejected — no real provider implemented. Do NOT silently fabricate.
-    throw new Error(
-      "MUSIC_SFX_GEN is not implemented: no real music/SFX provider is configured. Refusing to fabricate audio.",
+    // KAYAN-TASK-13 — Explicit OPEN_DEPENDENCY. No real music/SFX provider is
+    // configured. We refuse to fabricate audio (no sine/silence/placeholder).
+    // Callers can detect this via error.code === "OPEN_DEPENDENCY".
+    const err: any = new Error(
+      "MUSIC_SFX_GEN is OPEN_DEPENDENCY: no real music/SFX provider is configured. " +
+      "Refusing to fabricate audio. Integrate a real provider before enabling this feature.",
     );
+    err.code = "OPEN_DEPENDENCY";
+    err.feature = "MUSIC_SFX_GEN";
+    throw err;
   }
 
   const id = makeJobId();
@@ -124,6 +172,9 @@ export async function createProductionJob(
       payload: payload as any,
       retryCount: 0,
       maxRetries,
+      // KAYAN-TASK-32: only set when explicitly provided (legacy callers unaffected)
+      parentRunId: options.parentRunId ?? null,
+      jobKey: options.jobKey ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -228,12 +279,18 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         const result = await generateVideoKayanGpu({
           prompt,
           task,
+          onEnqueued: async (qid: string) => {
+            try { await setStatus(jobId, "processing", { providerJobId: qid }); } catch {}
+          },
           referenceImageBase64: refB64 ?? null,
           negativePrompt: (job.payload as any).negativePrompt,
           fps: (job.payload as any).fps,
           durationSeconds: (job.payload as any).durationSeconds ?? 5,
           numFrames: (job.payload as any).numFrames,
           aspectRatio: (job.payload as any).aspectRatio,
+          seed: (job.payload as any).seed,
+          resolution: (job.payload as any).resolution,
+          steps: (job.payload as any).steps,
         });
         if (!result.videoPath || !fs.existsSync(result.videoPath)) {
           throw new Error(`VIDEO_GEN produced no real video file on disk: ${result.videoPath}`);
@@ -272,27 +329,34 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         const videoPath = job.payload.videoUrl?.toString().trim();
         const audioPath = job.payload.audioUrl?.toString().trim();
         if (!videoPath || !audioPath) throw new Error("LIP_SYNC requires videoUrl and audioUrl");
-        const result: any = await generateLipSyncKayanGpu({ videoPath, audioPath });
-
-        // ── Semantic SKIP: no face → passthrough original video ──
-        if (result?.skipped && result?.reason === 'no_face_in_video') {
-          output = {
-            syncedVideoPath: result.syncedVideoPath,
-            syncedVideoUrl: result.syncedVideoUrl,
-            skipped: true,
-            reason: 'no_face_in_video',
-            note: result.note,
-          };
-          videoUrl = result.syncedVideoUrl;
-          providerJobId = result.worker_jid ?? null;
-          break;
+        const result: any = await generateLipSyncKayanGpu({
+          videoPath, audioPath,
+          onEnqueued: async (qid: string) => {
+            try { await setStatus(jobId, "processing", { providerJobId: qid }); } catch {}
+          },
+        });
+        // KAYAN-TASK-07 — only a real synced asset counts as success.
+        // no_face_in_video is raised as a failure by the provider; any legacy
+        // skip flag reaching here is also treated as failure (defense in depth).
+        if (result?.skipped) {
+          const err: any = new Error(
+            `LIP_SYNC skipped (${result.reason || 'unknown'}) — production Lip Sync did not run`,
+          );
+          err.code = 'LIPSYNC_NO_FACE';
+          err.diagnostic = result;
+          throw err;
         }
-
         if (!result.videoPath || !fs.existsSync(result.videoPath)) {
           throw new Error(`LIP_SYNC produced no real video file: ${result.videoPath}`);
         }
         const st = fs.statSync(result.videoPath);
         if (!st.isFile() || st.size === 0) throw new Error("LIP_SYNC output is empty");
+        // KAYAN-TASK-07 — output must differ from input (real transformation).
+        const inAbs = path.resolve(videoPath);
+        const outAbs = path.resolve(result.videoPath);
+        if (inAbs === outAbs) {
+          throw new Error(`LIP_SYNC output equals input video — no actual sync performed (${outAbs})`);
+        }
         output = { syncedVideoPath: result.videoPath, syncedVideoUrl: result.videoUrl };
         videoUrl = result.videoUrl;
         providerJobId = result.jobId;
@@ -323,26 +387,42 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
     const current = await getProductionJob(jobId);
     const retries = (current?.retryCount ?? 0) + 1;
     const maxRetries = current?.maxRetries ?? 3;
+    // KAYAN-TASK-16 — classify before retrying. Never duplicate GPU work.
+    const priorProviderJobId = current?.providerJobId ?? null;
+    const decision = classifyRetry(msg, { providerJobId: priorProviderJobId, type: job.type });
+    const shouldRetry = decision === "RETRY_LIMITED" && retries <= maxRetries;
 
-    if (retries <= maxRetries) {
+    if (shouldRetry) {
       await setStatus(jobId, "pending", {
         progress: 0,
         retryCount: retries,
         errorMessage: msg,
       });
-      logger.warn({ jobId, retryCount: retries, maxRetries, err: msg }, "Production job re-queued");
+      logger.warn(
+        { jobId, retryCount: retries, maxRetries, decision, err: msg },
+        "Production job re-queued (transient)",
+      );
     } else {
+      const finalError =
+        decision === "NO_RETRY_ACCEPTED"
+          ? `NO_RETRY_ACCEPTED: provider already accepted job ${priorProviderJobId}; refusing duplicate submission. Original error: ${msg}`
+          : decision === "NO_RETRY"
+            ? `NO_RETRY (non-transient): ${msg}`
+            : msg;
       await setStatus(jobId, "failed", {
         progress: 0,
         completedAt: new Date(),
-        errorMessage: msg,
+        errorMessage: finalError,
       });
       if (job.payload.taskId && typeof job.payload.taskId === "number") {
         try {
           await db.update(productionTasksTable).set({ status: "failed" }).where(eq(productionTasksTable.id, job.payload.taskId));
         } catch {}
       }
-      logger.error({ jobId, err: msg }, "Production job permanently failed");
+      logger.error(
+        { jobId, decision, priorProviderJobId, err: msg },
+        "Production job permanently failed",
+      );
     }
   } finally {
     isProcessing = false;
