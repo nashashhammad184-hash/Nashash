@@ -92,7 +92,9 @@ function scpFromGpu(remotePath, localPath) {
 const VIDEO_PROVIDER = (process.env.VIDEO_PROVIDER || 'kayangpu').toLowerCase();
 async function runVideoJob(job) {
   if (VIDEO_PROVIDER === 'external') {
-    return await runExternalVideoJob(job);
+    // KAYAN-TASK-31: pass queue job id so external provider can persist
+    // providerRequestId BEFORE polling.
+    return await runExternalVideoJob({ payload: job.payload, queueJobId: job.id });
   }
   const p = job.payload || {};
   const { status, json } = await httpJson('POST', `${VIDEO_URL}/jobs/video`, p, 180_000);

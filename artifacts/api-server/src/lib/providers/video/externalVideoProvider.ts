@@ -10,6 +10,7 @@
 import type { VideoPayload, VideoProviderResult } from "./types";
 import { waveSpeedProvider } from "./waveSpeedProvider";
 import { mockProvider } from "./mockProvider";
+import { GpuQueueService } from "../../services/GpuQueueService";
 
 const PROVIDER_KIND = (process.env.VIDEO_EXTERNAL_KIND || "wavespeed").toLowerCase();
 const MAX_COST_USD = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
@@ -20,7 +21,7 @@ function getProvider() {
   throw new Error(`Unknown VIDEO_EXTERNAL_KIND: ${PROVIDER_KIND}`);
 }
 
-export async function runExternalVideoJob(job: { payload: any }): Promise<VideoProviderResult> {
+export async function runExternalVideoJob(job: { payload: any; queueJobId?: string }): Promise<VideoProviderResult> {
   const p = job.payload || {};
   const provider = getProvider();
 
@@ -70,6 +71,24 @@ export async function runExternalVideoJob(job: { payload: any }): Promise<VideoP
   // --- Submit ---
   const { providerJobId } = await provider.submit(payload);
   console.log(`[external:${provider.name}] submitted job ${providerJobId}, est $${estCost.toFixed(3)}`);
+
+  // KAYAN-TASK-31: persist providerRequestId BEFORE polling.
+  // If DB persistence fails, refuse to poll so the job cannot silently
+  // continue without recoverable state.
+  if (job.queueJobId) {
+    await GpuQueueService.setProviderJobId(
+      job.queueJobId,
+      provider.name,
+      providerJobId,
+    );
+    console.log(
+      `[external:${provider.name}] persisted providerRequestId for queue job ${job.queueJobId}`,
+    );
+  } else {
+    console.warn(
+      `[external:${provider.name}] no queueJobId provided — providerRequestId NOT persisted (dev/test path)`,
+    );
+  }
 
   // --- Poll ---
   const deadline = Date.now() + 30 * 60 * 1000;

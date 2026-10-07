@@ -98,6 +98,33 @@ export class GpuQueueService {
     );
   }
 
+  /**
+   * KAYAN-TASK-31: persist the provider request id (e.g. WaveSpeed request_id)
+   * BEFORE polling begins, so a worker crash between submit and completion
+   * does not lose the provider reference. Merges into existing result JSONB
+   * (does not overwrite any existing fields).
+   */
+  static async setProviderJobId(
+    jobId: string,
+    provider: string,
+    providerRequestId: string,
+  ): Promise<void> {
+    const r = await db().query(
+      `UPDATE gpu_jobs
+          SET result = COALESCE(result, '{}'::jsonb) || jsonb_build_object(
+            'provider', $2::text,
+            'providerRequestId', $3::text
+          )
+        WHERE id=$1 AND status='RUNNING'`,
+      [jobId, provider, providerRequestId],
+    );
+    if (r.rowCount !== 1) {
+      throw new Error(
+        `setProviderJobId: job ${jobId} not found or not RUNNING (rowCount=${r.rowCount})`,
+      );
+    }
+  }
+
   static async markCompleted(jobId: string, result: object): Promise<void> {
     await db().query(
       `UPDATE gpu_jobs
