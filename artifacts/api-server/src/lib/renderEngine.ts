@@ -43,14 +43,18 @@ export interface RenderClipInput {
   order: number;
   sourceStart?: number;
   sourceEnd?: number;
+  /** Optional absolute timeline position. If present, clips must be contiguous
+   *  (gap fill via color background is forbidden by policy). */
+  startTime?: number;
 }
 
 export interface CreateRenderJobInput {
   projectId: number;
   clips: RenderClipInput[];
-  /** REQUIRED real audio asset (VOICE track). Local /uploads/... path or http(s) URL.
-   *  Silent fallback is FORBIDDEN in production — passing empty/null will fail loudly. */
-  audioUrl: string;
+  /** OPTIONAL real audio asset (VOICE track). Local /uploads/... path or http(s) URL.
+   *  If absent or empty → video-only MP4 (dialogue-free projects).
+   *  Silent fallback (anullsrc / silent.mp3) is still FORBIDDEN. */
+  audioUrl?: string;
   watermarkText?: string;
   subtitlesText?: string;
 }
@@ -79,14 +83,11 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
   if (!Array.isArray(input.clips) || input.clips.length === 0) {
     throw new Error("createRenderJob: at least one clip is required (no placeholder clips allowed)");
   }
-  // ── Silent audio fallback is forbidden ──
-  if (typeof input.audioUrl !== "string" || input.audioUrl.trim().length === 0) {
-    throw new Error(
-      "Real audio asset missing: audioUrl is required for production render. " +
-      "Silent audio fallback (anullsrc / silent MP4) is disabled in production. " +
-      "Provide a real VOICE track asset URL."
-    );
-  }
+  // KAYAN-TASK-28: audioUrl is OPTIONAL. If absent → video-only mode.
+  // Still refuse silent fallback assets: if audioUrl is provided it must be
+  // a non-empty string; the actual "real asset" validation happens at run time.
+  const audioProvided =
+    typeof input.audioUrl === "string" && input.audioUrl.trim().length > 0;
   for (let i = 0; i < input.clips.length; i++) {
     const c = input.clips[i];
     if (!c || typeof c.assetUrl !== "string" || c.assetUrl.trim() === "") {
@@ -106,7 +107,7 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
       status: "QUEUED",
       input: {
         clips: input.clips,
-        audioUrl: input.audioUrl ?? null,
+        audioUrl: audioProvided ? input.audioUrl!.trim() : null,
         watermarkText: input.watermarkText ?? null,
         subtitlesText: input.subtitlesText ?? null,
       },
@@ -310,6 +311,28 @@ async function setJobStatus(
  * Runs the full render pipeline for an existing job id. Idempotent.
  * Always updates the row to COMPLETED or FAILED — never leaves PROCESSING.
  */
+function escapeDrawtext(t: string): string {
+  return t
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'")
+    .replace(/%/g, "\\%")
+    .replace(/,/g, "\\,")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+function escapeFilterPath(p: string): string {
+  return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+}
+function formatSrtTime(sec: number): string {
+  const s = Math.max(0, sec);
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = Math.floor(s % 60);
+  const ms = Math.round((s - Math.floor(s)) * 1000);
+  return `${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")},${String(ms).padStart(3,"0")}`;
+}
+
 export async function runRenderPipeline(jobId: string): Promise<void> {
   const rows = await db.select().from(renderJobsTable).where(eq(renderJobsTable.id, jobId)).limit(1);
   const row = rows[0];
@@ -326,95 +349,191 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
 
   try {
     const input = (row.input as any) || {};
-    const clips: RenderClipInput[] = Array.isArray(input.clips) ? input.clips : [];
-    if (clips.length === 0) throw new Error("no clips to render");
+    const clipsRaw: RenderClipInput[] = Array.isArray(input.clips) ? input.clips : [];
+    if (clipsRaw.length === 0) throw new Error("no clips to render");
+    const clips = [...clipsRaw].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-    // 1. Resolve all clips to real local files
-    const resolved: { file: string; duration: number }[] = [];
+    fs.mkdirSync(TEMP_ASSETS_DIR, { recursive: true });
+
+    // ─── Validate timeline policy: if any clip has startTime, all must, and
+    // they must be contiguous (no gap fill allowed by policy). ───
+    const anyStart = clips.some((c) => typeof c.startTime === "number");
+    const allStart = clips.every((c) => typeof c.startTime === "number");
+    if (anyStart && !allStart) {
+      throw new Error("timeline policy: either all clips have startTime or none do");
+    }
+
+    // ─── Resolve + trim each clip ───
+    const trimmed: { file: string; duration: number; timelineStart: number }[] = [];
+    let timelineCursor = 0;
     for (let i = 0; i < clips.length; i++) {
       const c = clips[i];
       const file = await resolveAssetToLocal(c.assetUrl);
       const probe = await probeMedia(file);
-      if (!probe.hasVideo) {
-        throw new Error(`clip #${i + 1} (${c.assetUrl}) has no video stream`);
-      }
-      if (!(probe.duration > 0)) {
-        throw new Error(`clip #${i + 1} (${c.assetUrl}) has zero/unknown duration`);
-      }
-      resolved.push({ file, duration: probe.duration });
-    }
+      if (!probe.hasVideo) throw new Error(`clip #${i + 1} (${c.assetUrl}) has no video stream`);
+      if (!(probe.duration > 0)) throw new Error(`clip #${i + 1} (${c.assetUrl}) has zero/unknown duration`);
 
-    // 2. Build concat demuxer list (safe quoting)
+      const srcStart = Math.max(0, Number(c.sourceStart ?? 0));
+      const srcEnd = c.sourceEnd != null ? Number(c.sourceEnd) : probe.duration;
+      if (!(srcEnd > srcStart)) {
+        throw new Error(`clip #${i + 1}: sourceEnd (${srcEnd}) must be > sourceStart (${srcStart})`);
+      }
+      if (srcEnd > probe.duration + 0.05) {
+        throw new Error(`clip #${i + 1}: sourceEnd ${srcEnd}s exceeds source duration ${probe.duration}s`);
+      }
+      const trimDur = srcEnd - srcStart;
+
+      // Re-encode the trimmed segment to a uniform format (H.264 yuv420p).
+      const trimmedPath = path.join(TEMP_ASSETS_DIR, `trim_${jobId}_${i}.mp4`);
+      const trimArgs = [
+        "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", String(srcStart),
+        "-to", String(srcEnd),
+        "-i", file,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-an",
+        "-movflags", "+faststart",
+        trimmedPath,
+      ];
+      await spawnFfmpeg(trimArgs);
+      if (!fs.existsSync(trimmedPath)) throw new Error(`clip #${i + 1}: trim produced no file`);
+      const tst = fs.statSync(trimmedPath);
+      if (!tst.isFile() || tst.size === 0) throw new Error(`clip #${i + 1}: trim produced empty file`);
+      const tprobe = await probeMedia(trimmedPath);
+      if (!(tprobe.duration > 0)) throw new Error(`clip #${i + 1}: trimmed duration is not > 0`);
+
+      const tStart = allStart ? Number(c.startTime) : timelineCursor;
+      if (allStart) {
+        if (Math.abs(tStart - timelineCursor) > 0.01) {
+          throw new Error(
+            `timeline policy: clip #${i + 1} startTime=${tStart} does not match expected contiguous cursor ${timelineCursor}. Gaps are not allowed (no color fill).`
+          );
+        }
+      }
+      trimmed.push({ file: trimmedPath, duration: tprobe.duration, timelineStart: tStart });
+      timelineCursor = tStart + tprobe.duration;
+    }
+    const videoDuration = timelineCursor;
+
+    // ─── Concat trimmed clips ───
     const listPath = path.join(TEMP_ASSETS_DIR, `concat_${jobId}.txt`);
-    fs.mkdirSync(TEMP_ASSETS_DIR, { recursive: true });
-    const lines = resolved.map((r) => {
-      const escaped = r.file.replace(/'/g, "'\\''");
-      return `file '${escaped}'`;
-    });
+    const lines = trimmed.map((r) => `file '${r.file.replace(/'/g, "'\\''")}'`);
     fs.writeFileSync(listPath, lines.join("\n") + "\n", "utf-8");
 
-    // 3. Run ffmpeg — real files, real output (no pipe:0)
-    //    Re-encode to guarantee a compatible single stream regardless of source codecs.
-    const args: string[] = [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
+    const concatPath = path.join(TEMP_ASSETS_DIR, `concat_${jobId}.mp4`);
+    await spawnFfmpeg([
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "concat", "-safe", "0",
       "-i", listPath,
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "23",
-      "-pix_fmt", "yuv420p",
-      "-an", // clips are video-only by spec; audio wiring is a separate VOICE track concern
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+      "-pix_fmt", "yuv420p", "-an",
+      "-movflags", "+faststart",
+      concatPath,
+    ]);
+    if (!fs.existsSync(concatPath)) throw new Error("concat produced no file");
+    const cst = fs.statSync(concatPath);
+    if (!cst.isFile() || cst.size === 0) throw new Error("concat produced empty file");
+    const cprobe = await probeMedia(concatPath);
+    if (!(cprobe.duration > 0)) throw new Error("concat duration is not > 0");
+    if (Math.abs(cprobe.duration - videoDuration) > 1.0) {
+      throw new Error(`concat duration ${cprobe.duration}s mismatch expected ${videoDuration}s`);
+    }
+
+    // ─── Audio track ───
+    const audioUrl: string = String(input.audioUrl || "").trim();
+    // KAYAN-TASK-28: audio is OPTIONAL. If empty → VIDEO_ONLY mode.
+    const audioMode: "AUDIO" | "VIDEO_ONLY" = audioUrl ? "AUDIO" : "VIDEO_ONLY";
+    let audioLocal: string | null = null;
+    if (audioMode === "AUDIO") {
+      audioLocal = await resolveAssetToLocal(audioUrl);
+      const audioProbe = await probeMedia(audioLocal);
+      if (!audioProbe.hasAudio) throw new Error(`audioUrl has no audio stream: ${audioUrl}`);
+      if (!(audioProbe.duration > 0)) throw new Error(`audioUrl has zero duration: ${audioUrl}`);
+
+    // Policy: audio is trimmed to videoDuration. If audio is >1.5x video or
+    // shorter than 95% of the video, that is a mismatch → fail loudly.
+    if (audioProbe.duration < videoDuration * 0.95) {
+      throw new Error(
+        `audio policy: audio duration ${audioProbe.duration}s is shorter than video ${videoDuration}s by more than 5%`
+      );
+    }
+    if (audioProbe.duration > videoDuration * 1.5 + 1.0) {
+      throw new Error(
+        `audio policy: audio duration ${audioProbe.duration}s exceeds video ${videoDuration}s by more than 50%`
+      );
+    }
+    }
+
+    // ─── Build final filter chain: watermark + subtitles burn-in ───
+    const vfParts: string[] = [];
+    const wmText = typeof input.watermarkText === "string" ? input.watermarkText.trim() : "";
+    if (wmText) {
+      const safe = escapeDrawtext(wmText);
+      vfParts.push(
+        `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${safe}':fontcolor=white@0.85:fontsize=h/20:box=1:boxcolor=black@0.45:boxborderw=10:x=(w-text_w)/2:y=h-th-30`
+      );
+    }
+
+    let srtPath: string | null = null;
+    const subsText = typeof input.subtitlesText === "string" ? input.subtitlesText.trim() : "";
+    if (subsText) {
+      srtPath = path.join(TEMP_ASSETS_DIR, `subs_${jobId}.srt`);
+      fs.writeFileSync(srtPath, subsText, "utf-8");
+      vfParts.push(`subtitles='${escapeFilterPath(srtPath)}'`);
+    }
+
+    const finalVf = vfParts.length > 0 ? vfParts.join(",") : "null";
+
+    const finalArgs: string[] = [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-i", concatPath,
+    ];
+    if (audioMode === "AUDIO" && audioLocal) {
+      finalArgs.push("-i", audioLocal);
+    }
+    if (finalVf !== "null") {
+      finalArgs.push("-vf", finalVf);
+    }
+    finalArgs.push("-map", "0:v:0");
+    if (audioMode === "AUDIO") {
+      finalArgs.push("-map", "1:a:0");
+    }
+    finalArgs.push(
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+    );
+    if (audioMode === "AUDIO") {
+      finalArgs.push("-c:a", "aac", "-b:a", "192k");
+    }
+    finalArgs.push(
+      "-t", String(videoDuration),
       "-movflags", "+faststart",
       outputPath,
-    ];
-    await spawnFfmpeg(args);
+    );
+    await spawnFfmpeg(finalArgs);
 
-    // 3b. Mux the REAL audio track into the video (audioUrl is required — no silent fallback)
-    const audioUrl: string = input.audioUrl.trim();
-    const audioLocal = await resolveAssetToLocal(audioUrl);
-    const audioProbe = await probeMedia(audioLocal);
-    if (!audioProbe.hasAudio) {
-      throw new Error(`Real audio asset missing: provided audioUrl has no audio stream: ${audioUrl}`);
-    }
-    if (!(audioProbe.duration > 0)) {
-      throw new Error(`Real audio asset invalid: provided audioUrl has zero/unknown duration: ${audioUrl}`);
-    }
-
-    const mixedPath = outputPath + ".mixed.mp4";
-    const mixArgs: string[] = [
-      "-y",
-      "-i", outputPath,
-      "-i", audioLocal,
-      "-c:v", "copy",
-      "-c:a", "aac",
-      "-b:a", "192k",
-      "-map", "0:v:0",
-      "-map", "1:a:0",
-      "-shortest",
-      "-movflags", "+faststart",
-      mixedPath,
-    ];
-    await spawnFfmpeg(mixArgs);
-
-    if (!fs.existsSync(mixedPath)) throw new Error("audio muxing failed: mixed file missing");
-    const mst = fs.statSync(mixedPath);
-    if (!mst.isFile() || mst.size === 0) throw new Error("audio muxing produced empty file");
-
-    // atomic replace
-    fs.renameSync(mixedPath, outputPath);
-
-    // 4. Verify output
+    // ─── Verify final output ───
     if (!fs.existsSync(outputPath)) throw new Error("ffmpeg reported success but output file is missing");
     const st = fs.statSync(outputPath);
     if (!st.isFile() || st.size === 0) throw new Error(`output file is empty (size=${st.size})`);
-
     const outProbe = await probeMedia(outputPath);
     if (!outProbe.hasVideo) throw new Error("output has no video stream");
     if (!(outProbe.duration > 0)) throw new Error(`output duration is not > 0 (got ${outProbe.duration})`);
-    if (!outProbe.hasAudio) throw new Error("final output missing audio stream — real audio was not muxed");
+    if (Math.abs(outProbe.duration - videoDuration) > 1.5) {
+      throw new Error(`output duration ${outProbe.duration}s deviates from expected ${videoDuration}s`);
+    }
 
-    // 5. Mark COMPLETED
+    // KAYAN-TASK-28: audio presence validated per mode.
+    if (audioMode === "AUDIO" && !outProbe.hasAudio) {
+      throw new Error("output has no audio stream — real audio was not muxed");
+    }
+    if (audioMode === "VIDEO_ONLY" && outProbe.hasAudio) {
+      throw new Error("output unexpectedly has audio in VIDEO_ONLY mode");
+    }
+    try { fs.unlinkSync(listPath); } catch {}
+    try { fs.unlinkSync(concatPath); } catch {}
+    for (const t of trimmed) { try { fs.unlinkSync(t.file); } catch {} }
+    if (srtPath) { try { fs.unlinkSync(srtPath); } catch {} }
+
     await setJobStatus(jobId, "COMPLETED", {
       outputPath,
       outputUrl,

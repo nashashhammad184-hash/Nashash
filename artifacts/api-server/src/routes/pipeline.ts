@@ -647,15 +647,15 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       order: t.order,
     }));
 
-    // Build the full audio track = concatenation of per-shot voice, in shot order.
+    // KAYAN-TASK-28: build audio track only when Voice stage produced real audio.
+    // Otherwise → video-only render (dialogue-free projects).
     const orderedVoicePaths = shots
       .map((sh) => perShotVoice[sh.id]?.audioPath)
       .filter((p): p is string => !!p);
+    let renderAudioUrl: string | undefined;
     if (orderedVoicePaths.length === 0) {
-      throw new Error("render: no real voice audio assets available");
-    }
-    let renderAudioUrl: string;
-    if (orderedVoicePaths.length === 1) {
+      renderAudioUrl = undefined;  // VIDEO_ONLY mode
+    } else if (orderedVoicePaths.length === 1) {
       renderAudioUrl = perShotVoice[shots.find((sh) => perShotVoice[sh.id])!.id].audioUrl;
     } else {
       const listPath = path.join(uploadsDir("voice"), `concat_${runId}.txt`);
@@ -680,7 +680,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       assertFile(mergedPath, "merged voice audio");
       renderAudioUrl = `/uploads/voice/${mergedName}`;
     }
-    if (!isRealAsset(renderAudioUrl)) {
+    if (renderAudioUrl !== undefined && !isRealAsset(renderAudioUrl)) {
       throw new Error("render: no real voice audio asset available");
     }
     const renderJob = await createRenderJob({
