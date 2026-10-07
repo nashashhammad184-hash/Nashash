@@ -19,7 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { and, desc, eq, asc } from "drizzle-orm";
+import { and, desc, eq, asc, inArray } from "drizzle-orm";
 import {
   db,
   projectsTable,
@@ -36,6 +36,7 @@ import {
   type ProductionJobType,
 } from "../lib/productionEngine";
 import { buildPipelineJobKey } from "../lib/pipeline/jobKeys";
+import { getOrCreateChildJob } from "../lib/pipeline/childJobs";
 import {
   createRenderJob,
   runRenderPipeline,
@@ -177,10 +178,31 @@ interface PipelineInput {
   durationSeconds?: number;
   numFrames?: number;
   aspectRatio?: string;
+  /** KAYAN-TASK-33: internal flag — when true, executePipeline reuses
+   *  completed child jobs and skips already-completed expensive stages. */
+  __resume?: boolean;
 }
 
 async function executePipeline(runId: string, input: PipelineInput): Promise<void> {
-  const stages = emptyStages();
+  // KAYAN-TASK-33: resume mode preserves existing stage statuses instead of
+  // resetting them. Completed stages are skipped; child jobs are reused via
+  // getOrCreateChildJob.
+  const resumeMode = input.__resume === true;
+  let stages: StageMap;
+  if (resumeMode) {
+    const existingRow = await readRun(runId);
+    const prev = (existingRow?.payload as any)?.stages as StageMap | undefined;
+    stages = prev && typeof prev === "object" ? prev : emptyStages();
+    logger.info(
+      {
+        runId,
+        completed: Object.entries(stages).filter(([, v]: any) => v?.status === "completed").map(([k]) => k),
+      },
+      "executePipeline: resume mode",
+    );
+  } else {
+    stages = emptyStages();
+  }
   const persistStages = async () => {
     const row = await readRun(runId);
     const payload = (row?.payload ?? {}) as any;
@@ -296,10 +318,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       const shotVoiceId = (shot as any).voice_id as string | undefined;
       if (shotVoiceId) payload.voiceId = shotVoiceId;
 
-      const voiceJob = await createProductionJob("VOICE_GEN", payload, 3, {
-        parentRunId: runId,
-        jobKey: buildPipelineJobKey(runId, "VOICE_GEN", shot.id),
-      });
+      const voiceJob = await getOrCreateChildJob("VOICE_GEN", runId, "VOICE_GEN", shot.id, payload);
       const voiceDone = await waitForJob(voiceJob.id);
       if (voiceDone.status !== "completed") {
         await db.update(shotsTable)
@@ -388,7 +407,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       } else {
         const prompt = (shot.description || project.title || "").trim();
         if (!prompt) throw new Error(`Video prompt is empty for shot ${shot.id}`);
-        const videoJob = await createProductionJob("VIDEO_GEN", {
+        const videoJob = await getOrCreateChildJob("VIDEO_GEN", runId, "VIDEO_GEN", shot.id, {
           projectId,
           prompt,
           shotId: shot.id,
@@ -399,9 +418,6 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
           ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
           ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
-        }, 3, {
-          parentRunId: runId,
-          jobKey: buildPipelineJobKey(runId, "VIDEO_GEN", shot.id),
         });
         const videoDone = await waitForJob(videoJob.id);
         if (videoDone.status !== "completed") {
@@ -463,14 +479,11 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           perShotSynced[shot.id] = { syncedVideoPath: v.videoPath, syncedVideoUrl: v.videoUrl };
           continue;
         }
-        const lipJob = await createProductionJob("LIP_SYNC", {
+        const lipJob = await getOrCreateChildJob("LIP_SYNC", runId, "LIP_SYNC", shot.id, {
           projectId,
           shotId: shot.id,
           videoUrl: v.videoPath,
           audioUrl: a.audioPath,
-        }, 3, {
-          parentRunId: runId,
-          jobKey: buildPipelineJobKey(runId, "LIP_SYNC", shot.id),
         });
         const lipDone = await waitForJob(lipJob.id);
         if (lipDone.status !== "completed") {
@@ -519,7 +532,6 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     const manualRows = existingRows.filter(isManualRow);
     const generatedRows = existingRows.filter((r) => !isManualRow(r));
     if (generatedRows.length > 0) {
-      const { inArray } = await import("drizzle-orm");
       await db
         .delete(timelineItemsTable)
         .where(inArray(timelineItemsTable.id, generatedRows.map((r) => r.id)));
@@ -846,6 +858,77 @@ router.post(["/", "/start", "/run"], requireProductionAuth, async (req: Request,
     pipelineId: runId,
     status: "pending",
     progress: 0,
+    projectId,
+  });
+});
+
+// ================================================================
+// KAYAN-TASK-33: POST /api/pipeline/:runId/resume
+// Atomically transitions an 'interrupted' pipeline back to 'processing'
+// and re-runs executePipeline with __resume=true. Child jobs are reused
+// via getOrCreateChildJob (job_key). No duplicate child jobs. No
+// WaveSpeed re-submit (persisted providerRequestId is reused).
+// ================================================================
+router.post("/:runId/resume", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const runId = String(req.params.runId || "").trim();
+  if (!runId) {
+    res.status(400).json({ error: "runId is required" });
+    return;
+  }
+  const run = await readRun(runId);
+  if (!run) {
+    res.status(404).json({ error: "pipeline run not found", runId });
+    return;
+  }
+  if (run.type !== "FULL_PIPELINE") {
+    res.status(400).json({ error: `run ${runId} is not a FULL_PIPELINE (type=${run.type})` });
+    return;
+  }
+  if (run.status === "completed") {
+    res.status(200).json({ success: true, status: "ALREADY_COMPLETED", pipelineId: runId });
+    return;
+  }
+  if (run.status === "processing" || run.status === "pending") {
+    res.status(200).json({ success: true, status: "ALREADY_RUNNING", pipelineId: runId });
+    return;
+  }
+  if (run.status !== "interrupted" && run.status !== "failed") {
+    res.status(400).json({
+      error: `run ${runId} status=${run.status} is not resumable (expected 'interrupted' or 'failed')`,
+    });
+    return;
+  }
+
+  // Atomic transition to processing — prevents concurrent resumes.
+  const upd = await db
+    .update(productionPipeline)
+    .set({ status: "processing", updatedAt: new Date(), errorMessage: null })
+    .where(and(
+      eq(productionPipeline.id, runId),
+      inArray(productionPipeline.status, ["interrupted", "failed"]),
+    ));
+  if (upd.rowCount !== 1) {
+    // Someone else resumed between readRun() and update.
+    res.status(200).json({ success: true, status: "ALREADY_RUNNING", pipelineId: runId });
+    return;
+  }
+
+  const storedInput = (run.payload as any)?.input ?? {};
+  const projectId = run.projectId ?? storedInput.projectId;
+  if (!projectId) {
+    res.status(500).json({ error: "cannot resume: projectId missing from run" });
+    return;
+  }
+
+  logger.info({ runId, projectId }, "Pipeline resume requested; executing with __resume=true");
+  setImmediate(() => {
+    void executePipeline(runId, { ...storedInput, projectId, __resume: true });
+  });
+
+  res.status(202).json({
+    success: true,
+    status: "RESUMED",
+    pipelineId: runId,
     projectId,
   });
 });

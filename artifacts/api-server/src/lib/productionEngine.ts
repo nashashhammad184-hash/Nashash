@@ -192,6 +192,21 @@ export async function createProductionJob(
   return rowToJob(row);
 }
 
+/**
+ * KAYAN-TASK-33: find a production job by deterministic job_key.
+ * Returns undefined if not found. Used by pipeline resume to reuse
+ * completed/in-flight child jobs instead of creating duplicates.
+ */
+export async function findProductionJobByJobKey(jobKey: string): Promise<ProductionJob | undefined> {
+  if (!jobKey || typeof jobKey !== "string") return undefined;
+  const rows = await db
+    .select()
+    .from(productionPipeline)
+    .where(eq(productionPipeline.jobKey, jobKey))
+    .limit(1);
+  return rows[0] ? rowToJob(rows[0]) : undefined;
+}
+
 export async function getProductionJob(jobId: string): Promise<ProductionJob | undefined> {
   const rows = await db
     .select()
