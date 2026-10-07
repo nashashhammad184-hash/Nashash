@@ -41,6 +41,8 @@ import {
   createRenderJob,
   runRenderPipeline,
   getRenderJobStatus,
+  findRenderJobByPipelineRun,
+  isRenderOutputValid,
   type RenderClipInput,
 } from "../lib/renderEngine";
 import { generateSRT, generateVTT, type SubtitleItem } from "../lib/subtitleService";
@@ -705,14 +707,69 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     if (renderAudioUrl !== undefined && !isRealAsset(renderAudioUrl)) {
       throw new Error("render: no real voice audio asset available");
     }
-    const renderJob = await createRenderJob({
-      projectId,
-      clips: renderClips,
-      audioUrl: renderAudioUrl,
-      watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
-    });
 
-    await runRenderPipeline(renderJob.id);
+    // ------------------------------------------------------------
+    // TASK-34: Render reuse on resume.
+    //   - COMPLETED + valid file (exists && size>0) -> REUSE_EXISTING_RENDER
+    //   - COMPLETED + missing/zero-byte file        -> rebuild
+    //   - PROCESSING / QUEUED                       -> wait existing job
+    //   - FAILED                                    -> rebuild
+    // No new render job / no FFmpeg run when a valid render exists.
+    // ------------------------------------------------------------
+    let renderJob: { id: string } | null = null;
+    if (resumeMode) {
+      const existing = await findRenderJobByPipelineRun(runId);
+      if (existing) {
+        if (existing.status === "COMPLETED" && isRenderOutputValid(existing)) {
+          logger.info(
+            { runId, renderJobId: existing.id, outputPath: existing.outputPath },
+            "Render reuse: REUSE_EXISTING_RENDER (valid completed render)",
+          );
+          renderJob = { id: existing.id };
+        } else if (existing.status === "PROCESSING" || existing.status === "QUEUED") {
+          logger.info(
+            { runId, renderJobId: existing.id, status: existing.status },
+            "Render reuse: waiting for existing render job",
+          );
+          const deadline = Date.now() + 30 * 60 * 1000;
+          while (Date.now() < deadline) {
+            const cur = await getRenderJobStatus(existing.id);
+            if (!cur) break;
+            if (cur.status === "COMPLETED" || cur.status === "FAILED") break;
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+          const cur = await getRenderJobStatus(existing.id);
+          if (cur && cur.status === "COMPLETED" && isRenderOutputValid(cur)) {
+            renderJob = { id: existing.id };
+          } else if (cur && cur.status === "PROCESSING") {
+            throw new Error(`Render reuse: existing job ${existing.id} did not finish within timeout`);
+          }
+          // else: FAILED or invalid COMPLETED -> fall through to rebuild
+        } else if (existing.status === "COMPLETED") {
+          logger.warn(
+            { runId, renderJobId: existing.id, outputPath: existing.outputPath },
+            "Render reuse: COMPLETED render has invalid/missing output -> rebuild",
+          );
+        } else if (existing.status === "FAILED") {
+          logger.warn(
+            { runId, renderJobId: existing.id, error: existing.error },
+            "Render reuse: prior render FAILED -> rebuild",
+          );
+        }
+      }
+    }
+
+    if (!renderJob) {
+      const created = await createRenderJob({
+        projectId,
+        clips: renderClips,
+        audioUrl: renderAudioUrl,
+        watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
+        pipelineRunId: runId,
+      });
+      await runRenderPipeline(created.id);
+      renderJob = { id: created.id };
+    }
     const renderStatus = await getRenderJobStatus(renderJob.id);
     if (!renderStatus || renderStatus.status !== "COMPLETED") {
       throw new Error(`Render failed: ${renderStatus?.error || "unknown"}`);

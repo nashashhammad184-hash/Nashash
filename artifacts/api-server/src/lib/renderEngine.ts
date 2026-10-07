@@ -17,7 +17,7 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { db, renderJobsTable, type RenderJobRow, type RenderStatus } from "@workspace/db";
 
 const pExec = promisify(execFile);
@@ -57,6 +57,8 @@ export interface CreateRenderJobInput {
   audioUrl?: string;
   watermarkText?: string;
   subtitlesText?: string;
+  /** TASK-34: link this render job to a pipeline run for reuse on resume. */
+  pipelineRunId?: string;
 }
 
 export interface RenderJobStatus {
@@ -110,6 +112,7 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
         audioUrl: audioProvided ? input.audioUrl!.trim() : null,
         watermarkText: input.watermarkText ?? null,
         subtitlesText: input.subtitlesText ?? null,
+        pipelineRunId: input.pipelineRunId ?? null,
       },
     })
     .returning();
@@ -565,6 +568,35 @@ export async function handleRenderPipeline(input: CreateRenderJobInput): Promise
   const job = await createRenderJob(input);
   setImmediate(() => { void runRenderPipeline(job.id); });
   return { jobId: job.id };
+}
+
+// ================================================================
+// TASK-34: Render reuse helpers
+// ================================================================
+export async function findRenderJobByPipelineRun(
+  pipelineRunId: string,
+): Promise<RenderJobStatus | null> {
+  if (!pipelineRunId || !pipelineRunId.trim()) return null;
+  const rows = await db
+    .select()
+    .from(renderJobsTable)
+    .where(sql`${renderJobsTable.input}->>'pipelineRunId' = ${pipelineRunId}`)
+    .orderBy(desc(renderJobsTable.createdAt))
+    .limit(1);
+  const row = rows[0];
+  return row ? toStatus(row) : null;
+}
+
+export function isRenderOutputValid(job: RenderJobStatus | null): boolean {
+  if (!job || job.status !== "COMPLETED") return false;
+  if (!job.outputPath) return false;
+  try {
+    if (!fs.existsSync(job.outputPath)) return false;
+    const st = fs.statSync(job.outputPath);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
 }
 
 // Re-export the row type for callers
