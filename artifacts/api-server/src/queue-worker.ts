@@ -14,8 +14,25 @@ const JOB_POLL_MS = 3000;
 const WATCHDOG_MS = 60_000;
 const STALE_THRESHOLD_MS = 5 * 60_000;
 
-const VIDEO_URL = process.env.VIDEO_WORKER_URL || 'http://127.0.0.1:8080';
-const LLM_URL   = process.env.LLM_WORKER_URL   || 'http://127.0.0.1:8082';
+// KAYAN-TASK-38: no silent localhost fallback in production.
+// In production, a missing URL is an explicit MISCONFIGURATION.
+// In development (NODE_ENV=development), the localhost default is allowed.
+const __IS_PROD = (process.env.NODE_ENV || 'production').toLowerCase() !== 'development';
+function requireWorkerUrl(envName: string, devDefault: string): string {
+  const v = process.env[envName];
+  if (v && v.trim().length > 0) return v.trim();
+  if (__IS_PROD) {
+    const err: any = new Error(
+      `${envName} is not set — refusing silent localhost fallback in production (KAYAN-TASK-38)`,
+    );
+    err.category = 'PERMANENT';
+    err.code = 'MISCONFIGURATION';
+    throw err;
+  }
+  return devDefault;
+}
+function getVideoUrl(): string { return requireWorkerUrl('VIDEO_WORKER_URL', 'http://127.0.0.1:8080'); }
+function getLlmUrl(): string   { return requireWorkerUrl('LLM_WORKER_URL',   'http://127.0.0.1:8082'); }
 
 let stopping = false;
 
@@ -65,7 +82,24 @@ async function pollWorkerJob(base, jid, timeoutMs) {
 
 const GPU_SSH_KEY = process.env.GPU_SSH_KEY
   || path.join(process.env.HOME || '/home/ubuntu', '.ssh/kayan_gpu');
-const GPU_SSH_TARGET = process.env.GPU_SSH_TARGET || 'ubuntu@127.0.0.1';
+// KAYAN-TASK-38: no silent localhost SSH fallback in production.
+function getGpuSshTarget(): string {
+  const v = process.env.GPU_SSH_TARGET;
+  if (v && v.trim().length > 0) return v.trim();
+  if (__IS_PROD) {
+    const err: any = new Error(
+      'GPU_SSH_TARGET is not set — refusing silent localhost SSH target in production (KAYAN-TASK-38)',
+    );
+    err.category = 'PERMANENT';
+    err.code = 'MISCONFIGURATION';
+    throw err;
+  }
+  return 'ubuntu@127.0.0.1';
+}
+// NOTE: do NOT evaluate GPU_SSH_TARGET at module load — the KayanGPU path
+// (which uses SSH) is optional; production with an external provider must
+// be able to boot even when GPU_SSH_TARGET is unset. Fail-closed is enforced
+// only when the SSH path is actually exercised (see fetchRemoteFile).
 const NASHASH_VIDEO_DIR = process.env.NASHASH_VIDEO_DIR
   || path.resolve(process.cwd(), 'uploads', 'videos');
 
@@ -76,7 +110,7 @@ function scpFromGpu(remotePath, localPath) {
       '-o', 'StrictHostKeyChecking=no',
       '-o', 'UserKnownHostsFile=/dev/null',
       '-o', 'ConnectTimeout=15',
-      `${GPU_SSH_TARGET}:${remotePath}`,
+      `${getGpuSshTarget()}:${remotePath}`,
       localPath,
     ]);
     let err = '';
@@ -97,6 +131,7 @@ async function runVideoJob(job) {
     return await runExternalVideoJob({ payload: job.payload, queueJobId: job.id });
   }
   const p = job.payload || {};
+  const VIDEO_URL = getVideoUrl();
   const { status, json } = await httpJson('POST', `${VIDEO_URL}/jobs/video`, p, 180_000);
   if (status !== 200 && status !== 202) throw new Error(`video submit HTTP ${status}: ${JSON.stringify(json)}`);
   const jid = json?.job_id || json?.id;
@@ -140,6 +175,7 @@ async function runLlmJob(job) {
   }
 
   // Case 2: raw LLM job — direct call to 8082
+  const LLM_URL = getLlmUrl();
   const { status, json } = await httpJson('POST', `${LLM_URL}/jobs/llm`, p, 30_000);
   if (status !== 200 && status !== 202) throw new Error(`llm submit HTTP ${status}: ${JSON.stringify(json)}`);
   const jid = json?.job_id || json?.id;
