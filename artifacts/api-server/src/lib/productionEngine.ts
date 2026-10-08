@@ -506,6 +506,7 @@ export async function sweepStaleChildJobs(maxAgeMs: number): Promise<number> {
 // ================================================================
 
 let workerInterval: NodeJS.Timeout | null = null;
+let sweepInterval: NodeJS.Timeout | null = null;
 
 export function startProductionWorker(pollIntervalMs = 5000): void {
   if (workerInterval) return;
@@ -540,6 +541,23 @@ export function startProductionWorker(pollIntervalMs = 5000): void {
   })();
 
   workerInterval = setInterval(() => { void processNextQueuedJob(); }, pollIntervalMs);
+
+  const sweepMs = Number(process.env.SWEEP_INTERVAL_MS || "60000");
+  const disableAuto = process.env.NASHASH_DISABLE_AUTO_WORKER === "1";
+  if (!disableAuto && Number.isFinite(sweepMs) && sweepMs > 0) {
+    const staleMs = Number(process.env.WORKER_STALE_MS || "600000");
+    sweepInterval = setInterval(() => {
+      void (async () => {
+        try {
+          const n = await sweepStaleChildJobs(staleMs);
+          if (n > 0) logger.warn({ swept: n }, "TASK-37: periodic stale-child sweep");
+        } catch (e) {
+          logger.warn({ err: e }, "TASK-37: periodic sweep failed");
+        }
+      })();
+    }, sweepMs);
+    logger.info({ sweepMs, staleMs }, "Starting periodic stale-child sweep");
+  }
   logger.info("Starting background production worker (DB-backed)...");
 }
 
@@ -547,6 +565,10 @@ export function stopProductionWorker(): void {
   if (workerInterval) {
     clearInterval(workerInterval);
     workerInterval = null;
+  }
+  if (sweepInterval) {
+    clearInterval(sweepInterval);
+    sweepInterval = null;
   }
 }
 

@@ -615,9 +615,6 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       (m: number, r: any) => Math.max(m, Number(r.order) || 0),
       0,
     );
-    const firstShotRow = existingRows[0];
-    const firstShotTime = Number(firstShotRow?.startTime ?? 0);
-    void firstShotTime;
     let currentTime = 0;
     let order = maxManualOrder + 1;
     const genMeta = JSON.stringify({ origin: "generated" });
