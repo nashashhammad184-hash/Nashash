@@ -38,6 +38,13 @@ import {
 import { buildPipelineJobKey } from "../lib/pipeline/jobKeys";
 import { getOrCreateChildJob } from "../lib/pipeline/childJobs";
 import {
+  decideStageReuse,
+  resetJobForRebuild,
+  validateVideoOutputOnDisk,
+  validateVoiceOutputOnDisk,
+  validateLipsyncOutputOnDisk,
+} from "../lib/pipeline/stageReuse";
+import {
   createRenderJob,
   runRenderPipeline,
   getRenderJobStatus,
@@ -320,8 +327,32 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       const shotVoiceId = (shot as any).voice_id as string | undefined;
       if (shotVoiceId) payload.voiceId = shotVoiceId;
 
-      const voiceJob = await getOrCreateChildJob("VOICE_GEN", runId, "VOICE_GEN", shot.id, payload);
-      const voiceDone = await waitForJob(voiceJob.id);
+      // KAYAN-TASK-35: stage-level idempotent reuse.
+      const voiceDecision = await decideStageReuse({
+        runId, stage: "VOICE_GEN", shotId: shot.id,
+        validateOutput: validateVoiceOutputOnDisk,
+      });
+      let voiceJobId: string;
+      let voiceDone: any;
+      if (voiceDecision.decision === "SKIPPED_EXISTING_RESULT" && voiceDecision.job) {
+        voiceJobId = voiceDecision.job.id;
+        voiceDone = voiceDecision.job;
+        logger.info({ runId, shotId: shot.id, jobId: voiceJobId }, "VOICE_STAGE = SKIPPED_EXISTING_RESULT");
+      } else if (voiceDecision.decision === "REUSE_PROCESSING_JOB" || voiceDecision.decision === "REUSE_QUEUED_JOB") {
+        voiceJobId = voiceDecision.job!.id;
+        logger.info({ runId, shotId: shot.id, jobId: voiceJobId, decision: voiceDecision.decision }, "VOICE_STAGE = REUSE_EXISTING_JOB");
+        voiceDone = await waitForJob(voiceJobId);
+      } else if (voiceDecision.decision === "REBUILD_REQUIRED" && voiceDecision.job) {
+        logger.warn({ runId, shotId: shot.id, jobId: voiceDecision.job.id, reason: voiceDecision.reason }, "VOICE_STAGE = REBUILD_REQUIRED");
+        await resetJobForRebuild(voiceDecision.job.id);
+        voiceJobId = voiceDecision.job.id;
+        voiceDone = await waitForJob(voiceJobId);
+      } else {
+        const vj = await getOrCreateChildJob("VOICE_GEN", runId, "VOICE_GEN", shot.id, payload);
+        voiceJobId = vj.id;
+        logger.info({ runId, shotId: shot.id, jobId: voiceJobId }, "VOICE_STAGE = MISSING -> create");
+        voiceDone = await waitForJob(voiceJobId);
+      }
       if (voiceDone.status !== "completed") {
         await db.update(shotsTable)
           .set({ audioStatus: "FAILED" } as any)
@@ -347,7 +378,7 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         .set({ audioUrl, audioStatus: "COMPLETED" } as any)
         .where(eq(shotsTable.id, shot.id));
 
-      perShotVoice[shot.id] = { audioPath, audioUrl, text: voiceText, duration, sizeBytes, jobId: voiceJob.id };
+      perShotVoice[shot.id] = { audioPath, audioUrl, text: voiceText, duration, sizeBytes, jobId: voiceJobId };
     }
 
     if (Object.keys(perShotVoice).length === 0) {
@@ -409,19 +440,38 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       } else {
         const prompt = (shot.description || project.title || "").trim();
         if (!prompt) throw new Error(`Video prompt is empty for shot ${shot.id}`);
-        const videoJob = await getOrCreateChildJob("VIDEO_GEN", runId, "VIDEO_GEN", shot.id, {
-          projectId,
-          prompt,
-          shotId: shot.id,
-          task: "i2v" as const,
-          referenceImageBase64: input.referenceImageBase64,
-          ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
-          ...(input.fps != null ? { fps: input.fps } : {}),
-          ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
-          ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
-          ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+        // KAYAN-TASK-35: stage-level idempotent reuse.
+        const videoDecision = await decideStageReuse({
+          runId, stage: "VIDEO_GEN", shotId: shot.id,
+          validateOutput: validateVideoOutputOnDisk,
         });
-        const videoDone = await waitForJob(videoJob.id);
+        let videoDone: any;
+        if (videoDecision.decision === "SKIPPED_EXISTING_RESULT" && videoDecision.job) {
+          videoDone = videoDecision.job;
+          logger.info({ runId, shotId: shot.id, jobId: videoDone.id }, "VIDEO_STAGE = SKIPPED_EXISTING_RESULT");
+        } else if (videoDecision.decision === "REUSE_PROCESSING_JOB" || videoDecision.decision === "REUSE_QUEUED_JOB") {
+          logger.info({ runId, shotId: shot.id, jobId: videoDecision.job!.id, decision: videoDecision.decision }, "VIDEO_STAGE = REUSE_EXISTING_JOB");
+          videoDone = await waitForJob(videoDecision.job!.id);
+        } else if (videoDecision.decision === "REBUILD_REQUIRED" && videoDecision.job) {
+          logger.warn({ runId, shotId: shot.id, jobId: videoDecision.job.id, reason: videoDecision.reason }, "VIDEO_STAGE = REBUILD_REQUIRED");
+          await resetJobForRebuild(videoDecision.job.id);
+          videoDone = await waitForJob(videoDecision.job.id);
+        } else {
+          const videoJob = await getOrCreateChildJob("VIDEO_GEN", runId, "VIDEO_GEN", shot.id, {
+            projectId,
+            prompt,
+            shotId: shot.id,
+            task: "i2v" as const,
+            referenceImageBase64: input.referenceImageBase64,
+            ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
+            ...(input.fps != null ? { fps: input.fps } : {}),
+            ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
+            ...(input.numFrames != null ? { numFrames: input.numFrames } : {}),
+            ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+          });
+          logger.info({ runId, shotId: shot.id, jobId: videoJob.id }, "VIDEO_STAGE = MISSING -> create");
+          videoDone = await waitForJob(videoJob.id);
+        }
         if (videoDone.status !== "completed") {
           throw new Error(`VIDEO_GEN failed for shot ${shot.id}: ${videoDone.error || "unknown"}`);
         }
@@ -481,13 +531,32 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           perShotSynced[shot.id] = { syncedVideoPath: v.videoPath, syncedVideoUrl: v.videoUrl };
           continue;
         }
-        const lipJob = await getOrCreateChildJob("LIP_SYNC", runId, "LIP_SYNC", shot.id, {
-          projectId,
-          shotId: shot.id,
-          videoUrl: v.videoPath,
-          audioUrl: a.audioPath,
+        // KAYAN-TASK-35: stage-level idempotent reuse.
+        const lipDecision = await decideStageReuse({
+          runId, stage: "LIP_SYNC", shotId: shot.id,
+          validateOutput: validateLipsyncOutputOnDisk,
         });
-        const lipDone = await waitForJob(lipJob.id);
+        let lipDone: any;
+        if (lipDecision.decision === "SKIPPED_EXISTING_RESULT" && lipDecision.job) {
+          lipDone = lipDecision.job;
+          logger.info({ runId, shotId: shot.id, jobId: lipDone.id }, "LIPSYNC_STAGE = SKIPPED_EXISTING_RESULT");
+        } else if (lipDecision.decision === "REUSE_PROCESSING_JOB" || lipDecision.decision === "REUSE_QUEUED_JOB") {
+          logger.info({ runId, shotId: shot.id, jobId: lipDecision.job!.id, decision: lipDecision.decision }, "LIPSYNC_STAGE = REUSE_EXISTING_JOB");
+          lipDone = await waitForJob(lipDecision.job!.id);
+        } else if (lipDecision.decision === "REBUILD_REQUIRED" && lipDecision.job) {
+          logger.warn({ runId, shotId: shot.id, jobId: lipDecision.job.id, reason: lipDecision.reason }, "LIPSYNC_STAGE = REBUILD_REQUIRED");
+          await resetJobForRebuild(lipDecision.job.id);
+          lipDone = await waitForJob(lipDecision.job.id);
+        } else {
+          const lipJob = await getOrCreateChildJob("LIP_SYNC", runId, "LIP_SYNC", shot.id, {
+            projectId,
+            shotId: shot.id,
+            videoUrl: v.videoPath,
+            audioUrl: a.audioPath,
+          });
+          logger.info({ runId, shotId: shot.id, jobId: lipJob.id }, "LIPSYNC_STAGE = MISSING -> create");
+          lipDone = await waitForJob(lipJob.id);
+        }
         if (lipDone.status !== "completed") {
           throw new Error(`LIP_SYNC failed for shot ${shot.id}: ${lipDone.error || "unknown"}`);
         }
