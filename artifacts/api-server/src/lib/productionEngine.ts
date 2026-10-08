@@ -185,9 +185,13 @@ export async function createProductionJob(
   logger.info({ jobId: id, type }, "Production job created and queued (DB-backed)");
 
   // Fire-and-forget — the actual transition + retries are persisted row by row
-  setImmediate(() => {
-    void processNextQueuedJob();
-  });
+  // KAYAN-TASK-36: tests set NASHASH_DISABLE_AUTO_WORKER=1 to isolate DB
+  // state from the in-process worker and avoid races on job status.
+  if (process.env.NASHASH_DISABLE_AUTO_WORKER !== "1") {
+    setImmediate(() => {
+      void processNextQueuedJob();
+    });
+  }
 
   return rowToJob(row);
 }
@@ -445,6 +449,56 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
   }
 
   return job;
+}
+
+// ================================================================
+// KAYAN-TASK-36: Worker-failure recovery helpers
+// ================================================================
+/**
+ * Mark a single child job as failed with WORKER_TIMEOUT.
+ * Called when the pipeline has been waiting on a processing job whose
+ * `updatedAt` has not moved for longer than the stale threshold.
+ * Preserves providerJobId (TASK-31) so a rebuild will not blindly re-submit
+ * before the previous provider request is considered.
+ */
+export async function markJobWorkerTimeout(jobId: string, reason: string): Promise<void> {
+  await db
+    .update(productionPipeline)
+    .set({
+      status: "failed",
+      errorMessage: `WORKER_TIMEOUT: ${reason}`,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(productionPipeline.id, jobId),
+      eq(productionPipeline.status, "processing"),
+    ));
+}
+
+/**
+ * Sweep all child jobs (non FULL_PIPELINE) that are stuck in 'processing'
+ * with no updatedAt change for > maxAgeMs. Converts them to 'failed'
+ * with WORKER_TIMEOUT. Idempotent — safe to run repeatedly.
+ */
+export async function sweepStaleChildJobs(maxAgeMs: number): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const rows = await db
+    .select()
+    .from(productionPipeline)
+    .where(and(
+      eq(productionPipeline.status, "processing"),
+      ne(productionPipeline.type, "FULL_PIPELINE"),
+    ));
+  let n = 0;
+  for (const r of rows) {
+    const lastTouch = (r.updatedAt instanceof Date ? r.updatedAt : new Date(r.updatedAt ?? 0)).getTime();
+    if (lastTouch < cutoff.getTime()) {
+      await markJobWorkerTimeout(r.id, `no progress for ${Math.round((Date.now() - lastTouch) / 1000)}s`);
+      n++;
+    }
+  }
+  return n;
 }
 
 // ================================================================

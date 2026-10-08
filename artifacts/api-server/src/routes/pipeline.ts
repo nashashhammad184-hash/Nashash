@@ -33,10 +33,12 @@ import { logger } from "../lib/logger";
 import {
   createProductionJob,
   getProductionJob,
+  sweepStaleChildJobs,
   type ProductionJobType,
 } from "../lib/productionEngine";
 import { buildPipelineJobKey } from "../lib/pipeline/jobKeys";
 import { getOrCreateChildJob } from "../lib/pipeline/childJobs";
+import { waitForJob, workerStaleMs } from "../lib/pipeline/jobWait";
 import {
   decideStageReuse,
   resetJobForRebuild,
@@ -910,23 +912,18 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
 // waitForJob — poll a productionEngine job until terminal
 // ================================================================
 
-async function waitForJob(jobId: string, timeoutMs = 150 * 60 * 1000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const job = await getProductionJob(jobId);
-    if (!job) throw new Error(`job ${jobId} disappeared`);
-    if (job.status === "completed" || job.status === "failed") return job;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw new Error(`job ${jobId} timed out after ${timeoutMs}ms`);
-}
-
 // ================================================================
 // Boot recovery — mark stale FULL_PIPELINE runs as failed
 // ================================================================
 
 async function recoverStalePipelineRuns(): Promise<void> {
   try {
+    try {
+      const n = await sweepStaleChildJobs(workerStaleMs());
+      if (n > 0) logger.warn({ swept: n }, "TASK-36: swept stale child jobs to WORKER_TIMEOUT");
+    } catch (e) {
+      logger.warn({ err: e }, "TASK-36: sweep stale child jobs failed");
+    }
     const stale = await db
       .select()
       .from(productionPipeline)
