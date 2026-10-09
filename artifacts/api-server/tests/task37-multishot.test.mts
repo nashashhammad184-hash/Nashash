@@ -22,10 +22,17 @@ const TMP = path.resolve(process.cwd(), "uploads", "temp", "task37");
 fs.mkdirSync(TMP, { recursive: true });
 
 interface FixtureShot { id: number; hasDialogue: boolean; text?: string; duration: number; }
+// KAYAN-TASK-49: use unique shotIds per test run. The production worker on
+// Northflank shares the same DATABASE_URL; if a test uses static shotIds
+// (e.g. 101/102/103), a stale row left by a previous run or picked up by an
+// external worker can collide with decideStageReuse's jobKey lookup and
+// yield REUSE_PROCESSING_JOB instead of the expected SKIPPED/MISSING.
+// A per-run random offset guarantees isolation without touching prod logic.
+const __SHOT_BASE = 900_000_000 + (Date.now() % 90_000_000) + Math.floor(Math.random() * 1000);
 const SHOTS: FixtureShot[] = [
-  { id: 101, hasDialogue: true,  text: "Dialogue one",  duration: 5 },
-  { id: 102, hasDialogue: true,  text: "Dialogue two",  duration: 5 },
-  { id: 103, hasDialogue: false,                        duration: 5 },
+  { id: __SHOT_BASE + 1, hasDialogue: true,  text: "Dialogue one",  duration: 5 },
+  { id: __SHOT_BASE + 2, hasDialogue: true,  text: "Dialogue two",  duration: 5 },
+  { id: __SHOT_BASE + 3, hasDialogue: false,                        duration: 5 },
 ];
 
 function writeFile(name: string): string {
@@ -43,19 +50,33 @@ async function seedChildJob(opts: {
   providerJobId?: string | null;
 }) {
   const jobKey = buildPipelineJobKey(opts.runId, opts.stage, opts.shotId);
-  const j = await createProductionJob(
-    opts.stage,
-    { projectId: 1, shotId: opts.shotId, prompt: "x", text: "x", videoUrl: "/x", audioUrl: "/x" } as any,
-    3,
-    { parentRunId: opts.runId, jobKey },
-  );
-  await db.update(productionPipeline).set({
+  // KAYAN-TASK-49: insert directly instead of going through
+  // createProductionJob. createProductionJob briefly writes the row as
+  // "pending" before the test overrides the status; the Northflank
+  // production worker shares the same DATABASE_URL and could pick up the
+  // pending row, attempt a real provider call, and race the test state.
+  // Direct insert never exposes a "pending" state, isolating tests.
+  const jobId = "job_test_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+  const now = new Date();
+  await db.insert(productionPipeline).values({
+    id: jobId,
+    projectId: 1,
+    jobId,
+    type: opts.stage,
     status: opts.status,
-    output: opts.output as any,
+    progress: 0,
+    payload: { projectId: 1, shotId: opts.shotId, prompt: "x", text: "x", videoUrl: "/x", audioUrl: "/x" } as any,
+    retryCount: 0,
+    maxRetries: 3,
+    parentRunId: opts.runId,
+    jobKey,
+    output: (opts.output ?? null) as any,
     providerJobId: opts.providerJobId ?? null,
-    completedAt: opts.status === "completed" ? new Date() : null,
-  }).where(eq(productionPipeline.id, j.id));
-  return j.id;
+    completedAt: opts.status === "completed" ? now : null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return jobId;
 }
 
 async function cleanupRun(runId: string) {
@@ -125,7 +146,7 @@ async function cleanupRun(runId: string) {
   const noDialogue = SHOTS.filter((s) => !s.hasDialogue);
   report("TEST-37-04 fixture has exactly 1 no-dialogue shot", noDialogue.length === 1);
   // Confirm no VOICE_GEN job for shot 103
-  const key = buildPipelineJobKey(runId, "VOICE_GEN", 103);
+  const key = buildPipelineJobKey(runId, "VOICE_GEN", SHOTS[2].id);
   const { findProductionJobByJobKey } = await import("../src/lib/productionEngine");
   const j = await findProductionJobByJobKey(key);
   report("TEST-37-04 no VOICE_GEN job for no-dialogue shot", j === undefined, "job=" + (j?.id ?? "none"));
@@ -147,12 +168,12 @@ async function cleanupRun(runId: string) {
     await seedChildJob({ runId, stage: "VOICE_GEN", shotId: s.id, status: "completed", output: { audioPath: ap, audioUrl: "/a" } });
   }
   // Verify per-shot keys resolve correctly and independently
-  const v101 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 101, validateOutput: validateVideoOutputOnDisk });
-  const v102 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 102, validateOutput: validateVideoOutputOnDisk });
-  const v103 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 103, validateOutput: validateVideoOutputOnDisk });
-  const a101 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: 101, validateOutput: validateVoiceOutputOnDisk });
-  const a102 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: 102, validateOutput: validateVoiceOutputOnDisk });
-  const a103 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: 103, validateOutput: validateVoiceOutputOnDisk });
+  const v101 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[0].id, validateOutput: validateVideoOutputOnDisk });
+  const v102 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[1].id, validateOutput: validateVideoOutputOnDisk });
+  const v103 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[2].id, validateOutput: validateVideoOutputOnDisk });
+  const a101 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: SHOTS[0].id, validateOutput: validateVoiceOutputOnDisk });
+  const a102 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: SHOTS[1].id, validateOutput: validateVoiceOutputOnDisk });
+  const a103 = await decideStageReuse({ runId, stage: "VOICE_GEN", shotId: SHOTS[2].id, validateOutput: validateVoiceOutputOnDisk });
 
   const vIds = new Set([v101.job?.id, v102.job?.id, v103.job?.id]);
   const aIds = new Set([a101.job?.id, a102.job?.id]);
@@ -232,9 +253,9 @@ async function cleanupRun(runId: string) {
   const before = await countChildJobsForRun(runId);
 
   // Resume decisions
-  const d1 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 101, validateOutput: validateVideoOutputOnDisk });
-  const d2 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 102, validateOutput: validateVideoOutputOnDisk });
-  const d3 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: 103, validateOutput: validateVideoOutputOnDisk });
+  const d1 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[0].id, validateOutput: validateVideoOutputOnDisk });
+  const d2 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[1].id, validateOutput: validateVideoOutputOnDisk });
+  const d3 = await decideStageReuse({ runId, stage: "VIDEO_GEN", shotId: SHOTS[2].id, validateOutput: validateVideoOutputOnDisk });
 
   report("TEST-37-10 shot 101 skipped", d1.decision === "SKIPPED_EXISTING_RESULT", "d=" + d1.decision);
   report("TEST-37-10 shot 102 skipped", d2.decision === "SKIPPED_EXISTING_RESULT", "d=" + d2.decision);

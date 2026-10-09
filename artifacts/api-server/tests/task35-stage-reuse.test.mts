@@ -42,21 +42,33 @@ async function seedChildJob(opts: {
   providerJobId?: string | null;
 }) {
   const jobKey = buildPipelineJobKey(opts.runId, opts.stage, opts.shotId);
-  const job = await createProductionJob(
-    opts.stage,
-    { projectId: 1, shotId: opts.shotId, prompt: "x", text: "x", videoUrl: "/x", audioUrl: "/x" } as any,
-    3,
-    { parentRunId: opts.runId, jobKey },
-  );
-  await db.update(productionPipeline)
-    .set({
-      status: opts.status,
-      output: opts.output as any,
-      providerJobId: opts.providerJobId ?? null,
-      completedAt: opts.status === "completed" ? new Date() : null,
-    })
-    .where(eq(productionPipeline.id, job.id));
-  return job.id;
+  // KAYAN-TASK-49: insert directly instead of going through
+  // createProductionJob. createProductionJob briefly writes the row as
+  // "pending" before the test overrides the status; the Northflank
+  // production worker shares the same DATABASE_URL and could pick up the
+  // pending row, attempt a real provider call, and race the test state.
+  // Direct insert never exposes a "pending" state, isolating tests.
+  const jobId = "job_test_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+  const now = new Date();
+  await db.insert(productionPipeline).values({
+    id: jobId,
+    projectId: 1,
+    jobId,
+    type: opts.stage,
+    status: opts.status,
+    progress: 0,
+    payload: { projectId: 1, shotId: opts.shotId, prompt: "x", text: "x", videoUrl: "/x", audioUrl: "/x" } as any,
+    retryCount: 0,
+    maxRetries: 3,
+    parentRunId: opts.runId,
+    jobKey,
+    output: (opts.output ?? null) as any,
+    providerJobId: opts.providerJobId ?? null,
+    completedAt: opts.status === "completed" ? now : null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return jobId;
 }
 
 async function cleanupRun(runId: string) {
