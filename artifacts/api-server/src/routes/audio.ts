@@ -1,10 +1,14 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { saveAudioBuffer } from "../lib/audioAssets";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router: IRouter = Router();
 const REQUEST_TIMEOUT_MS = 20000;
 const DEEPGRAM_TTS_ENDPOINT = "https://api.deepgram.com/v1/speak";
 
-router.post("/audio/generate", async (req: Request, res: Response): Promise<void> => {
+
+
+router.post("/audio/generate", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const { text, model = "aura-asteria-en" } = req.body || {};
   
   if (!text || typeof text !== "string" || text.trim().length === 0) {
@@ -41,15 +45,24 @@ router.post("/audio/generate", async (req: Request, res: Response): Promise<void
       throw new Error("Deepgram returned 0 bytes audio stream.");
     }
 
-    const base64Audio = Buffer.from(audioBuffer).toString("base64");
-    const dataUrl = `data:audio/mp3;base64,${base64Audio}`;
-
-    console.info("Deepgram Audio Asset generated successfully and encoded to base64 data URL");
-
+    const buf = Buffer.from(audioBuffer);
+    // KAYAN-TASK-46: persist to disk in uploads/audio/.
+    const saved = saveAudioBuffer(buf, { ext: ".mp3" });
+    if (saved.ok === false) {
+      console.error({ err: saved.error }, "audio persistence failed");
+      res.status(saved.status).json({ error: saved.error });
+      return;
+    }
+    // Backwards-compat: keep data: URL available for clients that read it.
+    const dataUrl = `data:audio/mp3;base64,${buf.toString("base64")}`;
+    console.info({ filePath: saved.filePath, size: saved.sizeBytes }, "Deepgram Audio Asset saved to disk");
     res.json({
       success: true,
-      audioUrl: dataUrl,
-      provider: "deepgram-tts"
+      audioUrl: saved.url,
+      audioDataUrl: dataUrl,
+      filePath: saved.filePath,
+      sizeBytes: saved.sizeBytes,
+      provider: "deepgram-tts",
     });
   } catch (error) {
     console.error({ err: error }, "Real Deepgram TTS process failed");
