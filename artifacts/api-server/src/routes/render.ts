@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { desc, eq, sql } from "drizzle-orm";
 import { db, renderJobsTable } from "@workspace/db";
 import { createRenderJob, getRenderJobStatus, runRenderPipeline, type RenderClipInput } from "../lib/renderEngine";
+import { generateSRT, type SubtitleItem } from "../lib/subtitleService";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router: IRouter = Router();
@@ -11,6 +12,41 @@ function looksLikeRealAsset(s: string | null | undefined): boolean {
   const t = s.trim();
   if (t.length === 0) return false;
   return /^https?:\/\//i.test(t) || t.startsWith("/uploads/");
+}
+
+// KAYAN-TASK-48: load synchronized subtitles for a project. Returns
+// undefined when no real subtitle rows exist -> no fake burn-in.
+async function loadSubtitlesSRT(projectId: number): Promise<string | undefined> {
+  try {
+    const result: any = await db.execute(sql`
+      SELECT text, start_time, end_time, order_index, language
+      FROM subtitles
+      WHERE project_id = ${projectId}
+      ORDER BY start_time ASC, order_index ASC
+    `);
+    const rows: any[] = result?.rows ?? result ?? [];
+    const items: SubtitleItem[] = [];
+    for (const r of rows) {
+      const text = String(r.text ?? "").trim();
+      if (!text) continue;
+      const startTime = Number(r.start_time);
+      const endTime = Number(r.end_time);
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) continue;
+      items.push({
+        orderIndex: Number(r.order_index) || 0,
+        startTime,
+        endTime,
+        text,
+        language: typeof r.language === "string" ? r.language : "ar",
+      });
+    }
+    if (items.length === 0) return undefined;
+    const srt = generateSRT(items);
+    if (!srt || srt.trim().length === 0) return undefined;
+    return srt;
+  } catch {
+    return undefined;
+  }
 }
 
 // 1. POST /api/render/projects/:id/render/start
@@ -71,9 +107,12 @@ router.post("/projects/:id/render/start", requireProductionAuth, async (req: Req
       return;
     }
 
+    // KAYAN-TASK-48: burn synchronized subtitles when they exist.
+    const subtitlesText = await loadSubtitlesSRT(projectId);
     const job = await createRenderJob({
       projectId,
       watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
+      subtitlesText,
       clips,
       audioUrl,
     });
@@ -85,6 +124,7 @@ router.post("/projects/:id/render/start", requireProductionAuth, async (req: Req
       success: true,
       jobId: job.id,
       status: job.status,
+      subtitlesBurnedIn: typeof subtitlesText === "string",
       message: "Render job queued",
     });
   } catch (err: any) {
