@@ -482,6 +482,23 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         const vu = videoOutput.videoUrl as string;
         if (!vp || !isRealAsset(vu)) throw new Error(`VIDEO_GEN shot ${shot.id} returned no real video asset`);
         assertFile(vp, `video shot ${shot.id}`);
+        // KAYAN-TASK-44: persist videoUrl on the shot so downstream routes
+        // (timeline/sync, render/start) can find the asset. Never store empty
+        // or non-real URLs. DB failure must fail the stage (no fake success).
+        if (typeof vu !== "string" || vu.trim().length === 0) {
+          throw new Error(`VIDEO_GEN shot ${shot.id}: refusing to persist empty videoUrl`);
+        }
+        try {
+          const upd = await db.update(shotsTable)
+            .set({ videoUrl: vu })
+            .where(eq(shotsTable.id, shot.id));
+          if (upd.rowCount !== 1) {
+            throw new Error(`expected 1 shot row updated, got ${upd.rowCount}`);
+          }
+        } catch (dbErr: any) {
+          const msg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+          throw new Error(`VIDEO_GEN shot ${shot.id}: failed to persist shots.video_url: ${msg}`);
+        }
         perShotVideo[shot.id] = { videoPath: vp, videoUrl: vu };
       }
     }
