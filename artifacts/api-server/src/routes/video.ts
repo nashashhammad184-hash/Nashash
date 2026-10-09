@@ -7,6 +7,7 @@ import { logger } from "../lib/logger";
 import { validateProxyUrl, requireProductionAuth } from "../lib/securityMiddleware";
 import { createProductionJob, getProductionJob } from "../lib/productionEngine";
 import { getActiveVideoProvider } from "../lib/providers/video/activeProvider";
+import { resolveShotId, persistVideoUrlToShot } from "../lib/videoShotLink";
 import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
@@ -107,6 +108,19 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
     return;
   }
 
+  // KAYAN-TASK-45: optional shotId (kept out of GenerateVideoBody schema for
+  // backwards compatibility). When present, validate existence + project
+  // ownership BEFORE any paid provider request.
+  const shotRes = await resolveShotId(
+    req.body ? (req.body as Record<string, unknown>)["shotId"] : undefined,
+    parsed.data.projectId,
+  );
+  if (shotRes.ok === false) {
+    res.status(shotRes.status).json({ error: shotRes.error });
+    return;
+  }
+  const shotId = shotRes.shotId;
+
   // KAYAN-TASK-02 — explicit I2V contract validation BEFORE any GPU submission.
   const __d = parsed.data as any;
   logger.info({
@@ -166,6 +180,16 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
       if (!videoUrl) {
         res.status(502).json({ error: "KayanGPU completed job but returned no valid video URL." });
         return;
+      }
+
+      // KAYAN-TASK-45: persist videoUrl to the shot if shotId was provided.
+      if (shotId !== null) {
+        const pr = await persistVideoUrlToShot(shotId, videoUrl);
+        if (pr.ok === false) {
+          res.status(pr.status).json({ error: pr.error });
+          return;
+        }
+        logger.info({ shotId, videoUrl: pr.videoUrl, jobId: currentJob.id }, "TASK-45: persisted shots.video_url");
       }
 
       const isLocal = typeof videoUrl === "string" && videoUrl.startsWith("/uploads/");
