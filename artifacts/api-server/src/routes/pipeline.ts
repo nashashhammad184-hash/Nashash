@@ -55,6 +55,11 @@ import {
   type RenderClipInput,
 } from "../lib/renderEngine";
 import { generateSRT, generateVTT, type SubtitleItem } from "../lib/subtitleService";
+// KAYAN-TASK-73C: resolve storage URLs (/uploads/... or r2) to local paths
+// for ffprobe/FFmpeg. Under local provider this is behavior-identical.
+import { resolveStorageUrlToLocal, type ResolvedLocalPath } from "../lib/storage/index";
+// KAYAN-TASK-73J: persist SRT/VTT via storage layer.
+import { persistSubtitleText } from "../lib/storage/persist";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router: IRouter = Router();
@@ -245,6 +250,11 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
 
   const projectId = input.projectId;
 
+  // KAYAN-TASK-73C: tracks every ResolvedLocalPath created during this run
+  // so cleanup() is invoked exactly once on success OR failure, after all
+  // consumers (ffprobe, LIP_SYNC, FFmpeg concat, renderEngine) finish.
+  const resolvedAudioTracker: ResolvedLocalPath[] = [];
+
   try {
     await updateRun(runId, { status: "processing", startedAt: new Date() });
 
@@ -298,7 +308,15 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // is IGNORED (never masks per-shot dialogues).
     const dialogueShots = shots.filter((s) => (s.dialogue || "").trim().length > 0);
     const perShotVoice: Record<number, VoiceEntry> = {};
-    type VoiceEntry = { audioPath: string; audioUrl: string; text: string; duration: number; sizeBytes: number; jobId: string };
+    type VoiceEntry = {
+      audioPath: string;   // best-effort: real local path under local provider, "" under remote
+      audioUrl: string;    // canonical storage URL (always set)
+      resolved: ResolvedLocalPath; // KAYAN-TASK-73C: local path + cleanup handle
+      text: string;
+      duration: number;
+      sizeBytes: number;
+      jobId: string;
+    };
     // KAYAN-TASK-27: no dialogue anywhere in the project → Voice stage SKIPPED.
     // No VOICE_GEN jobs are created. No fake audio. Pipeline continues.
     if (dialogueShots.length === 0) {
@@ -362,9 +380,13 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         throw new Error(`VOICE_GEN failed for shot ${shot.id}: ${voiceDone.error || "unknown"}`);
       }
       const voiceOutput = (voiceDone.output || {}) as any;
-      const audioPath = voiceOutput.audioPath as string;
-      const audioUrl = voiceOutput.audioUrl as string;
-      if (!audioPath || !isRealAsset(audioUrl)) {
+      const jobAudioPath = String(voiceOutput.audioPath || "");
+      const audioUrl = String(voiceOutput.audioUrl || "");
+      // KAYAN-TASK-73C: audioUrl is the canonical locator. Under local
+      // provider, resolved.path equals the real file (behavior identical).
+      // Under remote providers, it downloads to a temp file that must
+      // stay alive until renderEngine finishes consuming it.
+      if (!audioUrl || !isRealAsset(audioUrl)) {
         await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
         throw new Error(`VOICE_GEN shot ${shot.id} returned no real audio asset`);
       }
@@ -372,15 +394,28 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
         throw new Error(`VOICE_GEN shot ${shot.id} returned a data: URL (not allowed in production)`);
       }
-
-      const { duration, sizeBytes } = await assertRealAudioFile(audioPath, `voice audio shot ${shot.id}`);
-
+      let resolved: ResolvedLocalPath;
+      try {
+        resolved = await resolveStorageUrlToLocal(audioUrl);
+      } catch (e: any) {
+        await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
+        throw new Error(`VOICE_GEN shot ${shot.id}: audioUrl could not be resolved: ${e?.message || e}`);
+      }
+      resolvedAudioTracker.push(resolved);
+      const { duration, sizeBytes } = await assertRealAudioFile(resolved.path, `voice audio shot ${shot.id}`);
       // Persist per-shot association in shots table
       await db.update(shotsTable)
         .set({ audioUrl, audioStatus: "COMPLETED" } as any)
         .where(eq(shotsTable.id, shot.id));
-
-      perShotVoice[shot.id] = { audioPath, audioUrl, text: voiceText, duration, sizeBytes, jobId: voiceJobId };
+      perShotVoice[shot.id] = {
+        audioPath: jobAudioPath,
+        audioUrl,
+        resolved,
+        text: voiceText,
+        duration,
+        sizeBytes,
+        jobId: voiceJobId,
+      };
     }
 
     if (Object.keys(perShotVoice).length === 0) {
@@ -571,7 +606,11 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
             projectId,
             shotId: shot.id,
             videoUrl: v.videoPath,
-            audioUrl: a.audioPath,
+            // KAYAN-TASK-73C: pass the resolved local path (works for
+            // both local and remote providers). LIP_SYNC is disabled by
+            // default; under STORAGE_PROVIDER=r2 the GPU worker still
+            // expects a local path, so this stays a filesystem path.
+            audioUrl: a.resolved.path,
           });
           logger.info({ runId, shotId: shot.id, jobId: lipJob.id }, "LIPSYNC_STAGE = MISSING -> create");
           lipDone = await waitForJob(lipJob.id);
@@ -735,6 +774,9 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       if (!srt || srt.trim().length === 0) throw new Error("SRT generation returned empty content");
       if (!vtt || vtt.trim().length === 0) throw new Error("VTT generation returned empty content");
 
+      // KAYAN-TASK-73J: write to local disk first (FFmpeg reads from local
+      // paths during render), then persist via storage layer for
+      // durability. Under local, storage is a no-op for the same path.
       const srtPath = path.join(uploadsDir("subtitles"), `run_${runId}.srt`);
       const vttPath = path.join(uploadsDir("subtitles"), `run_${runId}.vtt`);
       fs.writeFileSync(srtPath, srt, "utf-8");
@@ -742,7 +784,23 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       assertFile(srtPath, "srt");
       assertFile(vttPath, "vtt");
 
-      await completeStage("subtitles", { srtPath, vttPath, entries: subtitleItems.length });
+      let srtUrl: string, vttUrl: string;
+      try {
+        const srtPersisted = await persistSubtitleText(srt, `run_${runId}.srt`, "application/x-subrip; charset=utf-8");
+        const vttPersisted = await persistSubtitleText(vtt, `run_${runId}.vtt`, "text/vtt; charset=utf-8");
+        srtUrl = srtPersisted.url;
+        vttUrl = vttPersisted.url;
+      } catch (persistErr) {
+        const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+        throw new Error(`subtitle storage persist failed: ${msg}`);
+      }
+      await completeStage("subtitles", {
+        srtPath,
+        vttPath,
+        srtUrl,
+        vttUrl,
+        entries: subtitleItems.length,
+      });
     }
 
     // ------------------------------------------------------------
@@ -758,14 +816,23 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
 
     // KAYAN-TASK-28: build audio track only when Voice stage produced real audio.
     // Otherwise → video-only render (dialogue-free projects).
+    // KAYAN-TASK-73C: use resolved.path (local) for FFmpeg concat —
+    // resolved paths work for both local and remote providers, and are
+    // kept alive by resolvedAudioTracker until the finally block.
     const orderedVoicePaths = shots
-      .map((sh) => perShotVoice[sh.id]?.audioPath)
+      .map((sh) => perShotVoice[sh.id]?.resolved?.path)
       .filter((p): p is string => !!p);
     let renderAudioUrl: string | undefined;
     if (orderedVoicePaths.length === 0) {
       renderAudioUrl = undefined;  // VIDEO_ONLY mode
     } else if (orderedVoicePaths.length === 1) {
-      renderAudioUrl = perShotVoice[shots.find((sh) => perShotVoice[sh.id])!.id].audioUrl;
+      // Under local, /uploads/... is always valid. Under r2, the DB row
+      // stores the URL that publicUrl() returned, so it may be a proxy
+      // path — but renderEngine.resolveAssetToLocal handles /uploads/...
+      // and downloads http(s) URLs. For safety under r2, use the
+      // resolved local path as the audio source when it is single-clip.
+      const singleEntry = perShotVoice[shots.find((sh) => perShotVoice[sh.id])!.id];
+      renderAudioUrl = singleEntry.audioUrl;
     } else {
       const listPath = path.join(uploadsDir("voice"), `concat_${runId}.txt`);
       fs.writeFileSync(
@@ -919,6 +986,14 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       errorMessage: msg,
     });
     logger.error({ runId, projectId, failedStage: currentStage, err: msg }, "Production pipeline failed");
+  } finally {
+    // KAYAN-TASK-73C: release any temp files downloaded by the storage
+    // layer. Under local provider, cleanup() is a no-op and does not
+    // touch the real uploads. Under remote providers, it deletes only
+    // the process-owned temp file.
+    for (const r of resolvedAudioTracker) {
+      try { await r.cleanup(); } catch { /* never throw from cleanup */ }
+    }
   }
 }
 

@@ -6,6 +6,10 @@ import { eq } from "drizzle-orm";
 import { db, shotsTable } from "@workspace/db";
 import { createProductionJob, getProductionJob } from "../lib/productionEngine";
 import { logger } from "../lib/logger";
+import { requireProductionAuth } from "../lib/securityMiddleware";
+// KAYAN-TASK-73B: unified storage layer — resolve /uploads/... or r2 URLs
+// to a local file for ffprobe. Under local, no-op cleanup.
+import { resolveStorageUrlToLocal } from "../lib/storage/index";
 
 const router: IRouter = Router();
 const UPLOADS_AUDIO_DIR = path.resolve(process.cwd(), "uploads/audio");
@@ -84,6 +88,7 @@ function ffprobeAudio(filePath: string): Promise<{
 // ─── POST /voice/generate — official production entrypoint ───
 router.post(
   ["/voice/generate", "/generate", "/"],
+  requireProductionAuth,
   async (req: Request, res: Response): Promise<void> => {
     try {
       const body = req.body || {};
@@ -164,56 +169,77 @@ router.post(
       }
 
       const output = (final.output || {}) as any;
-      const audioPath = String(output.audioPath || "");
+      const jobAudioPath = String(output.audioPath || "");
       const audioUrl = String(output.audioUrl || "");
-      if (!audioPath || !audioUrl || !fs.existsSync(audioPath)) {
+      // KAYAN-TASK-73B: audioUrl is the canonical locator. Under
+      // STORAGE_PROVIDER=local this is behavior-identical to before.
+      // Under remote providers, resolveStorageUrlToLocal downloads to a
+      // temp file; cleanup() removes only that temp (never the permanent).
+      if (!audioUrl) {
         res.status(500).json({
           success: false,
           jobId: final.id,
           status: "failed",
-          error: "VOICE_GEN completed but audio asset is missing or empty",
+          error: "VOICE_GEN completed but audioUrl is missing",
         });
         return;
       }
-
-      let probe;
+      let resolved;
       try {
-        probe = await ffprobeAudio(audioPath);
+        resolved = await resolveStorageUrlToLocal(audioUrl);
       } catch (e: any) {
         res.status(500).json({
           success: false,
           jobId: final.id,
           status: "failed",
-          error: `Audio verification failed: ${e?.message || e}`,
+          error: `Audio asset could not be resolved: ${e?.message || e}`,
         });
         return;
       }
-
-      if (shotId !== null) {
+      try {
+        let probe;
         try {
-          await db
-            .update(shotsTable)
-            .set({ audioUrl, audioStatus: "COMPLETED" })
-            .where(eq(shotsTable.id, shotId));
+          probe = await ffprobeAudio(resolved.path);
         } catch (e: any) {
-          logger.warn({ err: e?.message, shotId }, "voice: shot link failed");
+          res.status(500).json({
+            success: false,
+            jobId: final.id,
+            status: "failed",
+            error: `Audio verification failed: ${e?.message || e}`,
+          });
+          return;
         }
+        if (shotId !== null) {
+          try {
+            await db
+              .update(shotsTable)
+              .set({ audioUrl, audioStatus: "COMPLETED" })
+              .where(eq(shotsTable.id, shotId));
+          } catch (e: any) {
+            logger.warn({ err: e?.message, shotId }, "voice: shot link failed");
+          }
+        }
+        res.status(201).json({
+          success: true,
+          jobId: final.id,
+          provider: "deepgram",
+          model,
+          audioUrl,
+          // Preserve current response shape: absolute local path under
+          // local, "" under remote (documented).
+          audioPath: jobAudioPath,
+          durationSeconds: probe.duration,
+          codec: probe.codec,
+          sampleRate: probe.sampleRate,
+          channels: probe.channels,
+          fileSize: probe.sizeBytes,
+          shotId,
+        });
+      } finally {
+        // KAYAN-TASK-73B: always release any temp downloaded by the
+        // storage layer, even on error paths.
+        await resolved.cleanup();
       }
-
-      res.status(201).json({
-        success: true,
-        jobId: final.id,
-        provider: "deepgram",
-        model,
-        audioUrl,
-        audioPath,
-        durationSeconds: probe.duration,
-        codec: probe.codec,
-        sampleRate: probe.sampleRate,
-        channels: probe.channels,
-        fileSize: probe.sizeBytes,
-        shotId,
-      });
     } catch (err: any) {
       logger.error({ err: err?.message }, "voice.generate failed");
       res.status(500).json({ success: false, error: err?.message || "Voice generation failed" });
