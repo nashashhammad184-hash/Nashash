@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import { and, desc, eq, ne, inArray } from "drizzle-orm";
 import { db, productionPipeline, productionTasksTable } from "@workspace/db";
 import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvider";
+import { saveAudioBuffer } from "./audioAssets";
 import { logger } from "./logger";
 
 export type ProductionJobType = "VIDEO_GEN" | "VOICE_GEN" | "LIP_SYNC" | "MUSIC_SFX_GEN";
@@ -336,12 +337,16 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         if (!res.ok) throw new Error(`Deepgram TTS failed (${res.status}): ${await res.text().catch(() => "")}`);
         const buf = Buffer.from(await res.arrayBuffer());
         if (buf.length === 0) throw new Error("Deepgram TTS returned 0 bytes");
-        const filename = `job_voice_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.mp3`;
-        const filePath = path.join(getAudioDir(), filename);
-        fs.writeFileSync(filePath, buf);
-        const st = fs.statSync(filePath);
-        if (!st.isFile() || st.size === 0) throw new Error("VOICE_GEN failed to write audio file");
-        output = { audioPath: filePath, audioUrl: `/uploads/audio/${filename}`, fileSize: st.size };
+        // KAYAN-TASK-72B: persist via storage layer. Under STORAGE_PROVIDER=local
+        // this is behavior-identical to the prior manual fs write (same dir,
+        // same URL shape, same size validation). Under R2 it writes remotely
+        // and `filePath` will be "" — downstream consumers (pipeline.ts)
+        // require a local path and are out of scope for TASK-72B.
+        const saved = await saveAudioBuffer(buf, { ext: ".mp3" });
+        if (saved.ok === false) {
+          throw new Error(`VOICE_GEN failed to save audio: ${saved.error}`);
+        }
+        output = { audioPath: saved.filePath, audioUrl: saved.url, fileSize: saved.sizeBytes };
         break;
       }
       case "LIP_SYNC": {

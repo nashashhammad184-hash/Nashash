@@ -1,13 +1,22 @@
 /**
  * KAYAN-TASK-46: audio asset persistence.
+ * KAYAN-TASK-72: routed through the unified storage layer.
  *
- * Extracted so tests can verify disk writes without touching Deepgram.
- * Same convention used by VOICE_GEN in productionEngine.ts:
- *   uploads/audio/<safe-name>.mp3  ->  /uploads/audio/<safe-name>.mp3
+ * Behavior:
+ *   - STORAGE_PROVIDER=local (default): write to uploads/audio/<safe-name>.mp3,
+ *     return url = /uploads/audio/<safe-name>.mp3  (identical to pre-TASK-72).
+ *   - STORAGE_PROVIDER=r2: write via R2 provider, verify read-back, return
+ *     the provider's publicUrl. `filePath` is "" under R2 (no local file).
+ *
+ * Tests may pass `baseDir` to isolate writes to a temp directory — in that
+ * case a scoped LocalProvider is used regardless of STORAGE_PROVIDER.
  */
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { LocalProvider } from "./storage/localProvider";
+import { getStorage } from "./storage/index";
+import type { StorageProvider } from "./storage/types";
 
 export interface AudioSavedOk {
   readonly ok: true;
@@ -35,55 +44,94 @@ export function makeSafeAudioName(ext = ".mp3"): string {
 }
 
 /**
- * Persist a Buffer to uploads/audio/<safe-name> and validate the result.
- * Refuses empty buffers and any size mismatch on disk.
+ * Persist a Buffer as an audio asset and validate the result.
+ * Refuses empty buffers. On local provider: exact prior behavior.
+ * On remote providers: writes then reads back to verify size.
  */
-export function saveAudioBuffer(
+export async function saveAudioBuffer(
   buf: Buffer,
   opts: { baseDir?: string; ext?: string } = {},
-): AudioSaveResult {
+): Promise<AudioSaveResult> {
   if (!Buffer.isBuffer(buf) || buf.length === 0) {
     return { ok: false, status: 502, error: "audio buffer is empty" };
   }
-  let dir: string;
+
+  // Choose provider: `baseDir` (tests) forces a scoped LocalProvider;
+  // otherwise the globally-configured provider (default = local).
+  let provider: StorageProvider;
   try {
-    dir = getAudioDir(opts.baseDir);
+    provider = opts.baseDir
+      ? new LocalProvider(path.join(opts.baseDir, "uploads"))
+      : getStorage();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: `failed to create audio dir: ${msg}` };
+    return { ok: false, status: 500, error: `failed to resolve storage provider: ${msg}` };
   }
+
   const filename = makeSafeAudioName(opts.ext);
-  const filePath = path.join(dir, filename);
+  const key = `audio/${filename}`;
+
+  if (provider.name === "local") {
+    // Exact prior local behavior: fs write + stat validation.
+    let dir: string;
+    try {
+      dir = getAudioDir(opts.baseDir);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, status: 500, error: `failed to create audio dir: ${msg}` };
+    }
+    const filePath = path.join(dir, filename);
+    try {
+      fs.writeFileSync(filePath, buf);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, status: 500, error: `failed to write audio file: ${msg}` };
+    }
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, status: 500, error: "audio file not found after write" };
+    }
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(filePath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, status: 500, error: `failed to stat audio file: ${msg}` };
+    }
+    if (!st.isFile() || st.size === 0) {
+      return { ok: false, status: 500, error: `audio file is empty after write (size=${st.size})` };
+    }
+    if (st.size !== buf.length) {
+      return {
+        ok: false,
+        status: 500,
+        error: `audio file size mismatch: wrote ${buf.length}, on disk ${st.size}`,
+      };
+    }
+    let publicUrl: string;
+    try {
+      publicUrl = provider.publicUrl(key);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, status: 500, error: `invalid audio storage key: ${msg}` };
+    }
+    return { ok: true, filePath, url: publicUrl, sizeBytes: st.size };
+  }
+
+  // Remote provider (R2 or future): write + verify read-back.
   try {
-    fs.writeFileSync(filePath, buf);
+    const url = await provider.write(key, buf, "audio/mpeg");
+    const back = await provider.read(key);
+    if (back.length !== buf.length) {
+      return {
+        ok: false,
+        status: 500,
+        error: `remote size mismatch after write: expected ${buf.length}, got ${back.length}`,
+      };
+    }
+    // No local file under remote provider; filePath is empty.
+    return { ok: true, filePath: "", url, sizeBytes: buf.length };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: `failed to write audio file: ${msg}` };
+    return { ok: false, status: 500, error: `failed to save audio to remote storage: ${msg}` };
   }
-  if (!fs.existsSync(filePath)) {
-    return { ok: false, status: 500, error: "audio file not found after write" };
-  }
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(filePath);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: `failed to stat audio file: ${msg}` };
-  }
-  if (!st.isFile() || st.size === 0) {
-    return { ok: false, status: 500, error: `audio file is empty after write (size=${st.size})` };
-  }
-  if (st.size !== buf.length) {
-    return {
-      ok: false,
-      status: 500,
-      error: `audio file size mismatch: wrote ${buf.length}, on disk ${st.size}`,
-    };
-  }
-  return {
-    ok: true,
-    filePath,
-    url: `/uploads/audio/${filename}`,
-    sizeBytes: st.size,
-  };
 }
