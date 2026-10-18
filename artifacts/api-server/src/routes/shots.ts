@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import { eq, asc } from "drizzle-orm";
+import { requireProductionAuth } from "../lib/securityMiddleware";
+import { eq, asc, and } from "drizzle-orm";
 import { db, shotsTable } from "@workspace/db";
 import {
   ListProjectShotsParams, ListProjectShotsResponse,
@@ -31,7 +32,7 @@ router.get("/projects/:id/shots", async (req: Request, res: Response): Promise<v
 });
 
 // 2. POST /api/shots - إنشاء لقطة إخراجية جديدة حقيقية داخل PostgreSQL
-router.post("/shots", async (req: Request, res: Response): Promise<void> => {
+router.post("/shots", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const parsed = CreateShotBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -57,10 +58,19 @@ router.post("/shots", async (req: Request, res: Response): Promise<void> => {
 });
 
 // 3. POST /api/shots/bulk-update - المزامنة الكتلية للتايم لاين
-router.post("/shots/bulk-update", async (req: Request, res: Response): Promise<void> => {
-  const { shots } = req.body || {};
+router.post("/shots/bulk-update", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const { shots, projectId } = req.body || {};
   if (!Array.isArray(shots)) {
     res.status(400).json({ error: "Invalid payload: shots array is required" });
+    return;
+  }
+  // KAYAN-SECURITY-21: bulk updates MUST be scoped to a single project.
+  // Without this, an authenticated caller could modify shots belonging to
+  // any project by guessing IDs. The DB WHERE clause enforces the scope
+  // (not just the request body check).
+  const projectIdNum = Number(projectId);
+  if (!Number.isInteger(projectIdNum) || projectIdNum <= 0) {
+    res.status(400).json({ error: "Invalid payload: integer projectId is required" });
     return;
   }
   try {
@@ -70,7 +80,7 @@ router.post("/shots/bulk-update", async (req: Request, res: Response): Promise<v
       if (s.durationSeconds !== undefined) updateData.durationSeconds = s.durationSeconds;
       if (s.sceneNumber !== undefined) updateData.sceneNumber = String(s.sceneNumber);
       if (s.description !== undefined) updateData.description = s.description;
-      await db.update(shotsTable).set(updateData).where(eq(shotsTable.id, s.id));
+      await db.update(shotsTable).set(updateData).where(and(eq(shotsTable.id, s.id), eq(shotsTable.projectId, projectIdNum)));
     }
     res.json({ success: true, message: "Timeline shots synced successfully in database" });
   } catch (error: any) {
@@ -79,7 +89,7 @@ router.post("/shots/bulk-update", async (req: Request, res: Response): Promise<v
 });
 
 // 4. PATCH /api/shots/:id - تعديل لقطة حقيقية
-router.patch("/shots/:id", async (req: Request, res: Response): Promise<void> => {
+router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = UpdateShotParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -116,7 +126,7 @@ router.patch("/shots/:id", async (req: Request, res: Response): Promise<void> =>
 });
 
 // 5. DELETE /api/shots/:id - الحذف النهائي للقطة الإخراجية
-router.delete("/shots/:id", async (req: Request, res: Response): Promise<void> => {
+router.delete("/shots/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = DeleteShotParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

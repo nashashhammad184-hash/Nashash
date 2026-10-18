@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc } from "drizzle-orm";
 import { db, productionTasksTable } from "@workspace/db";
 import {
@@ -39,7 +40,7 @@ router.get("/projects/:id/tasks", async (req, res): Promise<void> => {
 });
 
 // Create task
-router.post("/tasks", async (req, res): Promise<void> => {
+router.post("/tasks", requireProductionAuth, async (req, res): Promise<void> => {
   const parsed = CreateTaskBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -66,7 +67,7 @@ router.post("/tasks", async (req, res): Promise<void> => {
 });
 
 // Update task
-router.patch("/tasks/:id", async (req, res): Promise<void> => {
+router.patch("/tasks/:id", requireProductionAuth, async (req, res): Promise<void> => {
   const params = UpdateTaskParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -104,7 +105,7 @@ router.patch("/tasks/:id", async (req, res): Promise<void> => {
 });
 
 // Delete task
-router.delete("/tasks/:id", async (req, res): Promise<void> => {
+router.delete("/tasks/:id", requireProductionAuth, async (req, res): Promise<void> => {
   const params = DeleteTaskParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

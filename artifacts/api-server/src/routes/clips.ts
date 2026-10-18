@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc } from "drizzle-orm";
 import { db, editClipsTable } from "@workspace/db";
 import {
@@ -39,7 +40,7 @@ router.get("/projects/:id/clips", async (req: Request, res: Response): Promise<v
 // 2. POST /api/clips
 //    - assetId is optional, but if provided it MUST be a real URL or /uploads path.
 //    - We no longer auto-generate `asset_${Date.now()}` placeholder ids.
-router.post("/clips", async (req: Request, res: Response): Promise<void> => {
+router.post("/clips", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const parsed = CreateClipBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -96,7 +97,7 @@ router.post("/clips", async (req: Request, res: Response): Promise<void> => {
 });
 
 // 3. PATCH /api/clips/:id
-router.patch("/clips/:id", async (req: Request, res: Response): Promise<void> => {
+router.patch("/clips/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const numericId = parseInt(String(req.params.id), 10);
   if (isNaN(numericId)) {
     res.status(400).json({ error: "معرف المقطع غير صالح." });
@@ -147,7 +148,7 @@ router.patch("/clips/:id", async (req: Request, res: Response): Promise<void> =>
 });
 
 // 4. DELETE /api/clips/:id
-router.delete("/clips/:id", async (req: Request, res: Response): Promise<void> => {
+router.delete("/clips/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const numericId = parseInt(String(req.params.id), 10);
   if (isNaN(numericId)) {
     res.status(400).json({ error: "معرف غير صالح." });

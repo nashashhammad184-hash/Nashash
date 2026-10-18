@@ -4,8 +4,18 @@ import { ListActorsResponse } from "@workspace/api-zod";
 import { eq } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
+import { requireProductionAuth } from "../lib/securityMiddleware";
+import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
+// KAYAN-TASK-03 — canonical-face consumes GPU; rate limit + auth required.
+const canonicalFaceLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many canonical-face requests. Limit: 5 per hour per IP." },
+});
 
 function cleanImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -40,7 +50,7 @@ router.get("/actors", async (req: Request, res: Response): Promise<void> => {
 });
 
 // 2. POST /api/actors - إنشاء ممثل رقمي جديد حقيقي داخل PostgreSQL
-router.post("/actors", async (req: Request, res: Response): Promise<void> => {
+router.post("/actors", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const { name, type, age, style, imageUrl, category } = req.body;
     if (!name || !type || !age || !style) {
@@ -67,7 +77,7 @@ router.post("/actors", async (req: Request, res: Response): Promise<void> => {
 });
 
 // 3. PATCH /api/actors/:id - تحديث بيانات الممثل الرقمي وأسلوب أدائه
-router.patch("/actors/:id", async (req: Request, res: Response): Promise<void> => {
+router.patch("/actors/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) {
@@ -104,7 +114,7 @@ router.patch("/actors/:id", async (req: Request, res: Response): Promise<void> =
 });
 
 // 4. DELETE /api/actors/:id - الحذف الحقيقي والنهائي للممثل الرقمي من الـ DB
-router.delete("/actors/:id", async (req: Request, res: Response): Promise<void> => {
+router.delete("/actors/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const id = parseInt(String(req.params.id), 10);
     if (isNaN(id)) {
@@ -124,31 +134,38 @@ router.delete("/actors/:id", async (req: Request, res: Response): Promise<void> 
 
 // المسارات الفرعية للمراجعcharacter references
 router.get("/actors/:actorId/references", async (req, res): Promise<void> => {
-  const actorId = parseInt(req.params.actorId, 10);
+  const actorId = parseInt(String(req.params.actorId), 10);
   if (isNaN(actorId)) { res.status(400).json({ error: "Invalid actorId" }); return; }
   const refs = await db.select().from(characterReferencesTable).where(eq(characterReferencesTable.actorId, actorId)).orderBy(characterReferencesTable.id);
   res.json(refs);
 });
 
-router.post("/actors/:actorId/references", async (req, res): Promise<void> => {
-  const actorId = parseInt(req.params.actorId, 10);
+router.post("/actors/:actorId/references", requireProductionAuth, async (req, res): Promise<void> => {
+  const actorId = parseInt(String(req.params.actorId), 10);
   const { assetUrl, referenceType, isPrimary, projectId, metadata } = req.body;
   if (isNaN(actorId) || !assetUrl) { res.status(400).json({ error: "actorId and assetUrl are required" }); return; }
   const sanitizedUrl = cleanImageUrl(assetUrl);
   if (!sanitizedUrl) { res.status(400).json({ error: "Direct Image URL is required." }); return; }
+  // KAYAN-TASK-03 — legal guard BEFORE any DB write. No client boolean bypass.
+  try {
+    assertSyntheticReference(sanitizedUrl, req.body);
+  } catch (err: any) {
+    res.status(err?.statusCode || 400).json({ error: err?.message || "LEGAL_GUARD_REJECTED", code: err?.code });
+    return;
+  }
   if (isPrimary) { await db.update(characterReferencesTable).set({ isPrimary: false }).where(eq(characterReferencesTable.actorId, actorId)); }
   const [newRef] = await db.insert(characterReferencesTable).values({ actorId, projectId: projectId ? parseInt(projectId, 10) : null, assetUrl: sanitizedUrl, referenceType: referenceType || "image", isPrimary: !!isPrimary, metadata: metadata || {} }).returning();
   res.status(201).json(newRef);
 });
 
-router.delete("/references/:id", async (req, res): Promise<void> => {
+router.delete("/references/:id", requireProductionAuth, async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid reference id" }); return; }
   await db.delete(characterReferencesTable).where(eq(characterReferencesTable.id, id));
   res.sendStatus(204);
 });
 
-router.patch("/references/:id/primary", async (req, res): Promise<void> => {
+router.patch("/references/:id/primary", requireProductionAuth, async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid reference id" }); return; }
   const [target] = await db.select().from(characterReferencesTable).where(eq(characterReferencesTable.id, id));
@@ -162,6 +179,8 @@ router.patch("/references/:id/primary", async (req, res): Promise<void> => {
 // KAYAN-FIX-06 — canonical face generation endpoint.
 router.post(
   "/actors/:actorId/canonical-face",
+  canonicalFaceLimiter,
+  requireProductionAuth,
   async (req: Request, res: Response): Promise<void> => {
     const id = Number(req.params.actorId);
     if (!Number.isInteger(id) || id < 1) {

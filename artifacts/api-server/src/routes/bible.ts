@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 import { db, actorsTable, worldProfilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
@@ -29,7 +30,7 @@ router.get("/projects/:id/world-bible", async (req: Request, res: Response): Pro
 });
 
 // 2. POST /api/projects/:id/world-bible - حفظ وتحديث ميثاق الإنتاج (Upsert Logic) بداخل PostgreSQL
-router.post("/projects/:id/world-bible", async (req: Request, res: Response): Promise<void> => {
+router.post("/projects/:id/world-bible", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const projectId = parseInt(String(String(req.params.id)), 10);
   const { 
     worldId, era, location, geography, architecture, clothingStyle, 
@@ -92,7 +93,7 @@ router.post("/projects/:id/world-bible", async (req: Request, res: Response): Pr
 });
 
 // المسار القديم للأطباق المحدثة للممثلين
-router.patch("/actors/:id/bible", async (req: Request, res: Response): Promise<void> => {
+router.patch("/actors/:id/bible", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const actorId = parseInt(String(String(req.params.id)), 10);
   if (isNaN(actorId)) { res.status(400).json({ error: "Invalid Actor ID" }); return; }
   try {
