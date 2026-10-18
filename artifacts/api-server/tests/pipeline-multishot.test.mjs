@@ -17,15 +17,17 @@ assert.match(src, /for \(const shot of shots\)/, 'per-shot loop missing');
 assert.match(src, /orderBy\(asc\(shotsTable\.sceneNumber\), asc\(shotsTable\.id\)\)/, 'shot order by sceneNumber,id missing');
 
 // 3) Voice stage: loop over shotsWithDialogue, per shot voice job keyed by shot.id
-assert.match(src, /const shotsWithDialogue = shots\.filter/, 'shotsWithDialogue filter missing');
-assert.match(src, /perShotVoice\[shot\.id\] = \{ audioPath, audioUrl, text: voiceText \}/, 'perShotVoice mapping missing');
+assert.match(src, /const dialogueShots = shots\.filter/, 'dialogueShots filter missing (renamed by TASK-73C)');
+// KAYAN-TASK-73C: perShotVoice is now a multi-line object with jobAudioPath + resolved handle.
+assert.match(src, /perShotVoice\[shot\.id\] = \{[\s\S]{0,200}audioPath: jobAudioPath[\s\S]{0,300}audioUrl,/, 'perShotVoice mapping missing');
 
 // 4) Video stage: per-shot video
 assert.match(src, /perShotVideo\[shot\.id\] = \{ videoPath: vp, videoUrl: vu \}/, 'perShotVideo mapping missing');
 
 // 5) LipSync: per shot or passthrough when no dialogue
 assert.match(src, /perShotSynced\[shot\.id\] = \{ syncedVideoPath: sp, syncedVideoUrl: su \}/, 'perShotSynced mapping missing');
-assert.match(src, /if \(!a\) \{[\s\S]{0,200}perShotSynced\[shot\.id\] = \{ syncedVideoPath: v\.videoPath, syncedVideoUrl: v\.videoUrl \}/, 'lipsync passthrough for no-audio shots missing');
+// KAYAN-TASK-07 added a 4-line comment between `if (!a) {` and the passthrough assignment.
+assert.match(src, /if \(!a\) \{[\s\S]{0,800}perShotSynced\[shot\.id\] = \{ syncedVideoPath: v\.videoPath, syncedVideoUrl: v\.videoUrl \}/, 'lipsync passthrough for no-audio shots missing');
 
 // 6) Timeline: cumulative per shot
 assert.match(src, /for \(const shot of shots\) \{[\s\S]{0,1500}timelineInserted\.push\(\{ assetUrl: synced\.syncedVideoUrl, duration: dur, order: vItem\.order, shotId: shot\.id \}\)/);

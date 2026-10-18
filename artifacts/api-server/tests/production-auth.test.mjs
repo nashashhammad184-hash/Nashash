@@ -27,8 +27,9 @@ assert.doesNotMatch(src, /console\.log\([^)]*provided/, 'must not log provided t
 assert.doesNotMatch(src, /logger\.[a-z]+\([^)]*expectedToken/, 'must not log via logger');
 
 // 5) Bearer 401 paths preserved
-assert.match(src, /Unauthorized: Bearer token required/, 'bearer required msg missing');
-assert.match(src, /Unauthorized: invalid production token/, 'invalid token msg missing');
+assert.match(src, /Unauthorized: sign in or provide a Bearer token/, 'bearer required msg missing');
+// KAYAN-TASK-79/80B unified invalid+missing into a single 401 message.
+assert.match(src, /Unauthorized: sign in or provide a Bearer token/, 'unified 401 msg missing');
 
 // 6) All dangerous endpoints wired
 const routeDir = path.join(root, 'src/routes');
