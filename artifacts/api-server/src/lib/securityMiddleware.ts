@@ -1,5 +1,7 @@
 import { type Request, type Response, type NextFunction } from "express";
 import net from "node:net";
+// KAYAN-TASK-79: session cookie support.
+import { readSession, SESSION_COOKIE_NAME } from "./auth";
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. SSRF protection — strict validation for USER-CONTROLLED proxy URLs.
@@ -86,25 +88,46 @@ export function validateProxyUrl(urlStr: string): boolean {
 //    for dev / current UI). When set, Bearer <token> is mandatory and the
 //    value is compared against the env var — never hard-coded.
 // ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+// 2. Production auth — KAYAN-TASK-12 (fail-closed).
+//
+//    Policy:
+//      - If PRODUCTION_API_TOKEN is set → require a matching Bearer token.
+//        Wrong/missing token → 401. Never logged. Never sent to frontend.
+//      - If PRODUCTION_API_TOKEN is NOT set:
+//          * In production (NODE_ENV !== "development") → FAIL CLOSED with 503.
+//          * In development → bypass ONLY when explicitly enabled via
+//            ALLOW_DEV_PRODUCTION_BYPASS=true. Otherwise → 503.
+//
+//    There is no silent pass-through anymore. Bypass is explicit + dev-only.
+// ─────────────────────────────────────────────────────────────────────
 export function requireProductionAuth(req: Request, res: Response, next: NextFunction): void {
-  const expectedToken = process.env.PRODUCTION_API_TOKEN?.trim();
-  if (!expectedToken) {
+  // KAYAN-TASK-79: prefer a valid session cookie. Fall back to Bearer token
+  // for server-to-server and CLI use. Fail-closed otherwise.
+  const session = readSession(req);
+  if (session.authenticated) {
     next();
     return;
   }
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Unauthorized: Bearer token required for production operations." });
-    return;
-  }
-  const provided = authHeader.slice("Bearer ".length).trim();
-  if (provided !== expectedToken) {
-    res.status(401).json({ error: "Unauthorized: invalid production token." });
-    return;
-  }
-  next();
-}
 
+  const expectedToken = process.env.PRODUCTION_API_TOKEN?.trim();
+  if (!expectedToken) {
+    const isDev = (process.env.NODE_ENV || "").toLowerCase() === "development";
+    const devBypass = (process.env.ALLOW_DEV_PRODUCTION_BYPASS || "").toLowerCase() === "true";
+    if (isDev && devBypass) {
+      next();
+      return;
+    }
+    res.status(503).json({
+      error: "PRODUCTION_AUTH_NOT_CONFIGURED",
+      message:
+        "Production endpoints are disabled: PRODUCTION_API_TOKEN is not set. " +
+        "Set it in production, or (development only) set NODE_ENV=development and ALLOW_DEV_PRODUCTION_BYPASS=true.",
+    });
+    return;
+  }
+  res.status(401).json({ error: "Unauthorized: sign in or provide a Bearer token." });
+}
 // ─────────────────────────────────────────────────────────────────────
 // 3. Rate limiter shield (unchanged)
 // ─────────────────────────────────────────────────────────────────────
@@ -125,3 +148,60 @@ export function rateLimiterShield(req: Request, res: Response, next: NextFunctio
   }
   next();
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// KAYAN-TASK-80B: CSRF protection for cookie-authenticated requests.
+//
+// Policy: for state-changing methods (POST/PATCH/PUT/DELETE) that carry a
+// session cookie, require a valid Origin header matching either the explicit
+// allow-list (CORS_ALLOWED_ORIGINS) or the same host as the request.
+//
+// Requests WITHOUT a session cookie are unaffected — Bearer-authenticated
+// server-to-server calls (CLI, automation) have no ambient credentials and
+// therefore no CSRF surface.
+// ─────────────────────────────────────────────────────────────────────
+const STATE_CHANGING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+function readAllowedOrigins(): string[] {
+  return (process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function isOriginAllowed(req: Request): boolean {
+  const origin = req.headers.origin;
+  if (!origin || typeof origin !== "string") return false;
+  const allowed = readAllowedOrigins();
+  if (allowed.length > 0) {
+    return allowed.includes(origin);
+  }
+  // No allow-list configured → same-origin only.
+  const host = req.headers.host;
+  if (!host) return false;
+  try {
+    const u = new URL(origin);
+    return u.host === host;
+  } catch {
+    return false;
+  }
+}
+
+export function originGuard(req: Request, res: Response, next: NextFunction): void {
+  if (!STATE_CHANGING_METHODS.has(req.method.toUpperCase())) {
+    return next();
+  }
+  const hasSessionCookie = !!(req as any).cookies?.[SESSION_COOKIE_NAME];
+  if (!hasSessionCookie) {
+    // No cookie = no ambient credentials = no CSRF surface.
+    return next();
+  }
+  if (!isOriginAllowed(req)) {
+    res.status(403).json({
+      error: "Origin required and must be allowed for cookie-authenticated state-changing requests",
+    });
+    return;
+  }
+  next();
+}
+

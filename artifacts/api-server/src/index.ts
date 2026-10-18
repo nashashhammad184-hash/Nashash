@@ -2,10 +2,13 @@ import "./loadEnv";
 import express from "express";
 import cors from "cors";
 import compression from "compression";
+import cookieParser from "cookie-parser";
 import path from "node:path";
 import fs from "node:fs";
-import { rateLimiterShield } from "./lib/securityMiddleware";
+import { rateLimiterShield, originGuard } from "./lib/securityMiddleware";
 import router from "./routes/index";
+// KAYAN-TASK-79: cookie-based session endpoints.
+import authRouter from "./routes/auth";
 import { startProductionWorker } from "./lib/productionEngine";
 
 const app = express();
@@ -42,6 +45,13 @@ app.use(cors(corsOptions));
 app.use(compression());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+// KAYAN-TASK-79: parse session cookies before /api routes.
+app.use(cookieParser());
+// KAYAN-TASK-79: auth endpoints are public (they ARE the auth mechanism).
+// KAYAN-TASK-80B: originGuard before /api so cookie-authenticated
+// state-changing requests are CSRF-protected centrally.
+app.use("/api", originGuard);
+app.use("/api", rateLimiterShield, authRouter);
 app.use("/api", rateLimiterShield, router);
 
 const STORAGE_ROOT = path.resolve(process.cwd(), "uploads");
