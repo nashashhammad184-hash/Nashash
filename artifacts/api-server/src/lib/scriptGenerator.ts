@@ -18,16 +18,11 @@ export interface GenerateScriptInput {
   previousContext?: string;
 }
 
-export interface GeneratedShot {
-  shotOrder: number; description: string; cameraMovement: string;
-  durationSeconds: number; dialogue: string; audioNote: string;
-}
-export interface GeneratedScene {
-  sceneNumber: number; sceneTitle: string; visualDescription: string;
-  characterDialogue: string; backingScorePrompt: string; audioMusic: string;
-  englishSubtitles: string; shots: GeneratedShot[];
-}
-export interface GeneratedScript { title: string; scenes: GeneratedScene[]; }
+// KAYAN-TASK-15 — the output contract lives in scriptSchema.ts.
+export type { GeneratedShot, GeneratedScene, GeneratedScript } from "./scriptSchema";
+import type { GeneratedScript } from "./scriptSchema";
+import { parseAndValidateScript } from "./scriptSchema";
+
 export interface GenerateScriptResult {
   success: true; text: string; rawStructure: GeneratedScript;
 }
@@ -118,10 +113,10 @@ Lighting & Palette: ${worldBible?.lighting || "Cinematic"}, ${worldBible?.colorP
   });
 
   let raw = res.content.trim();
-  raw = raw.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
-  // إزالة أي أحرف CJK (صينية/يابانية/كورية) تُقحم في النص العربي
+  // إزالة أي أحرف CJK (صينية/يابانية/كورية) تُقحم في النص العربي — قبل التحقق
   raw = raw.replace(/[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]/g, "");
-  const parsed: GeneratedScript = JSON.parse(raw);
-
+  // KAYAN-TASK-15 — extract (fenced/raw) + parse + validate against the contract.
+  // Invalid scripts NEVER reach the caller (thus never reach the DB).
+  const parsed = parseAndValidateScript(raw);
   return { success: true, text: JSON.stringify(parsed, null, 2), rawStructure: parsed };
 }
