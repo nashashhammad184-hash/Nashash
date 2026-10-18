@@ -10,6 +10,8 @@ import { GpuQueueService } from "./services/GpuQueueService";
 
 export interface VideoGenRequest {
   prompt: string;
+  /** KAYAN-TASK-16 — invoked as soon as the queue accepts the job. */
+  onEnqueued?: (queueJobId: string) => void | Promise<void>;
   durationSeconds?: number;
   seed?: number;
   resolution?: string;
@@ -27,6 +29,8 @@ export interface VideoGenRequest {
 export interface LipSyncRequest {
   videoPath: string;
   audioPath: string;
+  /** KAYAN-TASK-16 — same contract as VideoGenRequest.onEnqueued. */
+  onEnqueued?: (queueJobId: string) => void | Promise<void>;
 }
 
 export interface KayanGpuResult {
@@ -136,14 +140,20 @@ export async function generateVideoKayanGpu(req: VideoGenRequest): Promise<Kayan
     payload.fps = req.fps ?? 16;
     payload.aspect_ratio = req.aspectRatio ?? "16:9";
     if (req.numFrames != null) payload.num_frames = req.numFrames;
-    // ⚠️ KAYAN-FIX-05 (verified 2026-09-27): negative_prompt is ACCEPTED by the
-    // GPU worker's Pydantic model (main.py:112) but IGNORED SILENTLY — it is never
-    // passed to LightX2V's pipe.generate(). Sending this field has ZERO effect on
-    // the output video today. It does NOT cause a failure. Do NOT assume this
-    // works until the worker is updated to thread it through generate().
+    // KAYAN-TASK-11 (verified 2026-09-27): negative_prompt IS now threaded
+    // through to LightX2V's pipe.generate(negative_prompt=...) for both t2v and
+    // i2v. Worker: /opt/kayangpu/api/main.py lines 286, 296 (see commit history).
+    // LightX2V signature: LightX2VPipeline.generate(..., negative_prompt=None, ...)
+    // and pipeline.py:395/432 forwards it into the text-encoder input dict.
+    // Empty/whitespace strings are converted to None to keep default behavior.
     if (req.negativePrompt) payload.negative_prompt = req.negativePrompt;
   }
   const enq = await GpuQueueService.enqueue('VIDEO_JOB', payload);
+  // KAYAN-TASK-19-FIX-B+ — persist provider job id BEFORE polling.
+  // Mirrors the same contract already implemented in generateLipSyncKayanGpu.
+  if (typeof req.onEnqueued === 'function') {
+    try { await req.onEnqueued(enq.id); } catch { /* best-effort */ }
+  }
 
   // poll our own queue until COMPLETED/FAILED
   const POLL_MS = 2000;
@@ -156,10 +166,16 @@ export async function generateVideoKayanGpu(req: VideoGenRequest): Promise<Kayan
     last = j;
     if (j.status === 'COMPLETED') {
       const r: any = j.result || {};
+      // KAYAN-TASK-73D: prefer the storage URL when the provider recorded
+      // one (remote_path is set by externalVideoProvider after persisting).
+      // Falls back to /uploads/videos/<basename> for legacy KayanGPU path.
+      const videoUrl = typeof r.remote_path === "string" && r.remote_path.length > 0
+        ? r.remote_path
+        : `/uploads/videos/${require('node:path').basename(r.mp4_path || '')}`;
       return {
         success: true,
         videoPath: r.mp4_path,
-        videoUrl: `/uploads/videos/${require('node:path').basename(r.mp4_path || '')}`,
+        videoUrl,
         jobId: r.worker_jid || enq.id,
         provider: 'kayangpu-queue',
       };
@@ -209,6 +225,10 @@ export async function generateLipSyncKayanGpu(req: LipSyncRequest): Promise<Kaya
     video_path: req.videoPath,
     audio_path: req.audioPath,
   });
+  // KAYAN-TASK-16 — persist the queue job id immediately.
+  if (typeof req.onEnqueued === 'function') {
+    try { await req.onEnqueued(enq.id); } catch { /* best-effort */ }
+  }
 
   const POLL_MS = 2000;
   const MAX_MS = 2 * 60 * 60 * 1000;
@@ -220,22 +240,40 @@ export async function generateLipSyncKayanGpu(req: LipSyncRequest): Promise<Kaya
     last = j;
     if (j.status === 'COMPLETED') {
       const r: any = j.result || {};
-      // ── Semantic SKIP: worker reported no_face_in_video ──
+      // KAYAN-TASK-07 — no_face_in_video is a FAILURE, NOT a successful skip.
+      // Real Lip Sync success requires an actual synced MP4 asset that differs
+      // from the input video. Worker diagnostic is preserved on the error.
       if (r.skipped && r.reason === 'no_face_in_video') {
-        return {
-          success: true,
-          skipped: true,
-          reason: 'no_face_in_video',
-          syncedVideoPath: r.syncedVideoPath,
-          syncedVideoUrl: r.syncedVideoUrl,
-          videoPath: r.syncedVideoPath,
-          videoUrl: r.syncedVideoUrl,
-          worker_jid: r.worker_jid,
-          note: r.note,
-        } as any;
+        const err: any = new Error(
+          `lipsync: worker reported no_face_in_video — Lip Sync did not run ` +
+          `(worker_jid=${r.worker_jid || 'unknown'})`,
+        );
+        err.code = 'LIPSYNC_NO_FACE';
+        err.diagnostic = { note: r.note, worker_jid: r.worker_jid, enqId: enq.id };
+        throw err;
       }
       const mp4 = r.mp4_path;
       if (!mp4) throw new Error(`lipsync job ${enq.id} completed without mp4_path`);
+      // KAYAN-TASK-07 — real output must differ from input video.
+      try {
+        const fs = require('node:fs');
+        if (!fs.existsSync(mp4)) throw new Error(`lipsync output missing at ${mp4}`);
+        const st = fs.statSync(mp4);
+        if (!st.isFile() || st.size === 0) throw new Error(`lipsync output empty at ${mp4}`);
+        const inAbs = require('node:path').resolve(req.videoPath);
+        const outAbs = require('node:path').resolve(mp4);
+        if (inAbs === outAbs) {
+          const err: any = new Error(`lipsync output equals input video (${mp4}) — no actual sync performed`);
+          err.code = 'LIPSYNC_OUTPUT_IS_INPUT';
+          throw err;
+        }
+      } catch (e: any) {
+        if (e?.code === 'LIPSYNC_OUTPUT_IS_INPUT') throw e;
+        // Re-wrap missing/empty cases with clear code
+        const err: any = new Error(e?.message || String(e));
+        err.code = 'LIPSYNC_OUTPUT_INVALID';
+        throw err;
+      }
       return {
         success: true,
         videoPath: mp4,
