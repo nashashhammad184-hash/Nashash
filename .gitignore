@@ -82,3 +82,14 @@ artifacts/api-server/uploads/
 artifacts/api-server/storage_vault/
 *.AppImage
 Nashash_Clean.zip
+
+# KAYAN-MIGRATION-SNAPSHOT — block secrets and dumps
+*.pem
+*.key
+id_rsa
+id_ed25519
+*.dump
+NASHASH-MIGRATION/
+NASHASH-MIGRATION-SAFE/
+NASHASH-MIGRATION-SAFE.tar.gz
+NASHASH-MIGRATION-SAFE.sha256

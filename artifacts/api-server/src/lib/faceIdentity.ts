@@ -22,6 +22,8 @@ import { validateCanonicalFaceQuality } from "./canonicalFaceQuality";
 import { generateVideoKayanGpu } from "./kayanGpuProvider";
 import { logger } from "./logger";
 
+// KAYAN-TASK-72B: unified storage layer for persistence + URL.
+import { getStorage } from "./storage/index";
 const CANONICAL_DIR = path.resolve(process.cwd(), "uploads", "canonical_faces");
 const PROVIDER = "kayangpu-t2v";
 
@@ -150,7 +152,26 @@ export async function generateCanonicalFaceImage(
     throw err;
   }
 
-  const relUrl = `/uploads/canonical_faces/${filename}`;
+  // KAYAN-TASK-72B: persist via storage layer. FFmpeg wrote the frame to a
+  // local temp path (abs) so ffprobe could validate it; now buffer the bytes
+  // and save via getStorage(). Under STORAGE_PROVIDER=local this writes the
+  // same bytes to the same destination (uploads/canonical_faces/<file>) with
+  // identical behavior. Under R2 the file is uploaded and the local temp
+  // is removed.
+  const provider = getStorage();
+  const canonicalKey = `canonical_faces/${filename}`;
+  const frameBuf = fs.readFileSync(abs);
+  let relUrl: string;
+  try {
+    relUrl = await provider.write(canonicalKey, frameBuf, "image/jpeg");
+  } catch (err) {
+    try { fs.unlinkSync(abs); } catch {}
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`canonical face storage write failed: ${msg}`);
+  }
+  if (provider.name !== "local") {
+    try { fs.unlinkSync(abs); } catch {}
+  }
 
   // KAYAN-LEGAL-00 — enforce synthetic-reference policy on the produced asset.
   assertSyntheticReference(relUrl, { syntheticAcknowledged: true });
@@ -169,7 +190,9 @@ export async function generateCanonicalFaceImage(
 
   return {
     actorId,
-    imagePath: abs,
+    // KAYAN-TASK-72B: under local, abs is the canonical file.
+    // Under R2 the local temp was deleted, so imagePath is "".
+    imagePath: provider.name === "local" ? abs : "",
     imageUrl: relUrl,
     provider: PROVIDER,
     model: "hunyuanvideo-1.5-t2v",

@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { Clapperboard, PlayCircle, Sparkles, Download, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+// KAYAN-TASK-81: signed URL flow for storage-backed videos.
+import { fetchSignedUrl, keyFromStorageUrl } from "@/lib/auth-client";
 
 export function VideoPlayerPanel({
   project,
@@ -20,13 +22,43 @@ export function VideoPlayerPanel({
   const [mergeStatus, setMergeStatus] = useState<"idle" | "processing" | "completed">("idle");
   const [mergeStage, setMergeStage] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
+  // KAYAN-TASK-81: separate "source URL" (may be /uploads or /api/storage/r2)
+  // from "playable URL" (signed when needed). Retry once on load error.
+  const [playableUrl, setPlayableUrl] = useState<string | null>(null);
+  const retriedRef = useRef<boolean>(false);
   const generateVideo = useGenerateVideo();
 
   useEffect(() => {
-    if (!videoUrl || !videoRef.current) return;
+    let cancelled = false;
+    retriedRef.current = false;
+
+    async function resolvePlayable(source: string | null): Promise<string | null> {
+      if (!source) return null;
+      // /uploads/* works directly (local provider or same-origin proxy).
+      if (source.startsWith("/uploads/")) return source;
+      // /api/storage/r2/<key> requires a signed URL.
+      const key = keyFromStorageUrl(source);
+      if (!key) return source; // already a full URL or unknown — pass through
+      const signed = await fetchSignedUrl(key);
+      if (cancelled) return null;
+      return signed?.url ?? null;
+    }
+
+    void (async () => {
+      const u = await resolvePlayable(videoUrl);
+      if (!cancelled) setPlayableUrl(u);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
+    if (!playableUrl || !videoRef.current) return;
     videoRef.current.load();
     void videoRef.current.play().catch(() => {});
-  }, [videoUrl]);
+  }, [playableUrl]);
 
   const handleGenerate = () => {
     setVideoUrl(null);
@@ -92,6 +124,8 @@ export function VideoPlayerPanel({
     try {
       const res = await fetch("/api/render/merge", {
         method: "POST",
+        // KAYAN-TASK-81: send session cookie.
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: prompt.trim() || `مشهد سينمائي من مشروع ${project.title}`,
@@ -147,7 +181,26 @@ export function VideoPlayerPanel({
         </AnimatePresence>
 
         {videoUrl && !generateVideo.isPending && mergeStatus !== "processing" && (
-          <video key={videoUrl} ref={videoRef} className="absolute inset-0 h-full w-full object-contain bg-black" src={videoUrl} controls autoPlay muted playsInline preload="auto" />
+          <video
+            key={playableUrl || videoUrl}
+            ref={videoRef}
+            className="absolute inset-0 h-full w-full object-contain bg-black"
+            src={playableUrl || undefined}
+            controls
+            autoPlay
+            muted
+            playsInline
+            preload="auto"
+            onError={async () => {
+              // KAYAN-TASK-81: signed URL may have expired. Retry exactly once.
+              if (retriedRef.current) return;
+              retriedRef.current = true;
+              const key = keyFromStorageUrl(videoUrl);
+              if (!key) return;
+              const signed = await fetchSignedUrl(key);
+              if (signed?.url) setPlayableUrl(signed.url);
+            }}
+          />
         )}
 
         {!videoUrl && !generateVideo.isPending && mergeStatus !== "processing" && (

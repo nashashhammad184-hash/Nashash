@@ -75,7 +75,8 @@ router.post("/audio/generate", requireProductionAuth, async (req: Request, res: 
 
     const buf = Buffer.from(audioBuffer);
     // KAYAN-TASK-46: persist to disk in uploads/audio/.
-    const saved = saveAudioBuffer(buf, { ext: ".mp3" });
+    // KAYAN-TASK-72: saveAudioBuffer is now async (storage layer).
+    const saved = await saveAudioBuffer(buf, { ext: ".mp3" });
     if (saved.ok === false) {
       console.error({ err: saved.error }, "audio persistence failed");
       res.status(saved.status).json({ error: saved.error });

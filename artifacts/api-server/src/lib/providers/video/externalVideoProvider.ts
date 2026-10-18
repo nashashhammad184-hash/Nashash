@@ -11,6 +11,8 @@ import type { VideoPayload, VideoProviderResult } from "./types";
 import { waveSpeedProvider } from "./waveSpeedProvider";
 import { mockProvider } from "./mockProvider";
 import { GpuQueueService } from "../../services/GpuQueueService";
+// KAYAN-TASK-73D: persist downloaded video to the active storage provider.
+import { persistVideoFile } from "../../storage/persist";
 
 const PROVIDER_KIND = (process.env.VIDEO_EXTERNAL_KIND || "wavespeed").toLowerCase();
 const MAX_COST_USD = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
@@ -117,5 +119,22 @@ export async function runExternalVideoJob(job: { payload: any; queueJobId?: stri
     process.env.NASHASH_VIDEO_DIR ||
     require("node:path").resolve(process.cwd(), "uploads", "videos");
   const result = await provider.download(providerJobId, outputDir);
-  return result;
+  // KAYAN-TASK-73D: persist the freshly-downloaded file through the storage
+  // layer. Under STORAGE_PROVIDER=local this is a no-op URL build (the file
+  // is already at uploads/videos/<basename>). Under R2 the file is uploaded.
+  // We also encode the storage URL into remote_path so generateVideoKayanGpu
+  // and queue-worker can surface it as the canonical videoUrl.
+  let storageUrl: string | undefined;
+  try {
+    const persisted = await persistVideoFile(result.mp4_path);
+    storageUrl = persisted.url;
+  } catch (persistErr) {
+    // Persistence failure must fail the job — do not claim success without
+    // a durable URL under the configured provider.
+    const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+    const err: any = new Error(`[external:${provider.name}] storage persist failed for ${result.mp4_path}: ${msg}`);
+    err.category = "PERMANENT";
+    throw err;
+  }
+  return { ...result, remote_path: storageUrl };
 }

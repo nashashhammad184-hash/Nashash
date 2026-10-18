@@ -8,7 +8,7 @@
     "start": "node artifacts/api-server/dist/index.mjs",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "inject:legacy": "tsx ./scripts/legacy/inject-verified-images.LEGACY.ts"
+    "inject:LEGACY-DO-NOT-RUN-IN-PROD": "tsx ./scripts/legacy/inject-verified-images.LEGACY.ts"
   },
   "private": true,
   "dependencies": {

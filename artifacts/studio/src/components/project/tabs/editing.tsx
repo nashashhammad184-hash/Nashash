@@ -15,21 +15,91 @@ function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: {
   const [renderStatus, setRenderStatus] = useState("IDLE");
   const [renderProgress, setRenderProgress] = useState(0);
   const [finalMp4Url, setFinalMp4Url] = useState<string | null>(null);
-
+  const [renderError, setRenderError] = useState<string | null>(null);
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+  // KAYAN-TASK-09 — poll backend render job status. UI state mirrors DB state.
+  useEffect(() => {
+    if (renderStatus !== "PROCESSING" && renderStatus !== "QUEUED") return undefined;
+    const jobId = (window as any).__kayan_active_render_job_id as string | undefined;
+    if (!jobId) return undefined;
+    let cancelled = false;
+    let timer: any = null;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/render/status/${jobId}`, { headers: { "Accept": "application/json" } });
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        if (!r.ok || !j) {
+          setRenderError(`Status fetch failed (HTTP ${r.status})`);
+          setRenderStatus("FAILED");
+          toast.error("تعذّر استعلام حالة الرندر من الخادم.");
+          return;
+        }
+        const st = String(j.status || "").toUpperCase();
+        const prog = typeof j.progress === "number" ? j.progress : null;
+        if (prog !== null) setRenderProgress(prog);
+        if (st === "QUEUED" || st === "PROCESSING") {
+          setRenderStatus(st === "QUEUED" ? "QUEUED" : "PROCESSING");
+          timer = setTimeout(tick, 3000);
+          return;
+        }
+        if (st === "COMPLETED") {
+          const outUrl = j.outputUrl as string | null;
+          if (!outUrl || typeof outUrl !== "string" || outUrl.trim().length === 0) {
+            setRenderError("Render job COMPLETED but no outputUrl — refusing to mark success.");
+            setRenderStatus("FAILED");
+            toast.error("انتهى الرندر بدون ملف إخراج صالح.");
+            return;
+          }
+          setFinalMp4Url(outUrl);
+          setRenderProgress(100);
+          setRenderStatus("COMPLETED");
+          toast.success("اكتمل الرندر الحقيقي بنجاح 100%.");
+          onSyncSuccess();
+          return;
+        }
+        if (st === "FAILED") {
+          setRenderError(j.error || "Render job FAILED");
+          setRenderStatus("FAILED");
+          toast.error(`فشل الرندر: ${j.error || "خطأ غير معروف"}`);
+          return;
+        }
+        setRenderError(`Unknown render status: ${st}`);
+        timer = setTimeout(tick, 3000);
+      } catch (e: any) {
+        if (cancelled) return;
+        setRenderError(e?.message || "network error");
+        timer = setTimeout(tick, 3000);
+      }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [renderStatus, project.id, onSyncSuccess]);
 
   const handleStartFinalRender = async () => {
     setRenderStatus("PROCESSING");
-    setRenderProgress(30);
+    setRenderProgress(0);
+    setRenderError(null);
+    setFinalMp4Url(null);
     try {
       const response = await fetch(`/api/projects/${project.id}/timeline/sync`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setRenderProgress(100); setRenderStatus("COMPLETED"); setFinalMp4Url(data.outputVideoUrl);
-        toast.success("تمت مزامنة خط التايم لاين وإطلاق الرندر الخلفي الحقيقي بنجاح 100%.");
-        onSyncSuccess();
-      } else { throw new Error(); }
-    } catch { setRenderStatus("FAILED"); toast.error("فشلت عملية مزامنة ورندرة أصول التايم لاين."); }
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data || !data.success || !data.jobId) {
+        setRenderStatus("FAILED");
+        setRenderError(data?.error || `HTTP ${response.status}`);
+        toast.error(data?.error || "فشلت عملية مزامنة ورندرة أصول التايم لاين.");
+        return;
+      }
+      (window as any).__kayan_active_render_job_id = data.jobId;
+      setRenderStatus("QUEUED");
+      setRenderProgress(0);
+      toast.message("تم إطلاق مهمة الرندر. جارٍ المتابعة...");
+    } catch (e: any) {
+      setRenderStatus("FAILED");
+      setRenderError(e?.message || "network error");
+      toast.error("فشلت عملية مزامنة ورندرة أصول التايم لاين.");
+    }
   };
 
   return (
@@ -38,7 +108,7 @@ function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: {
         <div className="inline-flex items-center gap-2 text-xs font-mono text-white/50 uppercase tracking-wider"><Film className="w-3.5 h-3.5 text-primary" /> مخطط المسارات الحقيقية والإنتاج المزامَن (Timeline Sync)</div>
         <div className="flex items-center gap-3">
           <div className="text-sm font-mono text-primary font-bold">إجمالي: {formatTime(totalDuration)}</div>
-          <Button type="button" size="sm" onClick={handleStartFinalRender} disabled={renderStatus === "PROCESSING" || clips.length === 0} className="h-8 gap-1.5 bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg text-xs rounded animate-pulse">{renderStatus === "PROCESSING" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} مزامنة ورندرة الفيلم</Button>
+          <Button type="button" size="sm" onClick={handleStartFinalRender} disabled={renderStatus === "PROCESSING" || renderStatus === "QUEUED" || clips.length === 0} className="h-8 gap-1.5 bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg text-xs rounded animate-pulse">{renderStatus === "PROCESSING" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} مزامنة ورندرة الفيلم</Button>
         </div>
       </div>
       {renderStatus !== "IDLE" && (
@@ -46,6 +116,7 @@ function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: {
           <div className="flex justify-between items-center text-[11px] font-mono"><span className="text-white/60">حالة الرندر الخلفي: <strong className="text-primary">{renderStatus}</strong></span><span className="text-primary font-bold">{renderProgress}%</span></div>
           <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-primary transition-all duration-300" style={{ width: `${renderProgress}%` }} /></div>
           {finalMp4Url && <div className="pt-2"><p className="text-[10px] text-green-400 font-mono">✅ تم إنشاء الـ Manifest واستقرت أصول الـ MP4 المدمجة حقيقياً.</p></div>}
+          {renderError && <div className="pt-2"><p className="text-[10px] text-red-400 font-mono">⚠️ {renderError}</p></div>}
         </div>
       )}
       <div className="space-y-2 font-mono text-xs opacity-75">
@@ -153,8 +224,8 @@ export default function EditingTab({ project }: { project: Project }) {
                 <select value={trackType} onChange={e => setTrackType(e.target.value)} className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm text-white">
                   <option value="video">🎬 VIDEO (فيديو مرئي)</option>
                   <option value="voice">🗣️ VOICE (حوار صوتي)</option>
-                  <option value="music">🎵 MUSIC (موسيقى تصويرية)</option>
-                  <option value="sfx">🔊 SFX (مؤثرات محيطية)</option>
+                  <option value="music" disabled>🎵 MUSIC — قيد التطوير (OPEN_DEPENDENCY: no provider)</option>
+                  <option value="sfx" disabled>🔊 SFX — قيد التطوير (OPEN_DEPENDENCY: no provider)</option>
                 </select>
               </div>
               <div className="w-full sm:w-44 flex items-center gap-2">

@@ -6,6 +6,8 @@ import NotFound from '@/pages/not-found';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import { useEffect } from 'react';
 import { StudioLayout } from '@/components/layout';
+// KAYAN-TASK-81: cookie-based auth gate wraps the app.
+import { AuthGate } from '@/components/auth/auth-gate';
 import Dashboard from '@/pages/dashboard';
 import Projects from '@/pages/projects';
 import ProjectDetail from '@/pages/project-detail';
@@ -24,6 +26,7 @@ const queryClient = new QueryClient({
 
 function Router() {
   return (
+    <AuthGate>
     <StudioLayout>
       <Switch>
         <Route path="/" component={Dashboard} />
@@ -35,6 +38,7 @@ function Router() {
         <Route component={NotFound} />
       </Switch>
     </StudioLayout>
+    </AuthGate>
   );
 }
 

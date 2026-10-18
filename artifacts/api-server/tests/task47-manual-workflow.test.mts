@@ -130,7 +130,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "t47-"));
   const rejected = await persistAudioUrlToShot(sid, "data:audio/mp3;base64,AAAA");
   report("TEST-47-04 data: URL rejected", rejected.ok === false);
   const buf = Buffer.from("fake-mp3-".repeat(20));
-  const saved = saveAudioBuffer(buf, { baseDir: TMP });
+  const saved = await saveAudioBuffer(buf, { baseDir: TMP });
   report("TEST-47-04 saved to disk", saved.ok === true);
   if (saved.ok === true) {
     const ok = await persistAudioUrlToShot(sid, saved.url);

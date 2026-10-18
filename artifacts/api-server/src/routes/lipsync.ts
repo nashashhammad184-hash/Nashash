@@ -1,13 +1,14 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { logger } from "../lib/logger";
 import { generateLipSyncKayanGpu } from "../lib/kayanGpuProvider";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router: IRouter = Router();
 
-router.post("/", handleLipSync);
-router.post("/generate", handleLipSync);
-router.post("/lipsync", handleLipSync);
-router.post("/lipsync/generate", handleLipSync);
+router.post("/", requireProductionAuth, handleLipSync);
+router.post("/generate", requireProductionAuth, handleLipSync);
+router.post("/lipsync", requireProductionAuth, handleLipSync);
+router.post("/lipsync/generate", requireProductionAuth, handleLipSync);
 
 async function handleLipSync(req: Request, res: Response): Promise<void> {
   try {

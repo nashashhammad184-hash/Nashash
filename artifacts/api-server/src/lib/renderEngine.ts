@@ -19,6 +19,9 @@ import https from "node:https";
 import { randomUUID } from "node:crypto";
 import { eq, desc, sql } from "drizzle-orm";
 import { db, renderJobsTable, type RenderJobRow, type RenderStatus } from "@workspace/db";
+// KAYAN-TASK-73F: storage-aware asset resolution for r2 URLs.
+import { resolveStorageUrlToLocal } from "./storage/index";
+import { persistRenderFile } from "./storage/persist";
 
 const pExec = promisify(execFile);
 
@@ -158,7 +161,11 @@ function progressForStatus(s: RenderStatus): number {
  * Resolve an asset source (local path or http(s) URL) to a real local file.
  * Throws on any failure. Never returns a placeholder.
  */
-async function resolveAssetToLocal(source: string): Promise<string> {
+async function resolveAssetToLocal(
+  source: string,
+  tracker?: string[],
+  storageCleanupTracker?: Array<() => Promise<void>>,
+): Promise<string> {
   const trimmed = source.trim();
   if (!trimmed) throw new Error("resolveAssetToLocal: empty source");
 
@@ -168,10 +175,20 @@ async function resolveAssetToLocal(source: string): Promise<string> {
     }
   }
 
+  // 0. KAYAN-TASK-73F: internal R2 proxy URLs → resolve via storage layer.
+  if (trimmed.startsWith("/api/storage/r2/")) {
+    const r = await resolveStorageUrlToLocal(trimmed);
+    if (storageCleanupTracker) storageCleanupTracker.push(r.cleanup);
+    return r.path;
+  }
   // 1. Local path (absolute or /uploads/... or relative)
   if (trimmed.startsWith("/uploads/")) {
     const abs = path.resolve(process.cwd(), trimmed.replace(/^\//, ""));
-    return verifyLocalFile(abs, trimmed);
+    if (fs.existsSync(abs)) return verifyLocalFile(abs, trimmed);
+    // KAYAN-TASK-73F: file missing locally — try storage layer (r2 migration).
+    const r = await resolveStorageUrlToLocal(trimmed);
+    if (storageCleanupTracker) storageCleanupTracker.push(r.cleanup);
+    return r.path;
   }
   if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
     const abs = path.resolve(process.cwd(), trimmed);
@@ -185,7 +202,7 @@ async function resolveAssetToLocal(source: string): Promise<string> {
   }
 
   // 2. http(s) URL → download safely
-  return downloadToTemp(trimmed);
+  return downloadToTemp(trimmed, tracker);
 }
 
 function verifyLocalFile(abs: string, original: string): string {
@@ -199,7 +216,10 @@ function verifyLocalFile(abs: string, original: string): string {
   return abs;
 }
 
-function downloadToTemp(url: string): Promise<string> {
+// KAYAN-TASK-66: temp file tracking. Every temp file we create during a
+// render pipeline is registered here so it can be cleaned on success OR
+// failure (previously, failure left trim_*, concat_*, dl_* files behind).
+async function downloadToTemp(url: string, tracker?: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     let parsed: URL;
     try {
@@ -228,7 +248,7 @@ function downloadToTemp(url: string): Promise<string> {
         // follow one redirect
         res.resume();
         const redir = new URL(res.headers.location, url).toString();
-        return downloadToTemp(redir).then(resolve, reject);
+        return downloadToTemp(redir, tracker).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -248,6 +268,7 @@ function downloadToTemp(url: string): Promise<string> {
         const buf = Buffer.concat(chunks);
         if (buf.length === 0) return reject(new Error(`downloadToTemp: empty body from ${url}`));
         fs.writeFileSync(localPath, buf);
+        if (tracker) tracker.push(localPath);
         resolve(localPath);
       });
       res.on("error", (e) => reject(new Error(`downloadToTemp: stream error: ${e.message}`)));
@@ -344,6 +365,10 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
 
   await setJobStatus(jobId, "PROCESSING", { startedAt: new Date(), error: null });
 
+  // KAYAN-TASK-66: track all temp files so we can clean on success AND failure.
+  const tempTracker: string[] = [];
+  // KAYAN-TASK-73F: storage-layer cleanup handles (no-op under local).
+  const storageCleanupTracker: Array<() => Promise<void>> = [];
   const localOutputDir = RENDERS_DIR;
   fs.mkdirSync(localOutputDir, { recursive: true });
   const outputFileName = `render_${jobId}.mp4`;
@@ -371,7 +396,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     let timelineCursor = 0;
     for (let i = 0; i < clips.length; i++) {
       const c = clips[i];
-      const file = await resolveAssetToLocal(c.assetUrl);
+      const file = await resolveAssetToLocal(c.assetUrl, tempTracker, storageCleanupTracker);
       const probe = await probeMedia(file);
       if (!probe.hasVideo) throw new Error(`clip #${i + 1} (${c.assetUrl}) has no video stream`);
       if (!(probe.duration > 0)) throw new Error(`clip #${i + 1} (${c.assetUrl}) has zero/unknown duration`);
@@ -388,6 +413,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
 
       // Re-encode the trimmed segment to a uniform format (H.264 yuv420p).
       const trimmedPath = path.join(TEMP_ASSETS_DIR, `trim_${jobId}_${i}.mp4`);
+      tempTracker.push(trimmedPath);
       const trimArgs = [
         "-y", "-hide_banner", "-loglevel", "error",
         "-ss", String(srcStart),
@@ -420,10 +446,12 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
 
     // ─── Concat trimmed clips ───
     const listPath = path.join(TEMP_ASSETS_DIR, `concat_${jobId}.txt`);
+    tempTracker.push(listPath);
     const lines = trimmed.map((r) => `file '${r.file.replace(/'/g, "'\\''")}'`);
     fs.writeFileSync(listPath, lines.join("\n") + "\n", "utf-8");
 
     const concatPath = path.join(TEMP_ASSETS_DIR, `concat_${jobId}.mp4`);
+    tempTracker.push(concatPath);
     await spawnFfmpeg([
       "-y", "-hide_banner", "-loglevel", "error",
       "-f", "concat", "-safe", "0",
@@ -448,7 +476,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     const audioMode: "AUDIO" | "VIDEO_ONLY" = audioUrl ? "AUDIO" : "VIDEO_ONLY";
     let audioLocal: string | null = null;
     if (audioMode === "AUDIO") {
-      audioLocal = await resolveAssetToLocal(audioUrl);
+      audioLocal = await resolveAssetToLocal(audioUrl, tempTracker, storageCleanupTracker);
       const audioProbe = await probeMedia(audioLocal);
       if (!audioProbe.hasAudio) throw new Error(`audioUrl has no audio stream: ${audioUrl}`);
       if (!(audioProbe.duration > 0)) throw new Error(`audioUrl has zero duration: ${audioUrl}`);
@@ -481,6 +509,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     const subsText = typeof input.subtitlesText === "string" ? input.subtitlesText.trim() : "";
     if (subsText) {
       srtPath = path.join(TEMP_ASSETS_DIR, `subs_${jobId}.srt`);
+      tempTracker.push(srtPath);
       fs.writeFileSync(srtPath, subsText, "utf-8");
       vfParts.push(`subtitles='${escapeFilterPath(srtPath)}'`);
     }
@@ -532,14 +561,25 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     if (audioMode === "VIDEO_ONLY" && outProbe.hasAudio) {
       throw new Error("output unexpectedly has audio in VIDEO_ONLY mode");
     }
-    try { fs.unlinkSync(listPath); } catch {}
-    try { fs.unlinkSync(concatPath); } catch {}
-    for (const t of trimmed) { try { fs.unlinkSync(t.file); } catch {} }
-    if (srtPath) { try { fs.unlinkSync(srtPath); } catch {} }
+    // KAYAN-TASK-73J: persist the final MP4 via storage layer BEFORE
+    // declaring success. Under local provider this is a no-op URL build
+    // (file already at uploads/renders/<basename>). Under R2 it uploads.
+    let persistedUrl: string;
+    try {
+      const persisted = await persistRenderFile(outputPath);
+      persistedUrl = persisted.url;
+    } catch (persistErr) {
+      const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+      throw new Error(`render storage persist failed for ${outputPath}: ${msg}`);
+    }
+    // KAYAN-TASK-66: cleanup via tracker (covers trim/list/concat/srt/downloads).
+    for (const tf of tempTracker) { try { fs.unlinkSync(tf); } catch {} }
+    // KAYAN-TASK-73F: release any temp file downloaded via storage layer.
+    for (const cl of storageCleanupTracker) { try { await cl(); } catch {} }
 
     await setJobStatus(jobId, "COMPLETED", {
       outputPath,
-      outputUrl,
+      outputUrl: persistedUrl,
       duration: outProbe.duration,
       sizeBytes: st.size,
       probe: outProbe.raw,
@@ -548,6 +588,10 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     });
   } catch (err: any) {
     const message = err instanceof Error ? err.message : String(err);
+    // KAYAN-TASK-66: cleanup on failure (was previously leaking temp files).
+    for (const tf of tempTracker) { try { fs.unlinkSync(tf); } catch {} }
+    // KAYAN-TASK-73F: release any temp file downloaded via storage layer.
+    for (const cl of storageCleanupTracker) { try { await cl(); } catch {} }
     // best-effort cleanup of partial output
     try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
     await setJobStatus(jobId, "FAILED", {

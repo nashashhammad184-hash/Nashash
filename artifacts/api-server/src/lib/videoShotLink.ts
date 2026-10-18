@@ -22,6 +22,79 @@ export type PersistVideoUrlResult =
   | ShotValidationError;
 
 /**
+ * KAYAN-TASK-64: central validation of videoUrl format.
+ *
+ * Accepted:
+ *   - /uploads/... (real local asset path)
+ *   - http(s)://... (external provider URLs)
+ *
+ * Rejected explicitly:
+ *   - javascript:, data:, file:, vbscript:, blob:, and any other scheme
+ *   - empty / whitespace
+ *   - paths containing ".." (traversal)
+ *   - backslashes
+ *
+ * This does NOT verify the file exists — only the format.
+ */
+export function validateVideoUrl(input: unknown):
+  | { ok: true; videoUrl: string }
+  | { ok: false; error: string } {
+  if (typeof input !== "string") {
+    return { ok: false, error: "videoUrl must be a string" };
+  }
+  const u = input.trim();
+  if (u.length === 0) {
+    return { ok: false, error: "videoUrl is empty" };
+  }
+  if (u.includes("\\")) {
+    return { ok: false, error: "videoUrl must not contain backslashes" };
+  }
+  if (u.includes("\u0000")) {
+    return { ok: false, error: "videoUrl must not contain NUL byte" };
+  }
+  // Explicit scheme rejection (case-insensitive)
+  const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(u);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    if (scheme === "http" || scheme === "https") {
+      // allowed below (after traversal check)
+    } else if (scheme === "javascript" || scheme === "data" || scheme === "file" ||
+               scheme === "vbscript" || scheme === "blob" || scheme === "about") {
+      return { ok: false, error: `videoUrl scheme not allowed: ${scheme}:` };
+    } else if (scheme === "mailto" || scheme === "tel") {
+      return { ok: false, error: `videoUrl scheme not allowed: ${scheme}:` };
+    } else {
+      return { ok: false, error: `videoUrl scheme not supported: ${scheme}:` };
+    }
+  }
+  // Path traversal in any part of the string
+  if (u.includes("..")) {
+    return { ok: false, error: "videoUrl must not contain '..'" };
+  }
+  // Must start with /uploads/ OR be http(s)://
+  if (u.startsWith("/uploads/")) {
+    // Reject /uploads//... (empty segment) and /uploads/./...
+    const rest = u.slice("/uploads/".length);
+    if (rest.length === 0 || rest.startsWith("/") || rest.split("/").some(s => s.length === 0 || s === ".")) {
+      return { ok: false, error: "videoUrl has invalid /uploads/ path" };
+    }
+    return { ok: true, videoUrl: u };
+  }
+  if (/^https?:\/\//i.test(u)) {
+    try {
+      const parsed = new URL(u);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { ok: false, error: `videoUrl protocol not allowed: ${parsed.protocol}` };
+      }
+      return { ok: true, videoUrl: u };
+    } catch {
+      return { ok: false, error: "videoUrl is not a valid http(s) URL" };
+    }
+  }
+  return { ok: false, error: "videoUrl must be /uploads/... or http(s)://..." };
+}
+
+/**
  * Parse and validate an optional shotId from the request body.
  * Returns { ok: true, shotId: null } when the field is absent.
  */
@@ -58,13 +131,12 @@ export async function persistVideoUrlToShot(
   shotId: number,
   videoUrl: unknown,
 ): Promise<PersistVideoUrlResult> {
-  if (typeof videoUrl !== "string") {
-    return { ok: false, status: 502, error: "videoUrl must be a string" };
+  // KAYAN-TASK-64: central format validation.
+  const v = validateVideoUrl(videoUrl);
+  if (v.ok === false) {
+    return { ok: false, status: 400, error: v.error };
   }
-  const vu = videoUrl.trim();
-  if (vu.length === 0) {
-    return { ok: false, status: 502, error: "refusing to persist empty videoUrl to shot" };
-  }
+  const vu = v.videoUrl;
   try {
     const upd = await db
       .update(shotsTable)

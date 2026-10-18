@@ -14,7 +14,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "t46-"));
 // ═══ TEST-46-01: file saved & verified on disk ═══
 {
   const buf = Buffer.from("MP3-fake-content-".repeat(50));
-  const r = saveAudioBuffer(buf, { baseDir: TMP, ext: ".mp3" });
+  const r = await saveAudioBuffer(buf, { baseDir: TMP, ext: ".mp3" });
   report("TEST-46-01 save ok", r.ok === true, r.ok === false ? r.error : "");
   if (r.ok === true) {
     report("TEST-46-01 file exists on disk", fs.existsSync(r.filePath));
@@ -28,7 +28,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "t46-"));
 // ═══ TEST-46-02: URL accepted by isRealAsset-style validator ═══
 {
   const buf = Buffer.from("x".repeat(100));
-  const r = saveAudioBuffer(buf, { baseDir: TMP });
+  const r = await saveAudioBuffer(buf, { baseDir: TMP });
   if (r.ok === true) {
     // mirror of pipeline.ts isRealAsset
     const isReal = (s: unknown): boolean => {
@@ -45,8 +45,8 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "t46-"));
 
 // ═══ TEST-46-03: empty buffer refused ═══
 {
-  const r1 = saveAudioBuffer(Buffer.alloc(0));
-  const r2 = saveAudioBuffer(null as any);
+  const r1 = await saveAudioBuffer(Buffer.alloc(0));
+  const r2 = await saveAudioBuffer(null as any);
   report("TEST-46-03 empty buffer refused", r1.ok === false);
   report("TEST-46-03 null refused", r2.ok === false);
 }
@@ -56,7 +56,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "t46-"));
   // Point at a path that cannot be created (existing file as baseDir).
   const blocker = path.join(TMP, "not-a-dir");
   fs.writeFileSync(blocker, "x");
-  const r = saveAudioBuffer(Buffer.from("data"), { baseDir: blocker });
+  const r = await saveAudioBuffer(Buffer.from("data"), { baseDir: blocker });
   report("TEST-46-04 write failure → error", r.ok === false);
   if (r.ok === false) {
     report("TEST-46-04 status is 500", r.status === 500, "status=" + r.status);

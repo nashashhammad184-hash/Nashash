@@ -3,6 +3,7 @@ import { pool, db } from "@workspace/db";
 import { timelineItemsTable, shotsTable, editClipsTable } from "@workspace/db/schema";
 import { eq, asc, sql } from "drizzle-orm";
 import { createRenderJob, runRenderPipeline, type RenderClipInput } from "../lib/renderEngine";
+import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router = Router();
 
@@ -95,7 +96,7 @@ router.get("/projects/:id/timeline", async (req: Request, res: Response): Promis
 //    - Only create VIDEO items that have a real asset URL
 //    - Do NOT fabricate MUSIC / SFX placeholder rows
 //    - Only enqueue a render job if there is at least one real VIDEO asset
-router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): Promise<void> => {
+router.post("/projects/:id/timeline/sync", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     await ensureTimelineTable();
     const projectId = Number(req.params.id);
@@ -116,10 +117,75 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
       .where(eq(editClipsTable.projectId, projectId))
       .orderBy(asc(editClipsTable.clipOrder));
 
-    console.log(`⚡ [Timeline Sync] rebuilding timeline for project #${projectId}`);
+    console.log(`[Timeline Sync] syncing timeline for project #${projectId}`);
 
-    // Wipe existing timeline rows for this project
-    await db.delete(timelineItemsTable).where(eq(timelineItemsTable.projectId, projectId));
+    // ─── KAYAN-TASK-10 — Merge strategy (no destructive delete-all by default) ───
+    // Classification:
+    //   metadata.origin === "manual"      → manual row: preserve entirely
+    //   metadata.origin === "generated"   → generated row: update assetUrl only when needed
+    //   metadata empty/null (legacy)      → treat as generated (pre-TASK-10 rows were all generated)
+    const explicitReset = (req.body && (req.body as any).reset === true);
+    const existingRows = explicitReset
+      ? []
+      : await db.select().from(timelineItemsTable).where(eq(timelineItemsTable.projectId, projectId));
+
+    type Classified = { row: any; kind: "manual" | "generated" };
+    const classified: Classified[] = [];
+    for (const r of existingRows) {
+      let kind: "manual" | "generated" = "generated";
+      const raw = (r as any).metadata;
+      if (raw && typeof raw === "string") {
+        try {
+          const m = JSON.parse(raw);
+          if (m && m.origin === "manual") kind = "manual";
+          else if (m && m.origin === "generated") kind = "generated";
+        } catch { /* legacy/invalid metadata → generated */ }
+      }
+      classified.push({ row: r, kind });
+    }
+
+    const generatedKey = (track: string, shotId: number | null, clipId: number | null) =>
+      `${track}:${shotId ?? ""}:${clipId ?? ""}`;
+
+    const existingGenerated = new Map<string, any>();
+    const manualRows: any[] = [];
+    for (const c of classified) {
+      if (c.kind === "manual") manualRows.push(c.row);
+      else existingGenerated.set(generatedKey(c.row.track, c.row.shotId, c.row.clipId), c.row);
+    }
+    void manualRows;
+
+    // If reset explicitly requested → wipe (opt-in behavior only) and rebuild fresh.
+    if (explicitReset) {
+      await db.delete(timelineItemsTable).where(eq(timelineItemsTable.projectId, projectId));
+    }
+
+    const upsertGenerated = async (values: any): Promise<any | null> => {
+      const key = generatedKey(values.track, values.shotId ?? null, values.clipId ?? null);
+      const prev = existingGenerated.get(key);
+      const meta = JSON.stringify({ origin: "generated" });
+      if (prev) {
+        const needAsset = (prev.assetUrl ?? null) !== (values.assetUrl ?? null);
+        const needContent = (prev.content ?? null) !== (values.content ?? null);
+        existingGenerated.delete(key);
+        if (needAsset || needContent) {
+          const [u] = await db.update(timelineItemsTable)
+            .set({
+              ...(needAsset ? { assetUrl: values.assetUrl } : {}),
+              ...(needContent ? { content: values.content } : {}),
+              metadata: meta,
+            })
+            .where(eq(timelineItemsTable.id, prev.id))
+            .returning();
+          return u ?? prev;
+        }
+        return prev;
+      }
+      const [ins] = await db.insert(timelineItemsTable)
+        .values({ ...values, metadata: meta })
+        .returning();
+      return ins;
+    };
 
     let currentTime = 0;
     let orderCounter = 1;
@@ -137,7 +203,7 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
 
         // VIDEO item only if a real asset exists
         if (videoAsset) {
-          const [vItem] = await db.insert(timelineItemsTable).values({
+          const vItem = await upsertGenerated({
             projectId,
             shotId: shot.id,
             track: "VIDEO",
@@ -147,7 +213,7 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
             order: orderCounter++,
             content: shotDesc,
             assetUrl: videoAsset,
-          }).returning();
+          });
           if (vItem) {
             newItems.push(vItem);
             renderClips.push({
@@ -166,7 +232,7 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
         const shotDialogue = (shot.dialogue || "").trim();
         if (shotDialogue) {
           const audioAsset = shot.audioUrl && looksLikeRealAsset(shot.audioUrl) ? shot.audioUrl : null;
-          const [voiceItem] = await db.insert(timelineItemsTable).values({
+          const voiceItem = await upsertGenerated({
             projectId,
             shotId: shot.id,
             track: "VOICE",
@@ -176,7 +242,7 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
             order: orderCounter++,
             content: shotDialogue,
             assetUrl: audioAsset,
-          }).returning();
+          });
           if (voiceItem) newItems.push(voiceItem);
         }
 
@@ -194,7 +260,15 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
         const track = (clip.trackType || "video").toUpperCase();
 
         const asset = clip.assetId && looksLikeRealAsset(clip.assetId) ? clip.assetId : null;
-        const [cItem] = await db.insert(timelineItemsTable).values({
+        // KAYAN-TASK-13 — MUSIC/SFX rows require a real asset. No provider
+        // exists for MUSIC_SFX_GEN, so we NEVER fabricate a silent/placeholder
+        // row. Skipped explicitly with a diagnostic.
+        if ((track === "MUSIC" || track === "SFX") && !asset) {
+          console.log(`[Timeline Sync] clip #${clip.id} track=${track} has no real asset — OPEN_DEPENDENCY (MUSIC_SFX_GEN unimplemented), skipping`);
+          currentTime = currentTime + clipDuration;
+          continue;
+        }
+        const cItem = await upsertGenerated({
           projectId,
           clipId: clip.id,
           track,
@@ -204,7 +278,7 @@ router.post("/projects/:id/timeline/sync", async (req: Request, res: Response): 
           order: orderCounter++,
           content: clip.title,
           assetUrl: asset,
-        }).returning();
+        });
         if (cItem) {
           newItems.push(cItem);
           if (track === "VIDEO" && asset) {
