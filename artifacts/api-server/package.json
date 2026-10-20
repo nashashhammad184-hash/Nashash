@@ -14,6 +14,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1149.0",
     "@deepgram/sdk": "^3.13.0",
     "@smithy/node-http-handler": "^4.12.1",
+    "@supabase/supabase-js": "^2.118.0",
     "@types/pg": "^8.20.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",

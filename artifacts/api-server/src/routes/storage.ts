@@ -181,4 +181,140 @@ router.get("/storage/r2/{*key}", async (req: Request, res: Response): Promise<vo
   res.status(200).end(buf);
 });
 
+
+// ================================================================
+// KAYAN-TASK-46: GET /api/storage/supabase/{*key}
+// Serves private Supabase Storage objects. Requires a valid session
+// (kayan_session cookie OR Bearer PRODUCTION_API_TOKEN) — same auth
+// policy as /storage/r2/sign.
+//
+// Design:
+//   - Prefer a 302 redirect to a short-lived signed Supabase URL. The
+//     browser's <video>/<img> then fetches bytes directly from Supabase:
+//     no memory in our server, no bandwidth in our server, Range handled
+//     by Supabase (their CDN supports HTTP Range natively).
+//   - Fallback (if signing unavailable): buffer + manual HTTP Range,
+//     identical to the /storage/r2/{*key} handler.
+//   - Never expose a permanent public URL. The publicUrl() stored in DB
+//     stays "/api/storage/supabase/<key>" so the proxy path remains
+//     stable if we later swap Supabase for another S3-compatible store.
+// ================================================================
+const SUPABASE_SIGNED_URL_TTL_SEC = 300; // 5 min — enough for playback start + range
+router.get("/storage/supabase/{*key}", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const raw = (req.params as any).key;
+  const rawKey = Array.isArray(raw) ? raw.join("/") : String(raw || "");
+  let key: string;
+  try {
+    // decodeURIComponent throws URIError on malformed input (e.g., "%ZZ").
+    // Both that and StorageError from assertSafeKey are client errors → 400,
+    // never 500.
+    key = assertSafeKey(decodeURIComponent(rawKey));
+  } catch (e: any) {
+    res.status(400).json({ error: "Invalid storage key" });
+    return;
+  }
+
+  const provider = getStorage();
+  if (provider.name !== "supabase") {
+    // Only serve from the supabase provider; under local, /uploads/* serves
+    // the file; under r2, /storage/r2/* serves the file.
+    res.status(404).json({ error: "Supabase storage not active" });
+    return;
+  }
+
+  // Primary path: signed-URL redirect (no memory, Range handled by Supabase).
+  if (typeof provider.getSignedUrl === "function") {
+    try {
+      const signed = await provider.getSignedUrl(key, SUPABASE_SIGNED_URL_TTL_SEC);
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.redirect(302, signed.url);
+      return;
+    } catch (e: any) {
+      if (e instanceof StorageError && e.code === "NOT_FOUND") {
+        res.status(404).json({ error: "Object not found" });
+        return;
+      }
+      // Signing unavailable or transient failure → fall through to buffer.
+      logger.warn({ err: e?.message, key }, "supabase storage: sign failed, falling back to buffer");
+    }
+  }
+
+  // Fallback: buffer + manual Range (defensive; mirrors r2 handler).
+  //
+  // KAYAN-TASK-48: The fallback loads the ENTIRE file into memory. On Render
+  // Free (512 MB RAM) a 50 MB Supabase upload could push the process over
+  // the limit. If signing failed, cap the fallback size; if the size is
+  // unknown, refuse instead of assuming it is small.
+  const MAX_FALLBACK_BYTES = 10 * 1024 * 1024; // 10 MB
+  if (typeof provider.getSize === "function") {
+    let size: number | null = null;
+    try {
+      size = await provider.getSize(key);
+    } catch {
+      size = null;
+    }
+    if (size === null) {
+      logger.warn({ key, provider: provider.name }, "supabase storage: signer failed AND size unknown; refusing in-memory fallback");
+      res.status(503).json({ error: "Storage temporarily unavailable (size unknown); please retry" });
+      return;
+    }
+    if (size > MAX_FALLBACK_BYTES) {
+      logger.warn({ key, size, limit: MAX_FALLBACK_BYTES }, "supabase storage: signer failed AND file exceeds in-memory fallback limit");
+      res.status(503).json({ error: "Storage temporarily unavailable; file too large for in-memory fallback" });
+      return;
+    }
+  } else {
+    // Provider has no getSize() — cannot verify size → refuse.
+    logger.warn({ key, provider: provider.name }, "supabase storage: signer failed AND provider has no getSize(); refusing in-memory fallback");
+    res.status(503).json({ error: "Storage temporarily unavailable; cannot verify size" });
+    return;
+  }
+
+  let buf: Buffer;
+  try {
+    buf = await provider.read(key);
+  } catch (e: any) {
+    if (e instanceof StorageError && e.code === "NOT_FOUND") {
+      res.status(404).json({ error: "Object not found" });
+      return;
+    }
+    logger.warn({ err: e?.message, key }, "supabase storage proxy read failed");
+    res.status(502).json({ error: "Storage read failed" });
+    return;
+  }
+
+  const total = buf.length;
+  const ct = contentTypeForKey(key);
+  res.setHeader("Content-Type", ct);
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "private, max-age=60");
+
+  const range = req.headers.range;
+  if (typeof range === "string" && range.startsWith("bytes=")) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (m) {
+      const startStr = m[1];
+      const endStr = m[2];
+      let start = startStr === "" ? 0 : parseInt(startStr, 10);
+      let end = endStr === "" ? total - 1 : parseInt(endStr, 10);
+      if (!Number.isFinite(start) || start < 0) start = 0;
+      if (!Number.isFinite(end) || end >= total) end = total - 1;
+      if (start > end || start >= total) {
+        res.status(416).setHeader("Content-Range", `bytes */${total}`);
+        res.end();
+        return;
+      }
+      const slice = buf.subarray(start, end + 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+      res.setHeader("Content-Length", String(slice.length));
+      res.end(slice);
+      return;
+    }
+  }
+
+  res.setHeader("Content-Length", String(total));
+  res.status(200).end(buf);
+});
+
 export default router;

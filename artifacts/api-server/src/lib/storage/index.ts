@@ -10,6 +10,7 @@
  */
 import { LocalProvider } from "./localProvider";
 import { R2Provider } from "./r2Provider";
+import { SupabaseProvider } from "./supabaseProvider";
 import { StorageError, assertSafeKey, type StorageProvider } from "./types";
 
 export type { StorageProvider } from "./types";
@@ -30,15 +31,25 @@ export function getStorage(): StorageProvider {
     _provider = new R2Provider();
     return _provider;
   }
+  if (which === "supabase") {
+    // KAYAN-TASK-44: SupabaseProvider. Lazy, same fail-closed policy.
+    _provider = new SupabaseProvider();
+    return _provider;
+  }
   throw new StorageError(
     "INVALID_PROVIDER",
-    `Unknown STORAGE_PROVIDER=${JSON.stringify(which)}. Expected 'local' or 'r2'.`,
+    `Unknown STORAGE_PROVIDER=${JSON.stringify(which)}. Expected 'local', 'r2', or 'supabase'.`,
   );
 }
 
-/** Test-only helper: reset the cached provider. */
-export function _resetStorageForTests(): void {
-  _provider = null;
+/**
+ * Test-only helper: reset the cached provider. Optionally install a mock
+ * provider for route-level tests (e.g., verifying range/content-type logic
+ * against a fake "supabase" provider). Passing `undefined` or `null`
+ * restores the normal lazy behavior.
+ */
+export function _resetStorageForTests(override?: StorageProvider | null): void {
+  _provider = override ?? null;
 }
 
 // ================================================================

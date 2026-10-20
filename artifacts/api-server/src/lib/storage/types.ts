@@ -6,7 +6,7 @@
  * underlying storage (filesystem, R2, ...).
  */
 export interface StorageProvider {
-  readonly name: "local" | "r2";
+  readonly name: "local" | "r2" | "supabase";
   /** Write a buffer under key. Returns the public URL for serving. */
   write(key: string, data: Buffer, contentType?: string): Promise<string>;
   /** Read bytes for key. Throws if missing. */
