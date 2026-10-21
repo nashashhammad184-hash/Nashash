@@ -5,7 +5,7 @@
 # ============================================================
 
 # ---------- Stage 1: build ----------
-FROM node:22-bookworm-slim AS build
+FROM node:22.22.1-bookworm-slim AS build
 RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
 WORKDIR /repo
 
@@ -35,11 +35,14 @@ RUN pnpm --dir artifacts/studio     run build \
  && pnpm --dir artifacts/api-server run build
 
 # ---------- Stage 2: runtime ----------
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.22.1-bookworm-slim AS runtime
 RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
 WORKDIR /app
 
 ENV NODE_ENV=production
+# KAYAN-TASK-DEPLOY-12: /dev/null silences dotenv ENOENT (no .env in image);
+# Render env vars remain authoritative via process.env.
+ENV KAYAN_ENV_FILE=/dev/null
 # KAYAN-TASK-DEPLOY-07: API-only mode by default. entrypoint.sh skips the
 # queue-worker when this is "1". Override at deploy time (Render env) if
 # you actually want a worker running in the same container.
@@ -78,7 +81,7 @@ RUN mkdir -p \
 RUN chmod +x /app/entrypoint.sh && chown -R node:node /app
 USER node
 
-# PORT is provided by Northflank at runtime
+# PORT is provided by Render (and honors any $PORT injection)
 ENV PORT=3000
 EXPOSE 3000
 
