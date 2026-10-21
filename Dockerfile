@@ -40,6 +40,10 @@ RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
 WORKDIR /app
 
 ENV NODE_ENV=production
+# KAYAN-TASK-DEPLOY-07: API-only mode by default. entrypoint.sh skips the
+# queue-worker when this is "1". Override at deploy time (Render env) if
+# you actually want a worker running in the same container.
+ENV NASHASH_DISABLE_AUTO_WORKER=1
 
 # KAYAN-FFMPEG: runtime needs ffmpeg + ffprobe for MP4 validation.
 RUN apt-get update && apt-get install -y --no-install-recommends \

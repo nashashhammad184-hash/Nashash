@@ -100,5 +100,13 @@ app.use((err: any, _req: any, res: any, next: any) => {
 
 app.listen(port, () => {
   console.log(`🎬 Cinematic Production Server running with CORS enabled on port ${port}`);
-  startProductionWorker();
+  // KAYAN-TASK-DEPLOY-04: allow fully disabling the in-process worker for
+  // deployments that must run API-only (e.g., Render Free where GPU worker
+  // is unavailable). Without this gate, the worker would still create
+  // workerInterval and start polling, even with NASHASH_DISABLE_AUTO_WORKER=1.
+  if (process.env.NASHASH_DISABLE_AUTO_WORKER === "1") {
+    console.log("[worker] auto-worker disabled by NASHASH_DISABLE_AUTO_WORKER=1 — API-only mode");
+  } else {
+    startProductionWorker();
+  }
 });
