@@ -12,7 +12,7 @@ import {
 const router = Router();
 
 // 1. GET /api/projects/:id/shots - جلب اللقطات السينمائية للمشروع الصحيح
-router.get("/projects/:id/shots", async (req: Request, res: Response): Promise<void> => {
+router.get("/projects/:id/shots", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = ListProjectShotsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

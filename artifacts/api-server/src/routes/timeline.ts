@@ -51,7 +51,7 @@ async function ensureTimelineTable() {
 }
 
 // 1. GET /api/projects/:id/timeline
-router.get("/projects/:id/timeline", async (req: Request, res: Response): Promise<void> => {
+router.get("/projects/:id/timeline", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     await ensureTimelineTable();
     const projectId = Number(req.params.id);

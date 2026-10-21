@@ -7,7 +7,7 @@ import { UpdateProjectBody } from "@workspace/api-zod";
 
 const router = Router();
 
-router.get("/", async (_req: Request, res: Response): Promise<void> => {
+router.get("/", requireProductionAuth, async (_req: Request, res: Response): Promise<void> => {
   try {
     const allProjects = await db.select().from(projectsTable);
     res.json(allProjects);
@@ -16,7 +16,7 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
   }
 });
 
-router.get("/:id", async (req: Request, res: Response): Promise<void> => {
+router.get("/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const numericId = parseInt(String(String(req.params.id)), 10);
   if (isNaN(numericId)) { res.status(400).json({ error: "معرف غير صالح." }); return; }
   try {

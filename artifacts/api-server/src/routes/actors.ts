@@ -27,7 +27,7 @@ function cleanImageUrl(url: string | null | undefined): string | null {
 }
 
 // 1. GET /api/actors - جلب القائمة وتصفيتها
-router.get("/actors", async (req: Request, res: Response): Promise<void> => {
+router.get("/actors", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const typeFilter = req.query["type"] as string | undefined;
     const categoryFilter = req.query["category"] as string | undefined;
@@ -133,7 +133,7 @@ router.delete("/actors/:id", requireProductionAuth, async (req: Request, res: Re
 });
 
 // المسارات الفرعية للمراجعcharacter references
-router.get("/actors/:actorId/references", async (req, res): Promise<void> => {
+router.get("/actors/:actorId/references", requireProductionAuth, async (req, res): Promise<void> => {
   const actorId = parseInt(String(req.params.actorId), 10);
   if (isNaN(actorId)) { res.status(400).json({ error: "Invalid actorId" }); return; }
   const refs = await db.select().from(characterReferencesTable).where(eq(characterReferencesTable.actorId, actorId)).orderBy(characterReferencesTable.id);

@@ -9,7 +9,7 @@ import { requireProductionAuth } from "../lib/securityMiddleware";
 const router = Router();
 
 // 1. GET /api/projects/:id/scripts - جلب مسودات السيناريو السابقة للمشروع الصحيح
-router.get("/projects/:id/scripts", async (req: Request, res: Response): Promise<void> => {
+router.get("/projects/:id/scripts", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = ListProjectScriptsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -117,7 +117,7 @@ router.post("/scripts/generate", requireProductionAuth, async (req: Request, res
 });
 
 // جلب برومبت الإنتاج المترجم للقطات
-router.get("/projects/:id/production-prompt", async (req: Request, res: Response): Promise<void> => {
+router.get("/projects/:id/production-prompt", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const projectId = Number(req.params.id);
   if (!Number.isInteger(projectId) || projectId <= 0) {
     res.status(400).json({ error: "A valid project id is required." });
@@ -144,7 +144,7 @@ router.get("/projects/:id/production-prompt", async (req: Request, res: Response
 
 
 // مسار جلب خطة الإنتاج الكاملة للعقد الإلزامي (KAYAN-PROD-02)
-router.get("/projects/:id/production-plan", async (req: Request, res: Response): Promise<void> => {
+router.get("/projects/:id/production-plan", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const projectId = Number(req.params.id);
   if (!Number.isInteger(projectId) || projectId <= 0) {
     res.status(400).json({ error: "معرف المشروع غير صالح." });
