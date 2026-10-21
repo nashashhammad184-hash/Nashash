@@ -66,7 +66,33 @@ export interface ProductionJob {
   completedAt?: Date | null;
 }
 
-const DEEPGRAM_TTS_ENDPOINT = "https://api.deepgram.com/v1/speak";
+// KAYAN-TASK-DEPLOY-19: Deepgram TTS endpoint is overridable ONLY for tests.
+// Safety rules (all must hold to activate override):
+//   1. NODE_ENV !== "production"
+//   2. DEEPGRAM_TTS_ENDPOINT parses as a valid http(s) URL
+//   3. Host is loopback (127.0.0.1, localhost, ::1)
+// If any rule fails, we fall back to the official Deepgram URL silently.
+// This prevents accidental redirection of the API key to an external host
+// in production, and prevents a misconfigured non-prod run from leaking it.
+export function _resolveDeepgramEndpoint(env: NodeJS.ProcessEnv): string {
+  const OFFICIAL = "https://api.deepgram.com/v1/speak";
+  const raw = (env.DEEPGRAM_TTS_ENDPOINT || "").trim();
+  if (!raw) return OFFICIAL;
+  const isProd = (env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd) return OFFICIAL;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return OFFICIAL;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return OFFICIAL;
+  const host = u.hostname;
+  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+  if (!isLoopback) return OFFICIAL;
+  return raw;
+}
+const DEEPGRAM_TTS_ENDPOINT: string = _resolveDeepgramEndpoint(process.env);
 const HTTP_TIMEOUT_MS = 25_000;
 
 function getAudioDir(): string {
