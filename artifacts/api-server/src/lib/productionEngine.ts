@@ -22,6 +22,9 @@ import crypto from "node:crypto";
 import { and, desc, eq, ne, inArray } from "drizzle-orm";
 import { db, productionPipeline, productionTasksTable } from "@workspace/db";
 import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvider";
+// KAYAN-TASK-DEPLOY-17: optional external video provider (fal.run / WaveSpeed).
+// Selected at runtime via VIDEO_PROVIDER=external. No-op otherwise.
+import { runExternalVideoJob } from "./providers/video/externalVideoProvider";
 import { saveAudioBuffer } from "./audioAssets";
 import { logger } from "./logger";
 
@@ -248,6 +251,30 @@ async function setStatus(
     .where(eq(productionPipeline.id, jobId));
 }
 
+/**
+ * KAYAN-TASK-DEPLOY-17: atomic claim. Sets status='processing' ONLY when the
+ * row is currently 'pending'. Returns true if this worker won the race,
+ * false otherwise. `isProcessing` alone is per-process and cannot fence two
+ * worker processes on the same DB.
+ */
+async function claimJob(jobId: string): Promise<boolean> {
+  const updated = await db
+    .update(productionPipeline)
+    .set({
+      status: "processing",
+      progress: 15,
+      startedAt: new Date(),
+      errorMessage: null,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(productionPipeline.id, jobId),
+      eq(productionPipeline.status, "pending"),
+    ))
+    .returning({ id: productionPipeline.id });
+  return updated.length === 1;
+}
+
 export async function processNextQueuedJob(): Promise<ProductionJob | null> {
   if (isProcessing) return null;
 
@@ -264,13 +291,16 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
   const row = queued[0];
   if (!row) return null;
 
-  isProcessing = true;
   const jobId = row.id;
   const job = rowToJob(row);
 
-  await setStatus(jobId, "processing", { progress: 15, startedAt: new Date(), errorMessage: null });
+  // KAYAN-TASK-DEPLOY-17: atomic claim. If another worker grabbed this row
+  // between our SELECT and this UPDATE, bail without processing.
+  const claimed = await claimJob(jobId);
+  if (!claimed) return null;
+  isProcessing = true;
 
-  logger.info({ jobId, type: job.type, retryCount: job.retryCount }, "Processing production job");
+  logger.info({ jobId, type: job.type, retryCount: job.retryCount }, "Processing production job (claimed)");
 
   try {
     if (job.payload.taskId && typeof job.payload.taskId === "number") {
@@ -295,6 +325,35 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         const refB64 = (job.payload as any).referenceImageBase64;
         if (task === "i2v" && (!refB64 || typeof refB64 !== "string" || refB64.length < 64)) {
           throw new Error("VIDEO_GEN task=i2v requires referenceImageBase64");
+        }
+        // KAYAN-TASK-DEPLOY-17: provider switch. External provider (fal.run/
+        // WaveSpeed) supports i2v only — reject t2v with a clear code instead
+        // of silently falling back to Kayangpu, which would require SSH.
+        const videoProvider = (process.env.VIDEO_PROVIDER || "kayangpu").toLowerCase();
+        if (videoProvider === "external") {
+          if (task !== "i2v") {
+            const err: any = new Error(
+              "VIDEO_I2V_REQUIRED: external provider supports i2v only (task=" + task + ")",
+            );
+            err.code = "VIDEO_I2V_REQUIRED";
+            throw err;
+          }
+          const ext = await runExternalVideoJob({
+            payload: job.payload,
+            queueJobId: jobId,
+          });
+          // Map VideoProviderResult → the KayanGpuResult shape used below.
+          const extVideoPath = ext.mp4_path;
+          const extVideoUrl = ext.remote_path || `/uploads/videos/${require("node:path").basename(extVideoPath)}`;
+          if (!extVideoPath || !fs.existsSync(extVideoPath)) {
+            throw new Error(`VIDEO_GEN (external) produced no real video on disk: ${extVideoPath}`);
+          }
+          const extSt = fs.statSync(extVideoPath);
+          if (!extSt.isFile() || extSt.size === 0) throw new Error(`VIDEO_GEN (external) output empty: ${extVideoPath}`);
+          output = { videoPath: extVideoPath, videoUrl: extVideoUrl };
+          videoUrl = extVideoUrl;
+          providerJobId = ext.worker_jid;
+          break;
         }
         const result = await generateVideoKayanGpu({
           prompt,
