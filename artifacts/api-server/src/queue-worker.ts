@@ -8,7 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 const pExec = promisify(execFile);
-const POLL_MS = 2000;
+const POLL_MS = Number(process.env.QUEUE_WORKER_POLL_MS || "2000");
 const HEARTBEAT_MS = 60_000;
 const JOB_POLL_MS = 3000;
 const WATCHDOG_MS = 60_000;
