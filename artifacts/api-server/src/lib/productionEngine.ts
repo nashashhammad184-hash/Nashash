@@ -630,7 +630,32 @@ export function startProductionWorker(pollIntervalMs = 5000): void {
     }
   })();
 
-  workerInterval = setInterval(() => { void processNextQueuedJob(); }, pollIntervalMs);
+  // KAYAN-TASK-AWS-EXIT-20: adaptive polling (5s active, 30s warm, 5min idle).
+  const POLL_ACTIVE_MS = Number(process.env.PRODUCTION_WORKER_POLL_ACTIVE_MS || String(pollIntervalMs));
+  const POLL_WARM_MS = Number(process.env.PRODUCTION_WORKER_POLL_WARM_MS || "30000");
+  const POLL_IDLE_MS = Number(process.env.PRODUCTION_WORKER_POLL_IDLE_MS || "300000");
+  const ACTIVE_THRESHOLD = Number(process.env.PRODUCTION_WORKER_ACTIVE_THRESHOLD || "12");
+  const IDLE_THRESHOLD = Number(process.env.PRODUCTION_WORKER_IDLE_THRESHOLD || "60");
+  let emptyPolls = 0;
+  const pollLoop = async () => {
+    if (!workerInterval) return;
+    try {
+      const job = await processNextQueuedJob();
+      if (job) {
+        emptyPolls = 0;
+      } else {
+        emptyPolls++;
+      }
+    } catch (e) {
+      logger.warn({ err: e }, "production engine poll error");
+    }
+    let delay = POLL_ACTIVE_MS;
+    if (emptyPolls > IDLE_THRESHOLD) delay = POLL_IDLE_MS;
+    else if (emptyPolls > ACTIVE_THRESHOLD) delay = POLL_WARM_MS;
+    if (workerInterval) workerInterval = setTimeout(pollLoop, delay);
+  };
+  workerInterval = setTimeout(pollLoop, POLL_ACTIVE_MS);
+  logger.info({ activeMs: POLL_ACTIVE_MS, warmMs: POLL_WARM_MS, idleMs: POLL_IDLE_MS }, "Adaptive polling enabled");
 
   const sweepMs = Number(process.env.SWEEP_INTERVAL_MS || "60000");
   const disableAuto = process.env.NASHASH_DISABLE_AUTO_WORKER === "1";

@@ -322,16 +322,29 @@ async function loop() {
   await boot();
   setInterval(watchdog, WATCHDOG_MS);
   await watchdog();
+  // KAYAN-TASK-AWS-EXIT-20: adaptive polling
+  const ACTIVE_MS = POLL_MS;
+  const WARM_MS = Number(process.env.QUEUE_WORKER_POLL_WARM_MS || "30000");
+  const IDLE_MS = Number(process.env.QUEUE_WORKER_POLL_IDLE_MS || "300000");
+  const ACTIVE_THRESHOLD = Number(process.env.QUEUE_WORKER_ACTIVE_THRESHOLD || "12");
+  const IDLE_THRESHOLD = Number(process.env.QUEUE_WORKER_IDLE_THRESHOLD || "60");
+  let emptyPolls = 0;
   while (!stopping) {
     try {
       const didWork = await processOne();
-      if (!didWork) await new Promise(r => setTimeout(r, POLL_MS));
+      if (didWork) { emptyPolls = 0; continue; }
+      emptyPolls++;
     } catch (e) {
       console.error('[queue] loop error', e);
-      await new Promise(r => setTimeout(r, POLL_MS));
+      emptyPolls++;
     }
+    let delay = ACTIVE_MS;
+    if (emptyPolls > IDLE_THRESHOLD) delay = IDLE_MS;
+    else if (emptyPolls > ACTIVE_THRESHOLD) delay = WARM_MS;
+    await new Promise(r => setTimeout(r, delay));
   }
 }
+console.log('[queue] adaptive polling enabled active=' + POLL_MS + 'ms warm=' + (process.env.QUEUE_WORKER_POLL_WARM_MS || '30000') + 'ms idle=' + (process.env.QUEUE_WORKER_POLL_IDLE_MS || '300000') + 'ms');
 
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT',  () => { stopping = true; });
