@@ -30,9 +30,13 @@ function getDatabaseUrl(): string {
 
 const dbUrl = getDatabaseUrl();
 const _isRemote = !/localhost|127\.0\.0\.1|::1/.test(dbUrl);
+const _sslCaPath = process.env.SSL_CA_PATH || '';
+const _sslCa = _sslCaPath && fs.existsSync(_sslCaPath) ? fs.readFileSync(_sslCaPath, 'utf-8') : null;
 export const pool = new Pool({
   connectionString: dbUrl,
-  ssl: _isRemote ? { rejectUnauthorized: false } : undefined,
+  ssl: _isRemote
+    ? (_sslCa ? { ca: _sslCa, rejectUnauthorized: true } : { rejectUnauthorized: false })
+    : undefined,
 });
 export const db = drizzle(pool, { schema });
 

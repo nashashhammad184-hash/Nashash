@@ -1,3 +1,4 @@
+import fs from 'fs';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -12,10 +13,14 @@ function pool(): pg.Pool {
     );
   }
   const _isRemote = !/localhost|127[.]0[.]0[.]1|::1/.test(conn);
+  const _sslCaPath = process.env.SSL_CA_PATH || '';
+  const _sslCa = _sslCaPath && fs.existsSync(_sslCaPath) ? fs.readFileSync(_sslCaPath, 'utf-8') : null;
   return new Pool({
     connectionString: conn,
     max: 5,
-    ssl: _isRemote ? { rejectUnauthorized: false } : undefined,
+    ssl: _isRemote
+      ? (_sslCa ? { ca: _sslCa, rejectUnauthorized: true } : { rejectUnauthorized: false })
+      : undefined,
   });
 }
 
