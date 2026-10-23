@@ -37,10 +37,11 @@ export async function runExternalVideoJob(job: { payload: any; queueJobId?: stri
     err.category = "INVALID_INPUT";
     throw err;
   }
-  if (!p.reference_image_base64 || typeof p.reference_image_base64 !== "string"
-      || p.reference_image_base64.length < 64) {
+  // KAYAN-CINEMA-01: accept both snake_case and camelCase (pipeline sends camelCase).
+  const _refB64 = p.reference_image_base64 ?? p.referenceImageBase64;
+  if (!_refB64 || typeof _refB64 !== "string" || _refB64.length < 64) {
     const err: any = new Error(
-      "I2V_REFERENCE_IMAGE_REQUIRED: reference_image_base64 is required for external I2V",
+      "I2V_REFERENCE_IMAGE_REQUIRED: reference_image_base64/referenceImageBase64 is required for external I2V",
     );
     err.category = "INVALID_INPUT";
     throw err;

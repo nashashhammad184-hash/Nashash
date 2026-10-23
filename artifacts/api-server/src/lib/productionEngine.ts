@@ -364,9 +364,11 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
             err.code = "VIDEO_I2V_REQUIRED";
             throw err;
           }
+          // KAYAN-CINEMA-01: do NOT pass queueJobId — it expects a gpu_jobs UUID,
+          // but jobId here is production_pipeline.id. The provider request id
+          // is persisted via setStatus below.
           const ext = await runExternalVideoJob({
             payload: job.payload,
-            queueJobId: jobId,
           });
           // Map VideoProviderResult → the KayanGpuResult shape used below.
           const extVideoPath = ext.mp4_path;
