@@ -26,6 +26,7 @@ import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvid
 // Selected at runtime via VIDEO_PROVIDER=external. No-op otherwise.
 import { runExternalVideoJob } from "./providers/video/externalVideoProvider";
 import { saveAudioBuffer } from "./audioAssets";
+import { persistVideoFile } from "./storage/persist";
 import { logger } from "./logger";
 
 export type ProductionJobType = "VIDEO_GEN" | "VOICE_GEN" | "LIP_SYNC" | "MUSIC_SFX_GEN";
@@ -378,8 +379,20 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
           }
           const extSt = fs.statSync(extVideoPath);
           if (!extSt.isFile() || extSt.size === 0) throw new Error(`VIDEO_GEN (external) output empty: ${extVideoPath}`);
-          output = { videoPath: extVideoPath, videoUrl: extVideoUrl };
-          videoUrl = extVideoUrl;
+          // KAYAN-CINEMA-02D: persist to storage layer so DB stores a durable
+          // URL (Supabase API path under STORAGE_PROVIDER=supabase, or
+          // /uploads/... under local). Never rely on WaveSpeed CDN or the
+          // ephemeral Northflank disk.
+          const persisted = await persistVideoFile(extVideoPath);
+          if (!persisted.url || persisted.sizeBytes <= 0) {
+            throw new Error(`VIDEO_GEN (external): storage persist failed for ${extVideoPath}`);
+          }
+          logger.info(
+            { jobId, key: persisted.key, sizeBytes: persisted.sizeBytes, url: persisted.url },
+            "VIDEO_GEN (external) persisted to storage",
+          );
+          output = { videoPath: extVideoPath, videoUrl: persisted.url, storageKey: persisted.key };
+          videoUrl = persisted.url;
           providerJobId = ext.worker_jid;
           break;
         }
