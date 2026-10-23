@@ -29,7 +29,11 @@ function getDatabaseUrl(): string {
 }
 
 const dbUrl = getDatabaseUrl();
-export const pool = new Pool({ connectionString: dbUrl });
+const _isRemote = !/localhost|127\.0\.0\.1|::1/.test(dbUrl);
+export const pool = new Pool({
+  connectionString: dbUrl,
+  ssl: _isRemote ? { rejectUnauthorized: false } : undefined,
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

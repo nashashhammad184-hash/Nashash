@@ -11,7 +11,12 @@ function pool(): pg.Pool {
       'GpuQueueService: DATABASE_URL or QUEUE_DATABASE_URL must be set',
     );
   }
-  return new Pool({ connectionString: conn, max: 5 });
+  const _isRemote = !/localhost|127[.]0[.]0[.]1|::1/.test(conn);
+  return new Pool({
+    connectionString: conn,
+    max: 5,
+    ssl: _isRemote ? { rejectUnauthorized: false } : undefined,
+  });
 }
 
 let _pool: pg.Pool | null = null;
