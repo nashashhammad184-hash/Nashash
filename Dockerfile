@@ -69,6 +69,7 @@ RUN pnpm install --frozen-lockfile --prod
 # Copy built artifacts from stage 1
 COPY --from=build /repo/artifacts/api-server/dist ./artifacts/api-server/dist
 COPY --from=build /repo/artifacts/studio/dist     ./artifacts/studio/dist
+COPY artifacts/api-server/certs ./artifacts/api-server/certs
 COPY entrypoint.sh ./entrypoint.sh
 
 # Runtime directories (uploads expected by api-server)
