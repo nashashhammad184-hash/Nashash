@@ -1,4 +1,5 @@
 import { VideoPlayerPanel } from "./video-player-panel";
+import { isSubmitUncertain } from "@/lib/production-status";
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,7 @@ interface ProductionJob {
   status: "pending" | "processing" | "completed" | "failed";
   progress: number;
   error?: string | null;
+  submitUncertain?: boolean;
   retryCount: number;
   output?: any;
 }
@@ -212,11 +214,12 @@ export function ProductionTab({ project }: ProductionTabProps) {
                     <div className="flex justify-between items-center">
                       <span className="font-bold text-zinc-200 uppercase font-mono">{job.type}</span>
                       <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono ${
+                        isSubmitUncertain(job) ? "bg-amber-950 text-amber-400 border border-amber-700" :
                         job.status === "completed" ? "bg-green-950 text-green-400 border border-green-900" :
                         job.status === "failed" ? "bg-red-950 text-red-400 border border-red-900" :
                         "bg-blue-950 text-blue-400 border border-blue-900"
                       }`}>
-                        {job.status}
+                        {isSubmitUncertain(job) ? "⚠ مراجعة يدوية" : job.status}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-[9px] text-zinc-500 font-mono">
@@ -225,7 +228,12 @@ export function ProductionTab({ project }: ProductionTabProps) {
                     </div>
                     <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
                       <div
-                        className={`h-full transition-all duration-350 ${job.status === "failed" ? "bg-red-600" : job.status === "completed" ? "bg-green-500" : "bg-blue-500"}`}
+                        className={`h-full transition-all duration-350 ${
+                          isSubmitUncertain(job) ? "bg-amber-500" :
+                          job.status === "failed" ? "bg-red-600" :
+                          job.status === "completed" ? "bg-green-500" :
+                          "bg-blue-500"
+                        }`}
                         style={{ width: `${job.progress}%` }}
                       />
                     </div>
@@ -234,7 +242,21 @@ export function ProductionTab({ project }: ProductionTabProps) {
                         المخرج: {job.output.videoUrl || job.output.audioUrl || job.output.syncedVideoUrl}
                       </div>
                     )}
-                    {job.status === "failed" && job.error && (
+                    {isSubmitUncertain(job) && (
+                      <div className="bg-amber-950/50 border border-amber-800 rounded p-2 text-[9px] text-amber-200 leading-relaxed">
+                        <div className="flex items-center gap-1 font-bold mb-1">
+                          <AlertCircle className="w-3 h-3 shrink-0" />
+                          نتيجة إرسال غير مؤكدة
+                        </div>
+                        <div className="font-mono text-amber-300/80 break-all mb-1">
+                          {(job.error || "").replace(/^SUBMIT_UNCERTAIN:\s*/i, "").slice(0, 150)}
+                        </div>
+                        <div className="text-amber-200/90">
+                          قد يكون المزود قَبِل الطلب. لا تُعِد الإرسال تلقائياً — راجع لوحة WaveSpeed يدوياً.
+                        </div>
+                      </div>
+                    )}
+                    {!isSubmitUncertain(job) && job.status === "failed" && job.error && (
                       <div className="text-[9px] text-red-400 font-mono flex items-center gap-1">
                         <AlertCircle className="w-2.5 h-2.5 shrink-0" /> {job.error}
                       </div>
