@@ -26,7 +26,6 @@ import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvid
 // Selected at runtime via VIDEO_PROVIDER=external. No-op otherwise.
 import { runExternalVideoJob } from "./providers/video/externalVideoProvider";
 import { saveAudioBuffer } from "./audioAssets";
-import { persistVideoFile } from "./storage/persist";
 import { logger } from "./logger";
 
 export type ProductionJobType = "VIDEO_GEN" | "VOICE_GEN" | "LIP_SYNC" | "MUSIC_SFX_GEN";
@@ -430,20 +429,22 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
           }
           const extSt = fs.statSync(extVideoPath);
           if (!extSt.isFile() || extSt.size === 0) throw new Error(`VIDEO_GEN (external) output empty: ${extVideoPath}`);
-          // KAYAN-CINEMA-02D: persist to storage layer so DB stores a durable
-          // URL (Supabase API path under STORAGE_PROVIDER=supabase, or
-          // /uploads/... under local). Never rely on WaveSpeed CDN or the
-          // ephemeral Northflank disk.
-          const persisted = await persistVideoFile(extVideoPath);
-          if (!persisted.url || persisted.sizeBytes <= 0) {
-            throw new Error(`VIDEO_GEN (external): storage persist failed for ${extVideoPath}`);
+          // KAYAN-CINEMA-08: do NOT persist here. runExternalVideoJob already
+          // persisted the file and returned storageKey / remote_path. A second
+          // persist would issue a duplicate PUT to the storage provider.
+          if (!ext.remote_path) {
+            throw new Error(`VIDEO_GEN (external): missing storage URL from provider (${extVideoPath})`);
           }
           logger.info(
-            { jobId, key: persisted.key, sizeBytes: persisted.sizeBytes, url: persisted.url },
-            "VIDEO_GEN (external) persisted to storage",
+            { jobId, key: ext.storageKey, sizeBytes: ext.sizeBytes, url: ext.remote_path },
+            "VIDEO_GEN (external) persisted to storage (via provider)",
           );
-          output = { videoPath: extVideoPath, videoUrl: persisted.url, storageKey: persisted.key };
-          videoUrl = persisted.url;
+          output = {
+            videoPath: extVideoPath,
+            videoUrl: ext.remote_path,
+            storageKey: ext.storageKey,
+          };
+          videoUrl = ext.remote_path;
           providerJobId = ext.worker_jid;
           break;
         }

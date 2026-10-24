@@ -31,6 +31,11 @@ export interface VideoProviderResult {
   worker_jid: string;
   probe: unknown;
   provider: string;
+  // KAYAN-CINEMA-08: populated by runExternalVideoJob after persisting to
+  // the storage layer. Allows downstream callers (productionEngine) to use
+  // the already-stored asset without a second persist.
+  storageKey?: string;
+  sizeBytes?: number;
 }
 
 export type ErrorCategory =

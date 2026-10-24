@@ -189,17 +189,21 @@ export async function runExternalVideoJob(job: {
   // is already at uploads/videos/<basename>). Under R2 the file is uploaded.
   // We also encode the storage URL into remote_path so generateVideoKayanGpu
   // and queue-worker can surface it as the canonical videoUrl.
+  // KAYAN-CINEMA-08: single persist. Return storageKey/sizeBytes so the caller
+  // (productionEngine) does not persist the same file a second time.
   let storageUrl: string | undefined;
+  let storageKey: string | undefined;
+  let sizeBytes: number | undefined;
   try {
     const persisted = await persistVideoFile(result.mp4_path);
     storageUrl = persisted.url;
+    storageKey = persisted.key;
+    sizeBytes = persisted.sizeBytes;
   } catch (persistErr) {
-    // Persistence failure must fail the job — do not claim success without
-    // a durable URL under the configured provider.
     const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
     const err: any = new Error(`[external:${provider.name}] storage persist failed for ${result.mp4_path}: ${msg}`);
     err.category = "PERMANENT";
     throw err;
   }
-  return { ...result, remote_path: storageUrl };
+  return { ...result, remote_path: storageUrl, storageKey, sizeBytes };
 }

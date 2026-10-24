@@ -161,7 +161,7 @@ fs.mkdirSync(T73D_DIR, { recursive: true });
 {
   const src = fs.readFileSync("./src/lib/providers/video/externalVideoProvider.ts", "utf-8");
   report("TASK-73D-09 imports persistVideoFile", /persistVideoFile/.test(src));
-  report("TASK-73D-09 uses persistVideoFile after download", /provider\.download\([\s\S]{0,500}persistVideoFile/.test(src));
+  report("TASK-73D-09 uses persistVideoFile after download", /provider\.download\([\s\S]{0,2000}persistVideoFile/.test(src));
   report("TASK-73D-09 sets remote_path to storage URL", /remote_path:\s*storageUrl/.test(src));
   report("TASK-73D-09 fails on persist error", /storage persist failed/.test(src));
 }
