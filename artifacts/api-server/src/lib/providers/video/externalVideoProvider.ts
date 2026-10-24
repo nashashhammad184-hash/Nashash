@@ -34,7 +34,12 @@ export function normalizeWaveSpeedDuration(raw: unknown): number {
   return 5;
 }
 
-export async function runExternalVideoJob(job: { payload: any; queueJobId?: string }): Promise<VideoProviderResult> {
+export async function runExternalVideoJob(job: {
+  payload: any;
+  queueJobId?: string;
+  resumeProviderJobId?: string;
+  onSubmitted?: (providerJobId: string) => Promise<void>;
+}): Promise<VideoProviderResult> {
   const p = job.payload || {};
   const provider = getProvider();
 
@@ -84,36 +89,72 @@ export async function runExternalVideoJob(job: { payload: any; queueJobId?: stri
     steps: p.steps,
   };
 
-  // --- Cost guard ---
-  const estCost = await provider.estimateCost(payload);
-  if (estCost > MAX_COST_USD) {
-    const err: any = new Error(
-      `Cost guard: estimated $${estCost.toFixed(3)} exceeds MAX_VIDEO_COST_USD=$${MAX_COST_USD}`,
-    );
-    err.category = "BILLING" as const;
-    throw err;
-  }
-
-  // --- Submit ---
-  const { providerJobId } = await provider.submit(payload);
-  console.log(`[external:${provider.name}] submitted job ${providerJobId}, est $${estCost.toFixed(3)}`);
-
-  // KAYAN-TASK-31: persist providerRequestId BEFORE polling.
-  // If DB persistence fails, refuse to poll so the job cannot silently
-  // continue without recoverable state.
-  if (job.queueJobId) {
-    await GpuQueueService.setProviderJobId(
-      job.queueJobId,
-      provider.name,
-      providerJobId,
-    );
+  // KAYAN-CINEMA-03D: resume path — if caller already has a providerJobId
+  // (e.g. recovered after worker crash), skip submit/cost-guard entirely and
+  // go straight to polling. Never submit a second time.
+  let providerJobId: string;
+  if (job.resumeProviderJobId && job.resumeProviderJobId.trim().length > 0) {
+    providerJobId = job.resumeProviderJobId;
     console.log(
-      `[external:${provider.name}] persisted providerRequestId for queue job ${job.queueJobId}`,
+      `[external:${provider.name}] RESUMING poll for existing providerJobId=${providerJobId} (no submit)`,
     );
   } else {
-    console.warn(
-      `[external:${provider.name}] no queueJobId provided — providerRequestId NOT persisted (dev/test path)`,
-    );
+    // --- Cost guard (pre-submit only) ---
+    const estCost = await provider.estimateCost(payload);
+    if (estCost > MAX_COST_USD) {
+      const err: any = new Error(
+        `Cost guard: estimated $${estCost.toFixed(3)} exceeds MAX_VIDEO_COST_USD=$${MAX_COST_USD}`,
+      );
+      err.category = "BILLING" as const;
+      throw err;
+    }
+
+    // --- Submit ---
+    const submitted = await provider.submit(payload);
+    providerJobId = submitted.providerJobId;
+    console.log(`[external:${provider.name}] submitted job ${providerJobId}, est $${estCost.toFixed(3)}`);
+
+    // KAYAN-CINEMA-03D: persist providerJobId IMMEDIATELY (before any poll).
+    // If persistence fails AFTER provider accepted, we CANNOT retry safely —
+    // the provider may charge us again. Mark as SUBMIT_UNCERTAIN.
+    if (job.onSubmitted) {
+      try {
+        await job.onSubmitted(providerJobId);
+        console.log(
+          `[external:${provider.name}] onSubmitted persisted providerJobId=${providerJobId}`,
+        );
+      } catch (persistErr: any) {
+        const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+        const err: any = new Error(
+          `SUBMIT_UNCERTAIN: provider accepted job ${providerJobId} but persistence failed: ${msg}`,
+        );
+        err.category = "SUBMIT_UNCERTAIN";
+        err.providerJobId = providerJobId;
+        err.submitUncertain = true;
+        throw err;
+      }
+    } else if (job.queueJobId) {
+      // Legacy path (queue-worker): persist via gpu_jobs.
+      try {
+        await GpuQueueService.setProviderJobId(job.queueJobId, provider.name, providerJobId);
+        console.log(
+          `[external:${provider.name}] persisted providerRequestId for queue job ${job.queueJobId}`,
+        );
+      } catch (persistErr: any) {
+        const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+        const err: any = new Error(
+          `SUBMIT_UNCERTAIN: provider accepted job ${providerJobId} but gpu_jobs persistence failed: ${msg}`,
+        );
+        err.category = "SUBMIT_UNCERTAIN";
+        err.providerJobId = providerJobId;
+        err.submitUncertain = true;
+        throw err;
+      }
+    } else {
+      console.warn(
+        `[external:${provider.name}] no onSubmitted/queueJobId — providerJobId NOT persisted (dev/test path)`,
+      );
+    }
   }
 
   // --- Poll ---
