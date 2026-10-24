@@ -30,6 +30,21 @@ interface ProductionTabProps {
   };
 }
 
+// KAYAN-CINEMA-16: actor linked to project (for reference-image auto-resolution)
+interface ProjectActorLink {
+  id: number;
+  projectId: number;
+  actorId: number;
+  roleName: string;
+  roleType?: string | null;
+}
+interface ActorSummary {
+  id: number;
+  name: string;
+  imageUrl?: string | null;
+  canonicalFaceImagePath?: string | null;
+}
+
 export function ProductionTab({ project }: ProductionTabProps) {
   const projectId = project.id;
   const [jobs, setJobs] = useState<ProductionJob[]>([]);
@@ -39,6 +54,10 @@ export function ProductionTab({ project }: ProductionTabProps) {
   const [voiceText, setVoiceText] = useState("مرحباً بكم في استوديو كيان للإنتاج السينمائي.");
   const [syncVideoUrl, setSyncVideoUrl] = useState("");
   const [syncAudioUrl, setSyncAudioUrl] = useState("");
+  // KAYAN-CINEMA-16: actor selector state
+  const [projectActors, setProjectActors] = useState<ProjectActorLink[]>([]);
+  const [actorById, setActorById] = useState<Record<number, ActorSummary>>({});
+  const [selectedActorId, setSelectedActorId] = useState<number | "">("");
 
   const fetchJobs = async () => {
     if (!projectId) return;
@@ -61,10 +80,50 @@ export function ProductionTab({ project }: ProductionTabProps) {
     return () => clearInterval(interval);
   }, [projectId]);
 
+  // KAYAN-CINEMA-16: load project-linked actors + full actor details on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!projectId) return;
+      try {
+        const [linksRes, actorsRes] = await Promise.all([
+          fetch(`/api/projects/${projectId}/actors`),
+          fetch(`/api/actors`),
+        ]);
+        const linksData = await linksRes.json();
+        const actorsData = await actorsRes.json();
+        if (cancelled) return;
+        const links: ProjectActorLink[] = Array.isArray(linksData)
+          ? linksData
+          : (linksData?.projectActors || linksData?.actors || []);
+        const actors: ActorSummary[] = Array.isArray(actorsData)
+          ? actorsData
+          : (actorsData?.actors || []);
+        const map: Record<number, ActorSummary> = {};
+        for (const a of actors) map[a.id] = a;
+        setProjectActors(links);
+        setActorById(map);
+        // Auto-select if exactly one linked actor.
+        if (links.length === 1 && selectedActorId === "") {
+          setSelectedActorId(links[0].actorId);
+        }
+      } catch {
+        // Non-fatal: actor selector just stays empty.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   const handleStartJob = async (type: string) => {
     setActionLoading(type);
     let payload: Record<string, any> = { type, projectId };
-    if (type === "VIDEO_GEN") payload.prompt = videoPrompt;
+    if (type === "VIDEO_GEN") {
+      payload.prompt = videoPrompt;
+      // KAYAN-CINEMA-16: pass actorId so server auto-resolves reference image.
+      if (selectedActorId !== "") {
+        payload.actorId = selectedActorId;
+      }
+    }
     if (type === "VOICE_GEN") payload.text = voiceText;
     if (type === "LIP_SYNC") {
       if (!syncVideoUrl || !syncAudioUrl) {
@@ -122,6 +181,36 @@ export function ProductionTab({ project }: ProductionTabProps) {
                 className="w-full rounded-md border border-zinc-700 bg-zinc-800 p-2 text-xs text-white"
                 placeholder="ادخل برومبت توليد المشهد البصري..."
               />
+              {projectActors.length > 0 && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-400 font-mono">
+                    الممثل المرجعي (اختياري — يُحل تلقائياً إلى i2v)
+                  </label>
+                  <select
+                    value={selectedActorId}
+                    onChange={(e) => setSelectedActorId(e.target.value ? parseInt(e.target.value, 10) : "")}
+                    className="w-full h-8 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-[11px] text-white"
+                    data-testid="actor-selector"
+                  >
+                    <option value="">— بدون ممثل (t2v) —</option>
+                    {projectActors.map((pa) => {
+                      const actor = actorById[pa.actorId];
+                      const hasRef = !!(actor?.canonicalFaceImagePath || actor?.imageUrl);
+                      return (
+                        <option key={pa.actorId} value={pa.actorId}>
+                          {actor?.name || `Actor #${pa.actorId}`} ({pa.roleName})
+                          {hasRef ? "" : " — لا صورة"}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {selectedActorId !== "" && (
+                    <p className="text-[9px] text-emerald-400">
+                      ✓ سيُمرَّر المرجع تلقائياً إلى WaveSpeed (i2v)
+                    </p>
+                  )}
+                </div>
+              )}
               <Button
                 onClick={() => handleStartJob("VIDEO_GEN")}
                 disabled={actionLoading === "VIDEO_GEN"}
