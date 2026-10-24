@@ -23,6 +23,17 @@ function getProvider() {
   throw new Error(`Unknown VIDEO_EXTERNAL_KIND: ${PROVIDER_KIND}`);
 }
 
+/**
+ * KAYAN-CINEMA-03A: WaveSpeed Hunyuan 1.5 accepts only duration in {5, 8}.
+ * Any other value (undefined, sub-5, >8, non-numeric) → 5.
+ * Pure function — no I/O. Only applied when provider.name === "wavespeed".
+ */
+export function normalizeWaveSpeedDuration(raw: unknown): number {
+  const n = Number(raw);
+  if (n === 5 || n === 8) return n;
+  return 5;
+}
+
 export async function runExternalVideoJob(job: { payload: any; queueJobId?: string }): Promise<VideoProviderResult> {
   const p = job.payload || {};
   const provider = getProvider();
@@ -47,12 +58,24 @@ export async function runExternalVideoJob(job: { payload: any; queueJobId?: stri
     throw err;
   }
 
+  // KAYAN-CINEMA-03A: resolve duration with provider-aware normalization.
+  // WaveSpeed Hunyuan 1.5 accepts only {5, 8}; other providers (mock) are
+  // untouched. Must run BEFORE estimateCost so cost guard uses real price.
+  const rawDuration = p.duration_seconds ?? p.durationSeconds ?? 5;
+  const resolvedDuration = provider.name === "wavespeed"
+    ? normalizeWaveSpeedDuration(rawDuration)
+    : (typeof rawDuration === "number" && rawDuration > 0 ? rawDuration : 5);
+  if (provider.name === "wavespeed" && Number(rawDuration) !== resolvedDuration) {
+    console.log(
+      `[external:wavespeed] duration normalized: requested=${JSON.stringify(rawDuration)} → sent=${resolvedDuration}`,
+    );
+  }
   const payload: VideoPayload = {
     task: "i2v",
     prompt: p.prompt,
     seed: p.seed ?? 123,
     resolution: p.resolution ?? "480p",
-    durationSeconds: p.duration_seconds ?? p.durationSeconds ?? 5,
+    durationSeconds: resolvedDuration,
     fps: p.fps ?? 16,
     aspectRatio: p.aspect_ratio ?? p.aspectRatio ?? "16:9",
     numFrames: p.num_frames ?? p.numFrames,
