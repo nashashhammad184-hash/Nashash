@@ -59,6 +59,9 @@ export interface ProductionJob {
   output?: Record<string, unknown> | null;
   videoUrl?: string | null;
   error?: string | null;
+  // KAYAN-CINEMA-07: explicit SUBMIT_UNCERTAIN flag derived from error_message.
+  // Backwards compat: existing clients relying on error prefix continue to work.
+  submitUncertain?: boolean;
   retryCount: number;
   maxRetries: number;
   createdAt: Date;
@@ -106,6 +109,15 @@ function makeJobId(): string {
   return `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+// KAYAN-CINEMA-07: single source of truth for SUBMIT_UNCERTAIN detection.
+// Matches both the runtime path (productionEngine.ts:562) and the boot
+// recovery path (productionEngine.ts:707) which both use the
+// "SUBMIT_UNCERTAIN" prefix. Case-insensitive to be safe.
+export function isSubmitUncertainError(err: string | null | undefined): boolean {
+  if (!err) return false;
+  return /submit_uncertain/i.test(err);
+}
+
 function rowToJob(row: any): ProductionJob {
   return {
     id: row.id,
@@ -120,6 +132,7 @@ function rowToJob(row: any): ProductionJob {
     output: (row.output ?? null) as Record<string, unknown> | null,
     videoUrl: row.videoUrl ?? null,
     error: row.errorMessage ?? null,
+    submitUncertain: isSubmitUncertainError(row.errorMessage),
     retryCount: row.retryCount ?? 0,
     maxRetries: row.maxRetries ?? 3,
     createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
