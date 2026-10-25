@@ -69,7 +69,9 @@ async function gpuJson(
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`KayanGPU ${pathname} failed (HTTP ${response.status}): ${text.slice(0, 500)}`);
+    const err: any = new Error(`KayanGPU ${pathname} failed (HTTP ${response.status}): ${text.slice(0, 500)}`);
+    err.httpStatus = response.status;
+    throw err;
   }
   return response.json();
 }

@@ -36,7 +36,10 @@ export class LocalGpuLlmProvider implements ScriptProvider {
       }),
     });
     if (!createRes.ok) {
-      throw new Error(`LLM worker rejected job (HTTP ${createRes.status}): ${await createRes.text().catch(() => "")}`);
+      const body = await createRes.text().catch(() => "");
+      const err: any = new Error(`LLM worker rejected job (HTTP ${createRes.status}): ${body}`);
+      err.httpStatus = createRes.status;
+      throw err;
     }
     const created = await createRes.json() as any;
     const jobId = created?.job_id;
