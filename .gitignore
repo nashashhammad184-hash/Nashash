@@ -93,3 +93,10 @@ NASHASH-MIGRATION/
 NASHASH-MIGRATION-SAFE/
 NASHASH-MIGRATION-SAFE.tar.gz
 NASHASH-MIGRATION-SAFE.sha256
+
+# Local dev / temp artifacts (KAYAN-GUARD-01)
+logs/
+*.log
+repomix-*.xml
+worker-build-context/
+src/
