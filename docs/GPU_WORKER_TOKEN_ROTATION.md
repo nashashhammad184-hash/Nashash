@@ -120,3 +120,68 @@ schedule archival in a separate reviewed step.
 - No deletion of .env.save* or src/ during rotation
 - No changes to main or render-deploy
 - No SESSION_SECRET addition as part of this task
+
+## 9. Rotation options (A vs B) — GUARD-09
+
+### Plan A — Dual-token supported on GPU host
+
+Preconditions: operator confirms GPU host accepts two keys simultaneously
+(old + new), via its own env file or service config.
+
+Order: GPU host -> nashash-app -> nashash-queue
+
+1. GPU host: generate new token via read -s + openssl; add as secondary key; reload GPU service.
+2. Verify GPU host accepts BOTH old and new (submit trivial test from GPU-side).
+3. On AWS: set GPU_WORKER_TOKEN=new in .env via read -s.
+4. pm2 restart nashash-app; check pm2 jlist + logs (gpuSshTarget=configured, no IP) + submit 1 test LLM_JOB.
+5. pm2 restart nashash-queue; same checks.
+6. Monitor gpu_jobs 5 min: no QUEUED beyond POLL_MS; no AUTH-category FAILED rows.
+7. GPU host: remove OLD key; reload GPU service.
+8. Confirm GPU host logs show new-key traffic only for 24h.
+
+Interruption: zero user-facing (both keys valid during switchover).
+
+Rollback (Plan A): restore previous value in .env via read -s; pm2 restart both;
+GPU host keeps old key until cleanup verified. If new key proves broken, revert
+GPU host to old-only and restart both services.
+
+### Plan B — Single-token only on GPU host
+
+Preconditions: GPU host accepts exactly one key; no way to add a second.
+
+Order: accept brief AUTH window -> update consumers -> verify -> (optionally rotate GPU)
+
+1. On GPU host: prepare new key value (operator read -s); do NOT yet replace old.
+   (Staging phase skipped to shorten window.)
+2. Announce window <=60s (no in-flight gpu_jobs required).
+3. On AWS: set GPU_WORKER_TOKEN=new in .env via read -s.
+4. pm2 restart nashash-app (consumers see new key).
+5. GPU host: replace OLD key with NEW key in its env; reload GPU service.
+   -> from this instant, requests carrying the NEW key succeed.
+6. pm2 restart nashash-queue.
+7. Verify gpu_jobs drains; no AUTH-category FAILED rows for 5 min.
+
+Interruption: up to 60s of AUTH failures on in-flight/new GPU calls.
+Mitigation: run when gpu_jobs=0 and kayan-gpu-discovery.timer state known.
+
+Rollback (Plan B): if new key rejected, restore old value in .env via read -s;
+pm2 restart both; GPU host remains on its pre-rotation key. Total <=30s.
+
+### Auth-failure handling (relevant to both plans)
+
+kayanGpuProvider.ts:66-72 throws on !response.ok with message
+"...HTTP <status>...". GpuQueueService.classifyError (147-158) only maps
+httpStatus===401|403 -> AUTH if err.httpStatus is populated. kayanGpuProvider
+currently throws a plain Error with the status embedded in the message but
+does NOT set err.httpStatus, so classifyError falls through to PERMANENT.
+This means an AUTH failure during rotation (Plan B) would FAIL the job
+permanently (no retry). Plan A avoids this by keeping both keys valid.
+
+If Plan B is chosen, prefer doing it when gpu_jobs=0 (already a precondition).
+
+### Unverified (needs operator)
+
+- Whether GPU host supports two keys: NOT determinable from NASHASH repo.
+  Only the GPU host config (outside this repository) can answer this.
+- Whether GPU host logs the API key value on auth failure: unknown.
+  Operator should verify its auth middleware does not echo the key.
