@@ -5,6 +5,25 @@ import { requireProductionAuth } from "../lib/securityMiddleware";
 
 const router = Router();
 
+// KAYAN-GUARD-13: pure validator — external video provider supports i2v only.
+export function validateVideoGenForProvider(input: {
+  type: string;
+  resolvedTask: "t2v" | "i2v" | undefined;
+  resolvedRef: string | null;
+  videoProvider: string;
+}): { ok: true } | { ok: false; error: string; message: string } {
+  if (input.type !== "VIDEO_GEN") return { ok: true };
+  if (input.videoProvider.toLowerCase() !== "external") return { ok: true };
+  if (input.resolvedTask === "i2v" && input.resolvedRef && input.resolvedRef.length >= 64) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    error: "VIDEO_I2V_REQUIRED",
+    message: "External video provider supports i2v only. Provide actorId or referenceImageBase64 (>=64 chars).",
+  };
+}
+
 router.get("/production/config", async (req: Request, res: Response): Promise<void> => {
   res.json({
     provider: process.env.VOICE_PROVIDER || "Deepgram",
@@ -54,6 +73,17 @@ router.post("/production/jobs", requireProductionAuth, async (req: Request, res:
     console.log(`⚡ [CINEMA-16] actor ${actorId} resolved (source=${actorRes.source}, task=${actorRes.task})`);
   }
 
+  // KAYAN-GUARD-13: fail fast BEFORE enqueue when external provider cannot do t2v.
+  const vgCheck = validateVideoGenForProvider({
+    type,
+    resolvedTask,
+    resolvedRef,
+    videoProvider: process.env.VIDEO_PROVIDER || "kayangpu",
+  });
+  if (vgCheck.ok === false) {
+    res.status(400).json({ error: vgCheck.error, message: vgCheck.message });
+    return;
+  }
   try {
     console.log(`⚡ [Production Pipeline] إطلاق مَهمة إنتاج حية من نوع [${type}] للمشروع رقم #${projectId || 'N/A'}`);
     const job = await createProductionJob(type, {
