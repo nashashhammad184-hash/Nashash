@@ -3,6 +3,7 @@ import { db, actorsTable, characterReferencesTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
 import { eq } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
+import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import rateLimit from "express-rate-limit";
@@ -129,6 +130,37 @@ router.delete("/actors/:id", requireProductionAuth, async (req: Request, res: Re
     res.sendStatus(204);
   } catch (err: any) {
     res.status(500).json({ error: "فشل الحذف من PostgreSQL: " + err.message });
+  }
+});
+
+// KAYAN-CINEMA-17A: serve actor image bytes for UI display.
+// Uses the storage layer's resolveLocal + read directly (same trust boundary
+// as resolveActorReference for i2v). Does NOT use the generic
+// /api/storage/supabase/* proxy (which refuses to sign actors/refs/ keys for
+// security reasons). Errors are sanitized — no internal paths or secrets.
+// Headers: correct Content-Type, X-Content-Type-Options: nosniff, private cache.
+router.get("/actors/:actorId/image", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const actorId = parseInt(String(req.params.actorId), 10);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    res.status(400).json({ error: "actorId must be a positive integer" });
+    return;
+  }
+  try {
+    const result = await loadActorImageBytes(actorId);
+    if (result.ok === false) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.setHeader("Content-Type", result.mime);
+    res.setHeader("Content-Length", String(result.size));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=300, must-revalidate");
+    res.setHeader("Content-Disposition", `inline; filename="actor-${actorId}.${result.mime === "image/png" ? "png" : "jpg"}"`);
+    res.status(200).end(result.buffer);
+  } catch {
+    if (!res.headersSent) {
+      res.status(500).json({ error: "failed to serve actor image" });
+    }
   }
 });
 

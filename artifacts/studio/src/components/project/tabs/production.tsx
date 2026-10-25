@@ -1,5 +1,6 @@
 import { VideoPlayerPanel } from "./video-player-panel";
 import { ProductionJobRow } from "./production-job-row";
+import { ActorAvatar } from "../actor-avatar";
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -205,9 +206,19 @@ export function ProductionTab({ project }: ProductionTabProps) {
                     })}
                   </select>
                   {selectedActorId !== "" && (
-                    <p className="text-[9px] text-emerald-400">
-                      ✓ سيُمرَّر المرجع تلقائياً إلى WaveSpeed (i2v)
-                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="w-8 h-8 rounded-full overflow-hidden border border-emerald-700 shrink-0">
+                        <ActorAvatar
+                          actorId={selectedActorId}
+                          name={actorById[selectedActorId]?.name}
+                          size={32}
+                          className="rounded-full"
+                        />
+                      </div>
+                      <p className="text-[9px] text-emerald-400">
+                        ✓ سيُمرَّر المرجع تلقائياً إلى WaveSpeed (i2v)
+                      </p>
+                    </div>
                   )}
                 </div>
               )}

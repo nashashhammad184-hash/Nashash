@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Plus, Trash2, User } from "lucide-react";
+import { ActorAvatar } from "../actor-avatar";
 import { toast } from "sonner";
 
 export default function CharactersTab({ project }: { project: Project }) {
@@ -133,11 +134,13 @@ export default function CharactersTab({ project }: { project: Project }) {
               <Card key={pa.id} className="bg-zinc-900 border-zinc-800 overflow-hidden group">
                 <CardContent className="p-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 font-bold overflow-hidden border border-zinc-700">
+                    <div className="w-12 h-12 rounded-full overflow-hidden border border-zinc-700 flex items-center justify-center">
                       {actorDetail?.imageUrl ? (
-                        <img src={actorDetail.imageUrl} alt={actorDetail.name} className="w-full h-full object-cover" />
+                        <ActorAvatar actorId={pa.actorId} name={actorDetail.name} size={48} className="rounded-full" />
                       ) : (
-                        <User className="w-6 h-6" />
+                        <div className="w-12 h-12 bg-zinc-800 flex items-center justify-center text-zinc-400">
+                          <User className="w-6 h-6" />
+                        </div>
                       )}
                     </div>
                     <div>

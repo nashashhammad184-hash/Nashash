@@ -198,3 +198,117 @@ export async function resolveActorReference(
     try { await resolved.cleanup(); } catch { /* swallow */ }
   }
 }
+
+// ============================================================
+// KAYAN-CINEMA-17A: loadActorImageBytes — serve actor image for UI.
+//
+// Unlike resolveActorReference (which returns base64 for video gen), this
+// returns the raw bytes + MIME for HTTP image responses. Reuses the same
+// deps injection (_deps) for testability and the same security invariants:
+//   - actorId must be positive integer
+//   - actor must exist
+//   - actor must be linked to at least one project (via project_actors)
+//   - image URL must resolve to a local file via storage layer
+//   - file must be 10KB–5MB and PNG/JPEG
+//   - cleanup() is always called (even on error path after resolve)
+//   - no path leaks in error messages
+// ============================================================
+
+export interface LoadActorImageResult {
+  ok: true;
+  buffer: Buffer;
+  mime: "image/png" | "image/jpeg";
+  size: number;
+}
+
+export interface LoadActorImageError {
+  ok: false;
+  status: number;
+  error: string;
+}
+
+export async function loadActorImageBytes(
+  actorId: number,
+): Promise<LoadActorImageResult | LoadActorImageError> {
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    return { ok: false, status: 400, error: "actorId must be a positive integer" };
+  }
+
+  // 1. Fetch actor.
+  let actorRow: any;
+  try {
+    const rows = await _deps.getDb()
+      .select()
+      .from(actorsTable)
+      .where(eq(actorsTable.id, actorId))
+      .limit(1);
+    actorRow = rows[0];
+  } catch {
+    return { ok: false, status: 500, error: "failed to fetch actor" };
+  }
+  if (!actorRow) {
+    return { ok: false, status: 404, error: "actor not found" };
+  }
+
+  // 2. Authorization: actor must be linked to at least one project.
+  // (Single-tenant model: any authenticated user can see any linked actor,
+  //  but orphan actors are not exposed through this route.)
+  try {
+    const links = await _deps.getDb()
+      .select({ actorId: projectActorsTable.actorId })
+      .from(projectActorsTable)
+      .where(eq(projectActorsTable.actorId, actorId))
+      .limit(1);
+    if (links.length === 0) {
+      return { ok: false, status: 404, error: "actor is not linked to any accessible project" };
+    }
+  } catch {
+    return { ok: false, status: 500, error: "failed to verify actor access" };
+  }
+
+  // 3. Pick image URL (same priority as i2v path).
+  const imageUrl = pickActorImageUrl(actorRow);
+  if (!imageUrl) {
+    return { ok: false, status: 404, error: "actor has no reference image" };
+  }
+
+  // 4. Resolve to local via storage layer.
+  let resolved: Awaited<ReturnType<typeof resolveStorageUrlToLocal>>;
+  try {
+    resolved = await _deps.resolveLocal(imageUrl);
+  } catch {
+    return { ok: false, status: 404, error: "failed to resolve actor image" };
+  }
+
+  try {
+    // 5. Size validation.
+    let size: number;
+    try {
+      size = _deps.statFile(resolved.path).size;
+    } catch {
+      return { ok: false, status: 500, error: "failed to stat actor image" };
+    }
+    if (size < MIN_IMAGE_BYTES) {
+      return { ok: false, status: 400, error: "actor image too small" };
+    }
+    if (size > MAX_IMAGE_BYTES) {
+      return { ok: false, status: 400, error: "actor image too large" };
+    }
+
+    // 6. Read + MIME detection.
+    let buf: Buffer;
+    try {
+      buf = _deps.readFile(resolved.path);
+    } catch {
+      return { ok: false, status: 500, error: "failed to read actor image" };
+    }
+    const mime = detectImageMime(buf);
+    if (!mime) {
+      return { ok: false, status: 400, error: "actor image is not PNG/JPEG" };
+    }
+
+    return { ok: true, buffer: buf, mime, size: buf.length };
+  } finally {
+    try { await resolved.cleanup(); } catch { /* swallow */ }
+  }
+}
