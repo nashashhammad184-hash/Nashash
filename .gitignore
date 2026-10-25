@@ -100,3 +100,10 @@ logs/
 repomix-*.xml
 worker-build-context/
 src/
+
+# KAYAN-GUARD-03: explicit safety nets for secret backups
+# (.env.* already covers these; explicit for audit clarity)
+.env.save*
+.env.before-*
+.env.backup*
+.env.old*
