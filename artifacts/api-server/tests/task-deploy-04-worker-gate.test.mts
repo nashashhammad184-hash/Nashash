@@ -89,7 +89,7 @@ if (startFnIdx >= 0) {
   const fnBody = engineSrc.slice(startFnIdx, endIdx + 1);
   report(
     "DEPLOY04-07 workerInterval created inside startProductionWorker",
-    /workerInterval\s*=\s*setInterval/.test(fnBody),
+    /workerInterval\s*=\s*setTimeout/.test(fnBody),
   );
   report(
     "DEPLOY04-08 sweepInterval gated inside startProductionWorker",

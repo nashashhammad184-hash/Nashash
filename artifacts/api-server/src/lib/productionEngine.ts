@@ -804,7 +804,7 @@ export function startProductionWorker(pollIntervalMs = 5000): void {
 
 export function stopProductionWorker(): void {
   if (workerInterval) {
-    clearInterval(workerInterval);
+    clearTimeout(workerInterval);
     workerInterval = null;
   }
   if (sweepInterval) {
