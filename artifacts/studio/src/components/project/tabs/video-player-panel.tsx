@@ -93,18 +93,49 @@ export function VideoPlayerPanel({
 
   const handleAutoEditAndMerge = async () => {
     if (generateVideo.isPending || mergeStatus === "processing") return;
-
     setVideoUrl(null);
     setVideoError(null);
     setMergeStatus("processing");
-    setMergeStage(`جاري جلب حوار المشهد وصياغة التايم لاين عبر Deepgram وتوليد الميديا المتزامنة بالكامل...`);
+    setMergeStage("جاري جمع المقاطع الجاهزة من المشروع...");
 
-    // توليد مصفوفة تايم لاين ديناميكية بناءً على النص والـ Prompt الفعلي لتقسيم الجمل زمنياً وحرقها بدقة
+    // KAYAN-GUARD-29: fetch project shots, build clips from shots.videoUrl
+    let shotsRes: Response;
+    try {
+      shotsRes = await fetch(`/api/projects/${project.id}/shots`, {
+        credentials: "same-origin",
+      });
+    } catch {
+      setMergeStatus("idle"); setMergeStage("");
+      setVideoError("تعذر جلب لقطات المشروع."); return;
+    }
+    if (!shotsRes.ok) {
+      setMergeStatus("idle"); setMergeStage("");
+      setVideoError("تعذر جلب لقطات المشروع."); return;
+    }
+    const shots: Array<{ id?: number; videoUrl?: string | null; durationSeconds?: number | null }> =
+      await shotsRes.json().catch(() => []);
+    const clips = shots
+      .filter((sh) => typeof sh.videoUrl === "string" && sh.videoUrl!.trim().length > 0)
+      .map((sh, i) => ({
+        id: sh.id ?? i,
+        assetUrl: sh.videoUrl!.trim(),
+        durationSeconds: sh.durationSeconds && sh.durationSeconds > 0 ? sh.durationSeconds : 5,
+        order: i,
+      }));
+    if (clips.length === 0) {
+      setMergeStatus("idle"); setMergeStage("");
+      setVideoError("لا توجد مقاطع فيديو جاهزة للدمج. أنشئ فيديو واحداً على الأقل في المشروع أولاً.");
+      toast.error("لا توجد مقاطع فيديو جاهزة للدمج.");
+      return;
+    }
+
+    setMergeStage(`جاري دمج ${clips.length} مقاطع وحرق الترجمة...`);
+
+    // Build timelineSubs (same logic as before)
     const textLines = prompt.trim() ? prompt.trim().split(/[.،,?!]+/).filter(Boolean) : ["Action scene execution initiated"];
     const timelineSubs = textLines.map((line, idx) => {
       const startSec = idx * 3;
       const endSec = startSec + 2.5;
-      
       const formatTime = (sec: number) => {
         const hrs = String(Math.floor(sec / 3600)).padStart(2, "0");
         const mins = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
@@ -112,46 +143,65 @@ export function VideoPlayerPanel({
         const ms = String(Math.floor((sec % 1) * 1000)).padStart(3, "0");
         return `${hrs}:${mins}:${secs},${ms}`;
       };
-
-      return {
-        index: idx + 1,
-        start: formatTime(startSec),
-        end: formatTime(endSec),
-        text: line.trim()
-      };
+      return { index: idx + 1, start: formatTime(startSec), end: formatTime(endSec), text: line.trim() };
     });
 
+    // KAYAN-GUARD-29: submit to /api/render/merge (202 async — returns jobId)
+    let jobId: string;
     try {
       const res = await fetch("/api/render/merge", {
         method: "POST",
-        // KAYAN-TASK-81: send session cookie.
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: prompt.trim() || `مشهد سينمائي من مشروع ${project.title}`,
-          worldId: project.worldId,
-          text: prompt.trim() || "Action scene execution initiated",
+          projectId: project.id,
+          clips,
           timelineSubs,
-          microExpression: microExpression || "neutral"
-        })
+        }),
       });
-
-      if (!res.ok) throw new Error("فشلت رندرة التايم لاين والدمج من السيرفر الخلفي.");
-
-      const result = await res.json() as { videoUrl: string; streamUrl?: string; downloadUrl?: string };
-      
-      setVideoUrl(result.streamUrl || result.videoUrl);
-      setDownloadUrl(result.downloadUrl || null);
-      setMergeStatus("completed");
-      setMergeStage("اكتمل الرندر الفعلي للفيلم بنجاح! تم دمج الصوت، تعابير الوجه، حركة الشفاه، وحرق الترجمة النصية التفاعلية حقيقياً.");
-      toast.success("تم إتمام رندرة المشهد والدمج الصوتي البصري حقيقياً 100%");
-
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error((errBody as any).error || `HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as { jobId?: string; status?: string };
+      if (!body.jobId) throw new Error("missing jobId in response");
+      jobId = body.jobId;
     } catch (err) {
-      setMergeStatus("idle");
-      setMergeStage("");
-      setVideoError(err instanceof Error ? err.message : "فشلت معالجة الميديا.");
-      toast.error("حدث خطأ أثناء رندرة ودمج الميديا في السيرفر.");
+      setMergeStatus("idle"); setMergeStage("");
+      setVideoError(err instanceof Error ? err.message : "فشل إرسال طلب الدمج.");
+      toast.error("فشل إرسال طلب الدمج."); return;
     }
+
+    // Poll /api/render/status/:id (max ~5 min, 2s interval)
+    const maxAttempts = 150;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let st: any;
+      try {
+        const sr = await fetch(`/api/render/status/${jobId}`, { credentials: "same-origin" });
+        if (!sr.ok) continue;
+        st = await sr.json();
+      } catch { continue; }
+      if (st?.status === "COMPLETED") {
+        setVideoUrl(st.outputUrl);
+        setDownloadUrl(st.outputUrl);
+        setMergeStatus("completed");
+        setMergeStage("اكتمل الدمج بنجاح. الترجمة محروقة، المقاطع مدموجة.");
+        toast.success("تم إتمام الدمج بنجاح.");
+        return;
+      }
+      if (st?.status === "FAILED") {
+        setMergeStatus("idle"); setMergeStage("");
+        setVideoError(st.error || "فشل الدمج.");
+        toast.error("فشل الدمج.");
+        return;
+      }
+      // QUEUED / PROCESSING → keep polling
+      setMergeStage(`الدمج قيد التنفيذ (${st?.status || "QUEUED"}) — محاولة ${attempt}...`);
+    }
+    setMergeStatus("idle"); setMergeStage("");
+    setVideoError("انتهت مهلة الدمج (5 دقائق).");
+    toast.error("انتهت مهلة الدمج.");
   };
 
   return (
