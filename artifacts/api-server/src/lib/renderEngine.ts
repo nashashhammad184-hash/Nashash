@@ -175,8 +175,8 @@ async function resolveAssetToLocal(
     }
   }
 
-  // 0. KAYAN-TASK-73F: internal R2 proxy URLs → resolve via storage layer.
-  if (trimmed.startsWith("/api/storage/r2/")) {
+  // 0. KAYAN-TASK-73F: internal R2/Supabase proxy URLs → resolve via storage layer.
+  if (trimmed.startsWith("/api/storage/r2/") || trimmed.startsWith("/api/storage/supabase/")) {
     const r = await resolveStorageUrlToLocal(trimmed);
     if (storageCleanupTracker) storageCleanupTracker.push(r.cleanup);
     return r.path;
