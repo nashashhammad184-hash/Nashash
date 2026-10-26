@@ -28,6 +28,28 @@ const pExec = promisify(execFile);
 const RENDERS_DIR = path.resolve(process.cwd(), "uploads", "renders");
 const TEMP_ASSETS_DIR = path.resolve(process.cwd(), "uploads", "temp", "render_assets");
 const DOWNLOAD_TIMEOUT_MS = 60_000;
+
+// KAYAN-GUARD-27: dependency injection for testability. Default = production.
+type RenderDeps = {
+  getDb: () => typeof db;
+  resolveLocal: typeof resolveStorageUrlToLocal;
+  persist: typeof persistRenderFile;
+};
+
+const defaultRenderDeps: RenderDeps = {
+  getDb: () => db,
+  resolveLocal: resolveStorageUrlToLocal,
+  persist: persistRenderFile,
+};
+
+let _deps: RenderDeps = { ...defaultRenderDeps };
+
+export function _setRenderDeps(overrides: Partial<RenderDeps> = {}): void {
+  _deps = { ...defaultRenderDeps, ...overrides };
+}
+export function _resetRenderDeps(): void {
+  _deps = { ...defaultRenderDeps };
+}
 const MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500MB
 
 // ---------- forbidden patterns (defensive) ----------
@@ -105,7 +127,7 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
     }
   }
 
-  const [row] = await db
+  const [row] = await _deps.getDb()
     .insert(renderJobsTable)
     .values({
       projectId: input.projectId,
@@ -124,7 +146,7 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
 }
 
 export async function getRenderJobStatus(jobId: string): Promise<RenderJobStatus | null> {
-  const rows = await db.select().from(renderJobsTable).where(eq(renderJobsTable.id, jobId)).limit(1);
+  const rows = await _deps.getDb().select().from(renderJobsTable).where(eq(renderJobsTable.id, jobId)).limit(1);
   const row = rows[0];
   return row ? toStatus(row) : null;
 }
@@ -177,7 +199,7 @@ async function resolveAssetToLocal(
 
   // 0. KAYAN-TASK-73F: internal R2 proxy URLs → resolve via storage layer.
   if (trimmed.startsWith("/api/storage/r2/")) {
-    const r = await resolveStorageUrlToLocal(trimmed);
+    const r = await _deps.resolveLocal(trimmed);
     if (storageCleanupTracker) storageCleanupTracker.push(r.cleanup);
     return r.path;
   }
@@ -186,7 +208,7 @@ async function resolveAssetToLocal(
     const abs = path.resolve(process.cwd(), trimmed.replace(/^\//, ""));
     if (fs.existsSync(abs)) return verifyLocalFile(abs, trimmed);
     // KAYAN-TASK-73F: file missing locally — try storage layer (r2 migration).
-    const r = await resolveStorageUrlToLocal(trimmed);
+    const r = await _deps.resolveLocal(trimmed);
     if (storageCleanupTracker) storageCleanupTracker.push(r.cleanup);
     return r.path;
   }
@@ -328,7 +350,7 @@ async function setJobStatus(
   status: RenderStatus,
   patch: Partial<Pick<RenderJobRow, "outputPath" | "outputUrl" | "duration" | "sizeBytes" | "probe" | "error" | "startedAt" | "finishedAt">> = {},
 ): Promise<void> {
-  await db.update(renderJobsTable).set({ status, ...patch }).where(eq(renderJobsTable.id, jobId));
+  await _deps.getDb().update(renderJobsTable).set({ status, ...patch }).where(eq(renderJobsTable.id, jobId));
 }
 
 /**
@@ -358,7 +380,7 @@ function formatSrtTime(sec: number): string {
 }
 
 export async function runRenderPipeline(jobId: string): Promise<void> {
-  const rows = await db.select().from(renderJobsTable).where(eq(renderJobsTable.id, jobId)).limit(1);
+  const rows = await _deps.getDb().select().from(renderJobsTable).where(eq(renderJobsTable.id, jobId)).limit(1);
   const row = rows[0];
   if (!row) throw new Error(`runRenderPipeline: job ${jobId} not found`);
   if (row.status === "COMPLETED" || row.status === "PROCESSING") return;
@@ -566,7 +588,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     // (file already at uploads/renders/<basename>). Under R2 it uploads.
     let persistedUrl: string;
     try {
-      const persisted = await persistRenderFile(outputPath);
+      const persisted = await _deps.persist(outputPath);
       persistedUrl = persisted.url;
     } catch (persistErr) {
       const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);

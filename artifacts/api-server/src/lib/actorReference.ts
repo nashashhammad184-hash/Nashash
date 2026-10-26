@@ -18,7 +18,7 @@
  */
 import fs from "node:fs";
 import { eq, and } from "drizzle-orm";
-import { db, actorsTable, projectActorsTable } from "@workspace/db";
+import { db, actorsTable, projectActorsTable, characterReferencesTable } from "@workspace/db";
 import { resolveStorageUrlToLocal } from "./storage/index";
 
 export interface ResolveActorRefInput {
@@ -74,6 +74,29 @@ export function detectImageMime(buf: Buffer): "image/png" | "image/jpeg" | null 
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
   return null;
+}
+
+// KAYAN-GUARD-30: fallback to character_references when actor columns are empty.
+// The upload endpoint POST /actors/:id/references writes there; resolveActorReference
+// must consult it or uploaded images are never used for video generation.
+async function _pickReferenceFromTable(actorId: number): Promise<string | null> {
+  try {
+    const rows = await _deps.getDb()
+      .select({ assetUrl: characterReferencesTable.assetUrl, isPrimary: characterReferencesTable.isPrimary, referenceType: characterReferencesTable.referenceType, id: characterReferencesTable.id })
+      .from(characterReferencesTable)
+      .where(eq(characterReferencesTable.actorId, actorId));
+    if (!rows || rows.length === 0) return null;
+    // Prefer primary image, then any image, then anything.
+    const imgs = rows.filter((r: any) => r.referenceType === "image" || r.referenceType == null);
+    const primary = imgs.find((r: any) => r.isPrimary === true);
+    const chosen = primary || imgs[0] || rows[0];
+    if (chosen && typeof chosen.assetUrl === "string" && chosen.assetUrl.trim().length > 0) {
+      return chosen.assetUrl.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function pickActorImageUrl(actor: {
@@ -144,8 +167,11 @@ export async function resolveActorReference(
     return { ok: false, status: 404, error: `actor ${n} not found` };
   }
 
-  // 3. Pick reference image URL.
-  const imageUrl = pickActorImageUrl(actorRow);
+  // 3. Pick reference image URL (actor columns, then character_references fallback).
+  let imageUrl = pickActorImageUrl(actorRow);
+  if (!imageUrl) {
+    imageUrl = await _pickReferenceFromTable(n);
+  }
   if (!imageUrl) {
     return { ok: false, status: 400, error: `actor ${n} has no reference image` };
   }
@@ -266,8 +292,11 @@ export async function loadActorImageBytes(
     return { ok: false, status: 500, error: "failed to verify actor access" };
   }
 
-  // 3. Pick image URL (same priority as i2v path).
-  const imageUrl = pickActorImageUrl(actorRow);
+  // 3. Pick image URL (actor columns, then character_references fallback).
+  let imageUrl = pickActorImageUrl(actorRow);
+  if (!imageUrl) {
+    imageUrl = await _pickReferenceFromTable(actorId);
+  }
   if (!imageUrl) {
     return { ok: false, status: 404, error: "actor has no reference image" };
   }

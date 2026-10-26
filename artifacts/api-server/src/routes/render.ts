@@ -4,6 +4,7 @@ import { db, renderJobsTable } from "@workspace/db";
 import { createRenderJob, getRenderJobStatus, runRenderPipeline, type RenderClipInput } from "../lib/renderEngine";
 import { generateSRT, type SubtitleItem } from "../lib/subtitleService";
 import { requireProductionAuth } from "../lib/securityMiddleware";
+import renderMergeRouter from "./renderMerge";
 
 const router: IRouter = Router();
 
@@ -193,5 +194,8 @@ router.get("/projects/:id/render/jobs", async (req: Request, res: Response): Pro
     res.status(500).json({ error: err.message });
   }
 });
+
+// KAYAN-GUARD-29: POST /api/render/merge (async job + polling)
+router.use("/merge", renderMergeRouter);
 
 export default router;
