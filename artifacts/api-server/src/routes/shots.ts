@@ -27,7 +27,8 @@ router.get("/projects/:id/shots", requireProductionAuth, async (req: Request, re
       
     res.json(shots);
   } catch (err: any) {
-    res.status(500).json({ error: "فشل جلب اللقطات: " + err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -53,7 +54,8 @@ router.post("/shots", requireProductionAuth, async (req: Request, res: Response)
     
     res.status(201).json(shot);
   } catch (err: any) {
-    res.status(500).json({ error: "فشل إدخال اللقطة في PostgreSQL: " + err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -84,7 +86,8 @@ router.post("/shots/bulk-update", requireProductionAuth, async (req: Request, re
     }
     res.json({ success: true, message: "Timeline shots synced successfully in database" });
   } catch (error: any) {
-    res.status(500).json({ error: "Failed to perform timeline bulk sync", message: error.message });
+    console.error("[route] internal error", error?.message || error);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "BULK_SYNC_FAILED" });
   }
 });
 
@@ -121,7 +124,8 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
     }
     res.json(shot);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -144,7 +148,8 @@ router.delete("/shots/:id", requireProductionAuth, async (req: Request, res: Res
     }
     res.sendStatus(204);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 

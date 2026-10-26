@@ -10,6 +10,19 @@ import { db, shotsTable } from "@workspace/db";
 import { createRenderJob, runRenderPipeline, type RenderClipInput } from "../lib/renderEngine";
 import { generateSRT, type SubtitleItem } from "../lib/subtitleService";
 import { requireProductionAuth } from "../lib/securityMiddleware";
+import rateLimit from "express-rate-limit";
+
+// KAYAN-STABILITY-04: rate limit — prevent duplicate render submissions
+// (user double-tap, network retry). 5 renders / minute per IP is generous
+// for normal use but stops accidental spam loops.
+const mergeLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  message: { error: "TOO_MANY_REQUESTS", code: "RENDER_RATE_LIMITED" },
+});
 
 function _parseHHMMSS(v: string | undefined | null): number {
   if (!v || typeof v !== "string") return NaN;
@@ -117,7 +130,7 @@ export async function executeMerge(input: MergeRequestInput, deps: MergeDeps): P
 
 const router: IRouter = Router();
 
-router.post("/", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+router.post("/", mergeLimiter, requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const result = await executeMerge(req.body || {}, {
     getShots: async (pid: number) => {
       const rows = await db

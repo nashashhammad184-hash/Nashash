@@ -3,7 +3,10 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-const STALE_MS = 60_000;
+// KAYAN-STABILITY-04: align with watchdog (5min) & heartbeat (60s) — 5x safety.
+// Previously 60s === heartbeat, causing race: recoverStale killed active jobs
+// on worker restart, and tryAcquireLock allowed double execution on delayed HB.
+const STALE_MS = 5 * 60_000;
 
 function pool(): pg.Pool {
   const conn = process.env.QUEUE_DATABASE_URL || process.env.DATABASE_URL;

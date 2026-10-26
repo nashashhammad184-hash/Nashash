@@ -199,7 +199,7 @@ router.get("/storage/r2/{*key}", async (req: Request, res: Response): Promise<vo
 //     stays "/api/storage/supabase/<key>" so the proxy path remains
 //     stable if we later swap Supabase for another S3-compatible store.
 // ================================================================
-const SUPABASE_SIGNED_URL_TTL_SEC = 300; // 5 min — enough for playback start + range
+const SUPABASE_SIGNED_URL_TTL_SEC = 3600; // 1h — long videos stay playable
 router.get("/storage/supabase/{*key}", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const raw = (req.params as any).key;
   const rawKey = Array.isArray(raw) ? raw.join("/") : String(raw || "");

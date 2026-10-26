@@ -87,7 +87,8 @@ router.get("/projects/:id/timeline", requireProductionAuth, async (req: Request,
       items,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -351,7 +352,8 @@ router.post("/projects/:id/timeline/sync", requireProductionAuth, async (req: Re
       outputVideoUrl: activeRenderJob.outputUrl,
     });
   } catch (err: any) {
-    res.status(500).json({ error: "فشل مزامنة التايم لاين: " + err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 

@@ -33,7 +33,8 @@ router.get("/projects/:id/clips", async (req: Request, res: Response): Promise<v
       .orderBy(asc(editClipsTable.clipOrder));
     res.json(clips);
   } catch (err: any) {
-    res.status(500).json({ error: "فشل جلب مسارات التايم لاين: " + err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -92,7 +93,8 @@ router.post("/clips", requireProductionAuth, async (req: Request, res: Response)
 
     res.status(201).json(clip);
   } catch (err: any) {
-    res.status(500).json({ error: "فشل حفظ مقطع التايم لاين داخل قاعدة البيانات: " + err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -143,7 +145,8 @@ router.patch("/clips/:id", requireProductionAuth, async (req: Request, res: Resp
     }
     res.json(clip);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
@@ -166,7 +169,8 @@ router.delete("/clips/:id", requireProductionAuth, async (req: Request, res: Res
     }
     res.sendStatus(204);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[route] internal error", err?.message || err);
+    res.status(500).json({ error: "INTERNAL_ERROR", code: "REQUEST_FAILED" });
   }
 });
 
