@@ -12,7 +12,7 @@ function isHttpUrl(s: string): boolean {
   return /^https?:\/\//i.test(s);
 }
 function isLocalUploadPath(s: string): boolean {
-  return typeof s === "string" && s.startsWith("/uploads/");
+  return typeof s === "string" && (s.startsWith("/uploads/") || s.startsWith("/api/storage/supabase/") || s.startsWith("/api/storage/r2/"));
 }
 function looksLikeRealAsset(s: string | null | undefined): boolean {
   if (!s || typeof s !== "string") return false;
