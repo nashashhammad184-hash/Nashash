@@ -516,7 +516,9 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         const vp = videoOutput.videoPath as string;
         const vu = videoOutput.videoUrl as string;
         if (!vp || !isRealAsset(vu)) throw new Error(`VIDEO_GEN shot ${shot.id} returned no real video asset`);
-        assertFile(vp, `video shot ${shot.id}`);
+        // KAYAN-GUARD-40: skip assertFile when vu is a remote storage URL (cross-env worker)
+        const _vpIsRemote = vu.startsWith("/api/storage/") || /^https?:\/\//i.test(vu);
+        if (!_vpIsRemote) assertFile(vp, `video shot ${shot.id}`);
         // KAYAN-TASK-44: persist videoUrl on the shot so downstream routes
         // (timeline/sync, render/start) can find the asset. Never store empty
         // or non-real URLs. DB failure must fail the stage (no fake success).
