@@ -12,7 +12,7 @@ function looksLikeRealAsset(s: string | null | undefined): boolean {
   if (!s || typeof s !== "string") return false;
   const t = s.trim();
   if (t.length === 0) return false;
-  return /^https?:\/\//i.test(t) || t.startsWith("/uploads/");
+  return /^https?:\/\//i.test(t) || t.startsWith("/uploads/") || t.startsWith("/api/storage/supabase/") || t.startsWith("/api/storage/r2/");
 }
 
 // KAYAN-TASK-48: load synchronized subtitles for a project. Returns

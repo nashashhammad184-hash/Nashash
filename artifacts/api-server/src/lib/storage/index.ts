@@ -116,6 +116,15 @@ export async function resolveStorageUrlToLocal(url: unknown): Promise<ResolvedLo
     }
     key = u.slice("/api/storage/r2/".length);
     wasRemote = true;
+  } else if (u.startsWith("/api/storage/supabase/")) {
+    if (providerName !== "supabase") {
+      throw new StorageError(
+        "INVALID_URL",
+        "resolveStorageUrlToLocal: /api/storage/supabase/ URL but STORAGE_PROVIDER is not supabase",
+      );
+    }
+    key = u.slice("/api/storage/supabase/".length);
+    wasRemote = true;
   } else if (schemeMatch && (schemeMatch[1].toLowerCase() === "http" || schemeMatch[1].toLowerCase() === "https")) {
     const base = (process.env.R2_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
     if (!base || providerName !== "r2") {
