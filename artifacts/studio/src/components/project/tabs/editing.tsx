@@ -115,7 +115,7 @@ function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: {
         <div className="mb-4 p-3 rounded-lg border bg-black/40 border-white/5 space-y-2">
           <div className="flex justify-between items-center text-[11px] font-mono"><span className="text-white/60">حالة الرندر الخلفي: <strong className="text-primary">{renderStatus}</strong></span><span className="text-primary font-bold">{renderProgress}%</span></div>
           <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-primary transition-all duration-300" style={{ width: `${renderProgress}%` }} /></div>
-          {finalMp4Url && <div className="pt-2"><p className="text-[10px] text-green-400 font-mono">✅ تم إنشاء الـ Manifest واستقرت أصول الـ MP4 المدمجة حقيقياً.</p></div>}
+          {finalMp4Url && <div className="pt-2 space-y-2"><p className="text-[10px] text-green-400 font-mono">✅ تم إنشاء الـ Manifest واستقرت أصول الـ MP4 المدمجة حقيقياً.</p><video src={finalMp4Url} controls playsInline className="w-full max-h-64 rounded border border-white/10 bg-black" /><a href={finalMp4Url} target="_blank" rel="noopener noreferrer" className="inline-block text-[10px] text-blue-400 hover:underline font-mono">↓ فتح/تنزيل الفيديو</a></div>}
           {renderError && <div className="pt-2"><p className="text-[10px] text-red-400 font-mono">⚠️ {renderError}</p></div>}
         </div>
       )}
