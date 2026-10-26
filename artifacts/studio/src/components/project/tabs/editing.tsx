@@ -108,7 +108,7 @@ function TimelinePreviewArea({ totalDuration, clips, project, onSyncSuccess }: {
         <div className="inline-flex items-center gap-2 text-xs font-mono text-white/50 uppercase tracking-wider"><Film className="w-3.5 h-3.5 text-primary" /> مخطط المسارات الحقيقية والإنتاج المزامَن (Timeline Sync)</div>
         <div className="flex items-center gap-3">
           <div className="text-sm font-mono text-primary font-bold">إجمالي: {formatTime(totalDuration)}</div>
-          <Button type="button" size="sm" onClick={handleStartFinalRender} disabled={renderStatus === "PROCESSING" || renderStatus === "QUEUED" || clips.length === 0} className="h-8 gap-1.5 bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg text-xs rounded animate-pulse">{renderStatus === "PROCESSING" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} مزامنة ورندرة الفيلم</Button>
+          <Button type="button" size="sm" onClick={handleStartFinalRender} disabled={renderStatus === "PROCESSING" || renderStatus === "QUEUED"} className="h-8 gap-1.5 bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg text-xs rounded animate-pulse">{renderStatus === "PROCESSING" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} مزامنة ورندرة الفيلم</Button>
         </div>
       </div>
       {renderStatus !== "IDLE" && (
