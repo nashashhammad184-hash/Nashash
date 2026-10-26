@@ -8,6 +8,7 @@ import { validateProxyUrl, requireProductionAuth } from "../lib/securityMiddlewa
 import { createProductionJob, getProductionJob } from "../lib/productionEngine";
 import { getActiveVideoProvider } from "../lib/providers/video/activeProvider";
 import { resolveShotId, persistVideoUrlToShot } from "../lib/videoShotLink";
+import { resolveActorReference } from "../lib/actorReference";
 import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
@@ -121,6 +122,21 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
   }
   const shotId = shotRes.shotId;
 
+  // KAYAN-CINEMA-16: resolve actor reference (optional).
+  // Reads actorId from req.body (not in Zod schema, same pattern as shotId).
+  // Verifies actor is linked to project via project_actors; loads image;
+  // returns referenceImageBase64 ready for i2v path.
+  const rawActorId = req.body ? (req.body as Record<string, unknown>)["actorId"] : undefined;
+  const actorRes = await resolveActorReference({
+    actorId: rawActorId,
+    projectId: parsed.data.projectId,
+    explicitReferenceImageBase64: (parsed.data as any).referenceImageBase64 ?? null,
+  });
+  if (actorRes.ok === false) {
+    res.status(actorRes.status).json({ error: actorRes.error });
+    return;
+  }
+
   // KAYAN-TASK-02 — explicit I2V contract validation BEFORE any GPU submission.
   const __d = parsed.data as any;
   logger.info({
@@ -128,7 +144,14 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
     __task_resolved: __d.task,
     __has_ref: !!__d.referenceImageBase64,
   }, "[I2V-DEBUG] route entry");
-  const __task: 't2v' | 'i2v' = __d.task === 'i2v' ? 'i2v' : 't2v';
+  // KAYAN-CINEMA-16: actorRes overrides the client-provided task/ref when an
+  // actor was resolved. If no actor, fall back to the original behavior.
+  const __task: 't2v' | 'i2v' = actorRes.source === "none"
+    ? (__d.task === 'i2v' ? 'i2v' : 't2v')
+    : actorRes.task;
+  if (actorRes.source === "actor" || actorRes.source === "explicit") {
+    __d.referenceImageBase64 = actorRes.referenceImageBase64;
+  }
   if (__task === 'i2v') {
     if (!__d.referenceImageBase64 || typeof __d.referenceImageBase64 !== 'string' || __d.referenceImageBase64.length < 64) {
       res.status(400).json({ error: 'i2v requires referenceImageBase64 (>=64 chars)' });
@@ -154,6 +177,7 @@ router.post("/generate", generateLimiter, requireProductionAuth, async (req: Req
       microExpression: parsed.data.microExpression,
       task: __task,
       referenceImageBase64: __d.referenceImageBase64,
+      actorId: actorRes.actorId ?? undefined,
       negativePrompt: __d.negativePrompt,
       fps: __d.fps,
       durationSeconds: __d.durationSeconds,

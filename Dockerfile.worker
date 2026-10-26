@@ -1,19 +1,10 @@
-# KAYAN-AWS-EXIT-07: minimal worker-only Dockerfile.
-# Uses prebuilt dist/ from the repo to avoid multi-stage re-build on disk-constrained host.
-FROM node:22-bookworm-slim
-
+# KAYAN-AWS-EXIT-07: worker-only Dockerfile for Northflank.
+# Reuses the same build stage as the main Dockerfile.
+FROM node:22.22.1-bookworm-slim AS build
 RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
-
-# FFmpeg + runtime OS deps only.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg ca-certificates \
+WORKDIR /repo
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-ENV NODE_ENV=production
-ENV KAYAN_ENV_FILE=/dev/null
-
-# Manifests first (better cache)
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY artifacts/api-server/package.json       artifacts/api-server/
 COPY artifacts/studio/package.json           artifacts/studio/
@@ -23,20 +14,32 @@ COPY lib/api-spec/package.json               lib/api-spec/
 COPY lib/api-zod/package.json                lib/api-zod/
 COPY lib/db/package.json                     lib/db/
 COPY scripts/package.json                    scripts/
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm --dir artifacts/api-server run build
 
-# Install prod deps only.
+FROM node:22.22.1-bookworm-slim AS runtime
+RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
+WORKDIR /app
+ENV NODE_ENV=production
+ENV KAYAN_ENV_FILE=/dev/null
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY artifacts/api-server/package.json       artifacts/api-server/
+COPY artifacts/studio/package.json           artifacts/studio/
+COPY artifacts/mockup-sandbox/package.json   artifacts/mockup-sandbox/
+COPY lib/api-client-react/package.json       lib/api-client-react/
+COPY lib/api-spec/package.json               lib/api-spec/
+COPY lib/api-zod/package.json                lib/api-zod/
+COPY lib/db/package.json                     lib/db/
+COPY scripts/package.json                    scripts/
 RUN pnpm install --frozen-lockfile --prod
-
-# Copy prebuilt dist (no compile step).
-COPY artifacts/api-server/dist ./artifacts/api-server/dist
-
-# Entrypoints.
+COPY --from=build /repo/artifacts/api-server/dist ./artifacts/api-server/dist
 COPY artifacts/api-server/certs ./artifacts/api-server/certs
 COPY entrypoint.production-worker.sh ./entrypoint.production-worker.sh
 COPY entrypoint.queue-worker.sh      ./entrypoint.queue-worker.sh
-
 RUN mkdir -p uploads/audio uploads/voice uploads/temp \
  && chmod +x entrypoint.*.sh && chown -R node:node /app
-
 USER node
 CMD ["/app/entrypoint.production-worker.sh"]

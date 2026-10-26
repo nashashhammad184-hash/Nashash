@@ -127,4 +127,26 @@ router.delete("/:id/actors/:actorId", requireProductionAuth, async (req: Request
   }
 });
 
+// KAYAN-AWS-EXIT-24: bare DELETE /:id was missing; cascade-deletes related rows via FK.
+router.delete("/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "معرف المشروع غير صالح." });
+    return;
+  }
+  try {
+    const deleted = await db
+      .delete(projectsTable)
+      .where(eq(projectsTable.id, projectId))
+      .returning({ id: projectsTable.id });
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "المشروع غير موجود." });
+      return;
+    }
+    res.status(204).end();
+  } catch (err: any) {
+    res.status(500).json({ error: "فشل حذف المشروع: " + err.message });
+  }
+});
+
 export default router;

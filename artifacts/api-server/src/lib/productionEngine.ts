@@ -58,6 +58,9 @@ export interface ProductionJob {
   output?: Record<string, unknown> | null;
   videoUrl?: string | null;
   error?: string | null;
+  // KAYAN-CINEMA-07: explicit SUBMIT_UNCERTAIN flag derived from error_message.
+  // Backwards compat: existing clients relying on error prefix continue to work.
+  submitUncertain?: boolean;
   retryCount: number;
   maxRetries: number;
   createdAt: Date;
@@ -105,6 +108,15 @@ function makeJobId(): string {
   return `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+// KAYAN-CINEMA-07: single source of truth for SUBMIT_UNCERTAIN detection.
+// Matches both the runtime path (productionEngine.ts:562) and the boot
+// recovery path (productionEngine.ts:707) which both use the
+// "SUBMIT_UNCERTAIN" prefix. Case-insensitive to be safe.
+export function isSubmitUncertainError(err: string | null | undefined): boolean {
+  if (!err) return false;
+  return /submit_uncertain/i.test(err);
+}
+
 function rowToJob(row: any): ProductionJob {
   return {
     id: row.id,
@@ -119,6 +131,7 @@ function rowToJob(row: any): ProductionJob {
     output: (row.output ?? null) as Record<string, unknown> | null,
     videoUrl: row.videoUrl ?? null,
     error: row.errorMessage ?? null,
+    submitUncertain: isSubmitUncertainError(row.errorMessage),
     retryCount: row.retryCount ?? 0,
     maxRetries: row.maxRetries ?? 3,
     createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
@@ -139,28 +152,59 @@ function rowToJob(row: any): ProductionJob {
 //   - NO_RETRY_ACCEPTED → provider already accepted a job (providerJobId set)
 //                         before the failure; NEVER blindly re-submit.
 //   - RETRY_LIMITED  → transient error BEFORE provider acceptance.
-export type RetryDecision = 'NO_RETRY' | 'NO_RETRY_ACCEPTED' | 'RETRY_LIMITED';
+export type RetryDecision = 'NO_RETRY' | 'NO_RETRY_ACCEPTED' | 'RETRY_LIMITED' | 'SUBMIT_UNCERTAIN';
 
+/**
+ * KAYAN-CINEMA-03D: retry decision classifier.
+ *
+ * Priority order matters:
+ *   1. explicit SUBMIT_UNCERTAIN → never retry (paid request may have landed).
+ *   2. providerJobId in DB → RETRY_LIMITED (safe: resume poll, no new submit).
+ *   3. uncertain patterns (timeout/5xx/network during submit) → SUBMIT_UNCERTAIN.
+ *   4. pre-submit validation/auth/billing patterns → NO_RETRY.
+ *   5. default (e.g. 429 rate-limit pre-submit) → RETRY_LIMITED.
+ */
 export function classifyRetry(
   errMsg: string,
   ctx: { providerJobId?: string | null; type: string },
 ): RetryDecision {
   const m = (errMsg || '').toLowerCase();
+
+  // 1. Explicit SUBMIT_UNCERTAIN (from externalVideoProvider when persist failed after submit)
+  if (m.includes('submit_uncertain')) return 'SUBMIT_UNCERTAIN';
+
+  // 2. providerJobId already in DB → never submit again; retry = resume poll
   if (ctx.providerJobId && ctx.providerJobId.trim().length > 0) {
-    return 'NO_RETRY_ACCEPTED';
+    return 'RETRY_LIMITED';
   }
+
+  // 3. No providerJobId → distinguish "definitely didn't reach provider" from "unknown"
+  const uncertainPatterns = [
+    'timeout', 'etimedout', 'econnreset', 'econnrefused',
+    'econnaborted', 'abort', 'network error', 'fetch failed',
+    'socket hang up', 'und_err',
+    'http 500', 'http 502', 'http 503', 'http 504',
+  ];
+  for (const pat of uncertainPatterns) {
+    if (m.includes(pat)) return 'SUBMIT_UNCERTAIN';
+  }
+
+  // 4. Pre-submit failures — safe to NOT retry
   const noRetryPatterns = [
     'requires ', 'not configured', 'not implemented', 'is not implemented',
     'open_dependency', 'invalid', 'validation', 'schema', 'unsupported',
     'not found', 'missing', 'empty', 'out of range', 'exceeds', 'violates',
     'no real audio', 'silent', 'forbidden',
+    'unauthorized', 'billing', 'invalid_api_key',
+    'http 400', 'http 401', 'http 403', 'http 402',
   ];
   for (const pat of noRetryPatterns) {
     if (m.includes(pat)) return 'NO_RETRY';
   }
+
+  // 5. Default (e.g. 429 pre-submit rate limit) — retry safe
   return 'RETRY_LIMITED';
 }
-
 export interface CreateProductionJobOptions {
   /** KAYAN-TASK-32: id of the parent FULL_PIPELINE run (if any). */
   parentRunId?: string;
@@ -364,9 +408,18 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
             err.code = "VIDEO_I2V_REQUIRED";
             throw err;
           }
+          // KAYAN-CINEMA-01: do NOT pass queueJobId — it expects a gpu_jobs UUID,
+          // but jobId here is production_pipeline.id. The provider request id
+          // is persisted via onSubmitted below.
+          // KAYAN-CINEMA-03D: onSubmitted persists providerJobId immediately
+          // after WaveSpeed accepts, BEFORE polling. resumeProviderJobId
+          // (when set by boot recovery) lets us skip submit and resume polling.
           const ext = await runExternalVideoJob({
             payload: job.payload,
-            queueJobId: jobId,
+            resumeProviderJobId: job.providerJobId ?? undefined,
+            onSubmitted: async (qid: string) => {
+              await setStatus(jobId, "processing", { providerJobId: qid });
+            },
           });
           // Map VideoProviderResult → the KayanGpuResult shape used below.
           const extVideoPath = ext.mp4_path;
@@ -376,8 +429,22 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
           }
           const extSt = fs.statSync(extVideoPath);
           if (!extSt.isFile() || extSt.size === 0) throw new Error(`VIDEO_GEN (external) output empty: ${extVideoPath}`);
-          output = { videoPath: extVideoPath, videoUrl: extVideoUrl };
-          videoUrl = extVideoUrl;
+          // KAYAN-CINEMA-08: do NOT persist here. runExternalVideoJob already
+          // persisted the file and returned storageKey / remote_path. A second
+          // persist would issue a duplicate PUT to the storage provider.
+          if (!ext.remote_path) {
+            throw new Error(`VIDEO_GEN (external): missing storage URL from provider (${extVideoPath})`);
+          }
+          logger.info(
+            { jobId, key: ext.storageKey, sizeBytes: ext.sizeBytes, url: ext.remote_path },
+            "VIDEO_GEN (external) persisted to storage (via provider)",
+          );
+          output = {
+            videoPath: extVideoPath,
+            videoUrl: ext.remote_path,
+            storageKey: ext.storageKey,
+          };
+          videoUrl = ext.remote_path;
           providerJobId = ext.worker_jid;
           break;
         }
@@ -499,6 +566,33 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
     // KAYAN-TASK-16 — classify before retrying. Never duplicate GPU work.
     const priorProviderJobId = current?.providerJobId ?? null;
     const decision = classifyRetry(msg, { providerJobId: priorProviderJobId, type: job.type });
+
+    // KAYAN-CINEMA-03D: SUBMIT_UNCERTAIN — provider may have accepted the paid
+    // request but we can't prove it. NEVER retry automatically; surface to
+    // operator with clear diagnostic. Do NOT set retry_count in a way that
+    // boot recovery would flip it back to pending.
+    if (decision === "SUBMIT_UNCERTAIN") {
+      const uncertainMsg =
+        `SUBMIT_UNCERTAIN: ambiguous submit state (may have been charged). ` +
+        `Manual check required via WaveSpeed dashboard. Original error: ${msg}`;
+      await setStatus(jobId, "failed", {
+        progress: 0,
+        completedAt: new Date(),
+        errorMessage: uncertainMsg,
+      });
+      if (job.payload.taskId && typeof job.payload.taskId === "number") {
+        try {
+          await db.update(productionTasksTable).set({ status: "failed" })
+            .where(eq(productionTasksTable.id, job.payload.taskId));
+        } catch {}
+      }
+      logger.error(
+        { jobId, decision, priorProviderJobId, err: msg, submitUncertain: true },
+        "Production job SUBMIT_UNCERTAIN — manual intervention required",
+      );
+      return job;
+    }
+
     const shouldRetry = decision === "RETRY_LIMITED" && retries <= maxRetries;
 
     if (shouldRetry) {
@@ -614,9 +708,40 @@ export function startProductionWorker(pollIntervalMs = 5000): void {
       for (const r of stuck) {
         const retries = (r.retryCount ?? 0) + 1;
         const maxRetries = r.maxRetries ?? 3;
+        const hasProviderJobId = !!(r.providerJobId && r.providerJobId.trim().length > 0);
+        const isExternalVideo = r.type === "VIDEO_GEN" &&
+          ((process.env.VIDEO_PROVIDER || "kayangpu").toLowerCase() === "external");
+
+        // KAYAN-CINEMA-03D Case B: external VIDEO_GEN without providerJobId
+        // might have been submitted. Refuse to reset to pending; mark failed.
+        if (isExternalVideo && !hasProviderJobId) {
+          await db.update(productionPipeline)
+            .set({
+              status: "failed",
+              errorMessage: "SUBMIT_UNCERTAIN (recovery): worker restart during external VIDEO_GEN before providerJobId was persisted. Manual check required.",
+              completedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(productionPipeline.id, r.id));
+          logger.error(
+            { jobId: r.id, type: r.type, retryCount: r.retryCount },
+            "Boot recovery: SUBMIT_UNCERTAIN for external VIDEO_GEN (no providerJobId)",
+          );
+          continue;
+        }
+
+        // KAYAN-CINEMA-03D Case A (providerJobId set) and Case C (internal) → safe pending
         if (retries <= maxRetries) {
           await db.update(productionPipeline)
-            .set({ status: "pending", progress: 0, retryCount: retries, updatedAt: new Date(), errorMessage: "recovered: worker restart" })
+            .set({
+              status: "pending",
+              progress: 0,
+              retryCount: retries,
+              updatedAt: new Date(),
+              errorMessage: hasProviderJobId
+                ? "recovered: worker restart (will resume poll with existing providerJobId)"
+                : "recovered: worker restart",
+            })
             .where(eq(productionPipeline.id, r.id));
         } else {
           await db.update(productionPipeline)
@@ -624,6 +749,7 @@ export function startProductionWorker(pollIntervalMs = 5000): void {
             .where(eq(productionPipeline.id, r.id));
         }
       }
+
       if (stuck.length > 0) logger.info({ recovered: stuck.length }, "production engine boot recovery");
     } catch (e) {
       logger.warn({ err: e }, "production engine boot recovery failed");

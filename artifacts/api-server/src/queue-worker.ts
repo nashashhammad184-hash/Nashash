@@ -133,7 +133,7 @@ async function runVideoJob(job) {
   const p = job.payload || {};
   const VIDEO_URL = getVideoUrl();
   const { status, json } = await httpJson('POST', `${VIDEO_URL}/jobs/video`, p, 180_000);
-  if (status !== 200 && status !== 202) throw new Error(`video submit HTTP ${status}: ${JSON.stringify(json)}`);
+  if (status !== 200 && status !== 202) { const err: any = new Error(`video submit HTTP ${status}: ${JSON.stringify(json)}`); err.httpStatus = status; throw err; }
   const jid = json?.job_id || json?.id;
   if (!jid) throw new Error(`video: no job_id: ${JSON.stringify(json)}`);
 
@@ -177,7 +177,7 @@ async function runLlmJob(job) {
   // Case 2: raw LLM job — direct call to 8082
   const LLM_URL = getLlmUrl();
   const { status, json } = await httpJson('POST', `${LLM_URL}/jobs/llm`, p, 30_000);
-  if (status !== 200 && status !== 202) throw new Error(`llm submit HTTP ${status}: ${JSON.stringify(json)}`);
+  if (status !== 200 && status !== 202) { const err: any = new Error(`llm submit HTTP ${status}: ${JSON.stringify(json)}`); err.httpStatus = status; throw err; }
   const jid = json?.job_id || json?.id;
   if (!jid) throw new Error(`llm: no job_id: ${JSON.stringify(json)}`);
 
@@ -222,7 +222,7 @@ async function runLipSyncJob(job) {
     throw new Error(`lipsync: missing video_path/audio_path in payload`);
   }
   const { status, json } = await httpJson('POST', `${LIPSYNC_URL}/jobs/lipsync`, { video_path, audio_path }, 60_000);
-  if (status !== 200 && status !== 202) throw new Error(`lipsync submit HTTP ${status}: ${JSON.stringify(json)}`);
+  if (status !== 200 && status !== 202) { const err: any = new Error(`lipsync submit HTTP ${status}: ${JSON.stringify(json)}`); err.httpStatus = status; throw err; }
   const jid = json?.job_id || json?.id;
   if (!jid) throw new Error(`lipsync: no job_id: ${JSON.stringify(json)}`);
   const done = await pollWorkerJob(LIPSYNC_URL, jid, 3_600_000);

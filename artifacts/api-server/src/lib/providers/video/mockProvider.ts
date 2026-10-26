@@ -17,6 +17,20 @@ const pExec = promisify(execFile);
 
 const jobs = new Map<string, { payload: VideoPayload; createdAt: number }>();
 
+// KAYAN-CINEMA-04: counters for behavioural tests.
+export const mockCounters = {
+  submitCalls: 0,
+  pollCalls: 0,
+  downloadCalls: 0,
+  lastSubmittedPayload: null as VideoPayload | null,
+};
+export function resetMockCounters(): void {
+  mockCounters.submitCalls = 0;
+  mockCounters.pollCalls = 0;
+  mockCounters.downloadCalls = 0;
+  mockCounters.lastSubmittedPayload = null;
+}
+
 export class MockVideoProvider implements VideoProvider {
   readonly name = "mock";
 
@@ -25,6 +39,8 @@ export class MockVideoProvider implements VideoProvider {
   }
 
   async submit(payload: VideoPayload): Promise<{ providerJobId: string }> {
+    mockCounters.submitCalls++;
+    mockCounters.lastSubmittedPayload = { ...payload };
     const id = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     jobs.set(id, { payload, createdAt: Date.now() });
     return { providerJobId: id };
@@ -34,6 +50,7 @@ export class MockVideoProvider implements VideoProvider {
     status: "queued" | "running" | "completed" | "failed" | "cancelled";
     error?: string;
   }> {
+    mockCounters.pollCalls++;
     const j = jobs.get(providerJobId);
     if (!j) return { status: "failed", error: "unknown job" };
     // Complete after 1s to simulate pipeline
@@ -43,6 +60,7 @@ export class MockVideoProvider implements VideoProvider {
   }
 
   async download(providerJobId: string, outputDir: string): Promise<VideoProviderResult> {
+    mockCounters.downloadCalls++;
     const j = jobs.get(providerJobId);
     if (!j) throw new Error("mock: unknown job");
     fs.mkdirSync(outputDir, { recursive: true });

@@ -196,6 +196,7 @@ router.get("/projects/:id/render/jobs", async (req: Request, res: Response): Pro
 });
 
 // KAYAN-GUARD-40: POST /api/render/merge (async job + polling)
+// KAYAN-GUARD-29: POST /api/render/merge (async job + polling)
 router.use("/merge", renderMergeRouter);
 
 export default router;

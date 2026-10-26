@@ -1,4 +1,6 @@
 import { VideoPlayerPanel } from "./video-player-panel";
+import { ProductionJobRow } from "./production-job-row";
+import { ActorAvatar } from "../actor-avatar";
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +14,7 @@ interface ProductionJob {
   status: "pending" | "processing" | "completed" | "failed";
   progress: number;
   error?: string | null;
+  submitUncertain?: boolean;
   retryCount: number;
   output?: any;
 }
@@ -28,6 +31,21 @@ interface ProductionTabProps {
   };
 }
 
+// KAYAN-CINEMA-16: actor linked to project (for reference-image auto-resolution)
+interface ProjectActorLink {
+  id: number;
+  projectId: number;
+  actorId: number;
+  roleName: string;
+  roleType?: string | null;
+}
+interface ActorSummary {
+  id: number;
+  name: string;
+  imageUrl?: string | null;
+  canonicalFaceImagePath?: string | null;
+}
+
 export function ProductionTab({ project }: ProductionTabProps) {
   const projectId = project.id;
   const [jobs, setJobs] = useState<ProductionJob[]>([]);
@@ -37,6 +55,10 @@ export function ProductionTab({ project }: ProductionTabProps) {
   const [voiceText, setVoiceText] = useState("مرحباً بكم في استوديو كيان للإنتاج السينمائي.");
   const [syncVideoUrl, setSyncVideoUrl] = useState("");
   const [syncAudioUrl, setSyncAudioUrl] = useState("");
+  // KAYAN-CINEMA-16: actor selector state
+  const [projectActors, setProjectActors] = useState<ProjectActorLink[]>([]);
+  const [actorById, setActorById] = useState<Record<number, ActorSummary>>({});
+  const [selectedActorId, setSelectedActorId] = useState<number | "">("");
 
   const fetchJobs = async () => {
     if (!projectId) return;
@@ -59,10 +81,50 @@ export function ProductionTab({ project }: ProductionTabProps) {
     return () => clearInterval(interval);
   }, [projectId]);
 
+  // KAYAN-CINEMA-16: load project-linked actors + full actor details on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!projectId) return;
+      try {
+        const [linksRes, actorsRes] = await Promise.all([
+          fetch(`/api/projects/${projectId}/actors`),
+          fetch(`/api/actors`),
+        ]);
+        const linksData = await linksRes.json();
+        const actorsData = await actorsRes.json();
+        if (cancelled) return;
+        const links: ProjectActorLink[] = Array.isArray(linksData)
+          ? linksData
+          : (linksData?.projectActors || linksData?.actors || []);
+        const actors: ActorSummary[] = Array.isArray(actorsData)
+          ? actorsData
+          : (actorsData?.actors || []);
+        const map: Record<number, ActorSummary> = {};
+        for (const a of actors) map[a.id] = a;
+        setProjectActors(links);
+        setActorById(map);
+        // Auto-select if exactly one linked actor.
+        if (links.length === 1 && selectedActorId === "") {
+          setSelectedActorId(links[0].actorId);
+        }
+      } catch {
+        // Non-fatal: actor selector just stays empty.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   const handleStartJob = async (type: string) => {
     setActionLoading(type);
     let payload: Record<string, any> = { type, projectId };
-    if (type === "VIDEO_GEN") payload.prompt = videoPrompt;
+    if (type === "VIDEO_GEN") {
+      payload.prompt = videoPrompt;
+      // KAYAN-CINEMA-16: pass actorId so server auto-resolves reference image.
+      if (selectedActorId !== "") {
+        payload.actorId = selectedActorId;
+      }
+    }
     if (type === "VOICE_GEN") payload.text = voiceText;
     if (type === "LIP_SYNC") {
       if (!syncVideoUrl || !syncAudioUrl) {
@@ -120,6 +182,46 @@ export function ProductionTab({ project }: ProductionTabProps) {
                 className="w-full rounded-md border border-zinc-700 bg-zinc-800 p-2 text-xs text-white"
                 placeholder="ادخل برومبت توليد المشهد البصري..."
               />
+              {projectActors.length > 0 && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-400 font-mono">
+                    الممثل المرجعي (اختياري — يُحل تلقائياً إلى i2v)
+                  </label>
+                  <select
+                    value={selectedActorId}
+                    onChange={(e) => setSelectedActorId(e.target.value ? parseInt(e.target.value, 10) : "")}
+                    className="w-full h-8 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-[11px] text-white"
+                    data-testid="actor-selector"
+                  >
+                    <option value="">— بدون ممثل (t2v) —</option>
+                    {projectActors.map((pa) => {
+                      const actor = actorById[pa.actorId];
+                      const hasRef = !!(actor?.canonicalFaceImagePath || actor?.imageUrl);
+                      return (
+                        <option key={pa.actorId} value={pa.actorId}>
+                          {actor?.name || `Actor #${pa.actorId}`} ({pa.roleName})
+                          {hasRef ? "" : " — لا صورة"}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {selectedActorId !== "" && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="w-8 h-8 rounded-full overflow-hidden border border-emerald-700 shrink-0">
+                        <ActorAvatar
+                          actorId={selectedActorId}
+                          name={actorById[selectedActorId]?.name}
+                          size={32}
+                          className="rounded-full"
+                        />
+                      </div>
+                      <p className="text-[9px] text-emerald-400">
+                        ✓ سيُمرَّر المرجع تلقائياً إلى WaveSpeed (i2v)
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
               <Button
                 onClick={() => handleStartJob("VIDEO_GEN")}
                 disabled={actionLoading === "VIDEO_GEN"}
@@ -208,38 +310,7 @@ export function ProductionTab({ project }: ProductionTabProps) {
                 <p className="text-[11px] text-zinc-500 p-4 text-center">لا توجد مَهمات نشطة في الـ Queue حالياً.</p>
               ) : (
                 jobs.map((job) => (
-                  <div key={job.id} className="p-3 space-y-1.5 text-[11px]">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-zinc-200 uppercase font-mono">{job.type}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono ${
-                        job.status === "completed" ? "bg-green-950 text-green-400 border border-green-900" :
-                        job.status === "failed" ? "bg-red-950 text-red-400 border border-red-900" :
-                        "bg-blue-950 text-blue-400 border border-blue-900"
-                      }`}>
-                        {job.status}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-[9px] text-zinc-500 font-mono">
-                      <span>ID: {job.id}</span>
-                      <span>Retries: {job.retryCount}</span>
-                    </div>
-                    <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-350 ${job.status === "failed" ? "bg-red-600" : job.status === "completed" ? "bg-green-500" : "bg-blue-500"}`}
-                        style={{ width: `${job.progress}%` }}
-                      />
-                    </div>
-                    {job.status === "completed" && job.output && (
-                      <div className="bg-zinc-950 p-1.5 rounded border border-zinc-800 text-[9px] text-zinc-400 break-all font-mono">
-                        المخرج: {job.output.videoUrl || job.output.audioUrl || job.output.syncedVideoUrl}
-                      </div>
-                    )}
-                    {job.status === "failed" && job.error && (
-                      <div className="text-[9px] text-red-400 font-mono flex items-center gap-1">
-                        <AlertCircle className="w-2.5 h-2.5 shrink-0" /> {job.error}
-                      </div>
-                    )}
-                  </div>
+                  <ProductionJobRow key={job.id} job={job} />
                 ))
               )}
             </CardContent>
