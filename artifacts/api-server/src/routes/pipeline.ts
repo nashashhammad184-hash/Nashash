@@ -111,7 +111,7 @@ function isRealAsset(s: unknown): s is string {
   if (typeof s !== "string") return false;
   const t = s.trim();
   if (!t) return false;
-  return /^https?:\/\//i.test(t) || t.startsWith("/uploads/");
+  return /^https?:\/\//i.test(t) || t.startsWith("/uploads/") || t.startsWith("/api/storage/supabase/") || t.startsWith("/api/storage/r2/");
 }
 
 function assertFile(p: string, label: string): void {
