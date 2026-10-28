@@ -190,7 +190,7 @@ export default function ActorsPage() {
             {filtered.map((actor) => {
               const _imgUrl = actor.imageUrl as string | null | undefined;
               const _actorId = actor.id as number;
-              const image = (_imgUrl && (_imgUrl.startsWith("/uploads/") || _imgUrl.startsWith("/api/storage/"))) ? "/api/actors/" + _actorId + "/image" : (_imgUrl || placeholder(_actorId));
+              const image = _imgUrl && _imgUrl.startsWith("/uploads/") ? "/api/storage/supabase/" + _imgUrl.replace("/uploads/", "") : (_imgUrl || placeholder(_actorId));
               return (
                 <Card key={actor.id} className="group overflow-hidden border-white/10 bg-card/40 hover:border-primary/40 transition-all duration-300 relative">
                   <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
