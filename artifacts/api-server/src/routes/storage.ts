@@ -403,4 +403,25 @@ router.post("/storage/upload", requireProductionAuth, async (req: Request, res: 
   res.status(r.status).json(r.json);
 });
 
+router.post("/storage/upload-video", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const raw = (req.body || {}).contentBase64;
+    if (typeof raw !== "string" || raw.length === 0) { res.status(400).json({ error: "contentBase64 is required" }); return; }
+    if (raw.length % 4 !== 0 || raw.length > 7 * 1024 * 1024) { res.status(400).json({ error: "bad payload" }); return; }
+    const k = raw.trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(k)) { res.status(400).json({ error: "invalid base64" }); return; }
+    const buf = Buffer.from(k, "base64");
+    if (buf.length < 10 * 1024 || buf.length > 5 * 1024 * 1024) { res.status(400).json({ error: "video size out of range (10KB-5MB)" }); return; }
+    if (buf.length < 12 || buf[4] !== 0x66 || buf[5] !== 0x74 || buf[6] !== 0x79 || buf[7] !== 0x70) { res.status(400).json({ error: "not a valid MP4 (missing ftyp box)" }); return; }
+    const provider = getStorage();
+    if (provider.name !== "supabase") { res.status(400).json({ error: "upload requires STORAGE_PROVIDER=supabase" }); return; }
+    const key = "videos/" + randomUUID() + ".mp4";
+    await provider.write(key, buf, "video/mp4");
+    res.status(201).json({ assetUrl: "/api/storage/supabase/" + key, key });
+  } catch (err: any) {
+    logger.error({ err: err && err.message }, "storage/upload-video: failed");
+    res.status(500).json({ error: "video upload failed" });
+  }
+});
+
 export default router;
