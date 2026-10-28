@@ -100,7 +100,7 @@ Lighting & Palette: ${worldBible?.lighting || "Cinematic"}, ${worldBible?.colorP
 - End the JSON cleanly after the last scene.
 - Use only standard punctuation (. , ? ! : ; -).`;
 
-  const userPrompt = `IDEA:\n${idea}\n\n${characterBibleContext}\n\n${worldBibleContext}\n\n${continuityPrompt}\n\n${constraints}`;
+  const userPrompt = `IDEA:\n${idea}\n\n${characterBibleContext}\n\n${worldBibleContext}\n\n${continuityPrompt}\n\n${constraints}\n\n[REQUIRED JSON SHAPE - follow EXACTLY]:\n${JSON.stringify(schemaJson, null, 2)}\n\nReturn ONLY the JSON object. No markdown fences. No explanation. Every required field must be present.`;
 
   const provider = getScriptProvider();
   const res = await provider.generate({
