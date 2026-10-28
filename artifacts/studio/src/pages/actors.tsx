@@ -33,6 +33,47 @@ export default function ActorsPage() {
   const [age, setAge] = useState("30");
   const [style, setStyle] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  async function handleFileUpload(file: File) {
+    setUploadError("");
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      setUploadError("PNG أو JPEG فقط");
+      return;
+    }
+    if (file.size < 10 * 1024 || file.size > 5 * 1024 * 1024) {
+      setUploadError("حجم الصورة يجب أن يكون بين 10KB و5MB");
+      return;
+    }
+    setUploading(true);
+    try {
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(",")[1] || "");
+        r.onerror = () => reject(new Error("read failed"));
+        r.readAsDataURL(file);
+      });
+      if (!b64) { setUploadError("تعذر قراءة الملف"); return; }
+      const res = await fetch("/api/storage/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentBase64: b64 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.assetUrl) {
+        setUploadError(data.error || "فشل رفع الصورة");
+        return;
+      }
+      setImageUrl(data.assetUrl);
+      toast.success("تم رفع الصورة — اضغط حفظ");
+    } catch {
+      setUploadError("فشل الاتصال بالخادم");
+    } finally {
+      setUploading(false);
+    }
+  }
+
 
   const types = useMemo(() => ["الكل", ...Array.from(new Set((actors ?? []).map(a => a.type)))], [actors]);
 
@@ -75,12 +116,14 @@ export default function ActorsPage() {
 
   const openCreateDialog = () => {
     setName(""); setActorType("عربي"); setAge("30"); setStyle(""); setImageUrl("");
+    setUploadError("");
     setIsCreateOpen(true);
   };
 
   const openEditDialog = (actor: any) => {
     setSelectedActor(actor);
     setName(actor.name); setActorType(actor.type); setAge(String(actor.age)); setStyle(actor.style); setImageUrl(actor.imageUrl || "");
+    setUploadError("");
     setIsEditOpen(true);
   };
 
@@ -145,7 +188,9 @@ export default function ActorsPage() {
         {!isError && filtered.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map((actor) => {
-              const image = actor.imageUrl || placeholder(actor.id);
+              const _imgUrl = actor.imageUrl as string | null | undefined;
+              const _actorId = actor.id as number;
+              const image = (_imgUrl && (_imgUrl.startsWith("/uploads/") || _imgUrl.startsWith("/api/storage/"))) ? "/api/actors/" + _actorId + "/image" : (_imgUrl || placeholder(_actorId));
               return (
                 <Card key={actor.id} className="group overflow-hidden border-white/10 bg-card/40 hover:border-primary/40 transition-all duration-300 relative">
                   <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
@@ -182,8 +227,15 @@ export default function ActorsPage() {
                 <div><Label>العمر</Label><Input type="number" value={age} onChange={e => setAge(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
               </div>
               <div><Label>رابط الصورة</Label><Input value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="https://example.com" /></div>
+              <div>
+                <Label>رفع صورة من الجهاز (PNG/JPEG، 10KB-5MB)</Label>
+                <input type="file" accept="image/png,image/jpeg" disabled={uploading} onChange={e => { const f = e.target.files?.[0]; if (f) void handleFileUpload(f); }} className="block w-full text-xs text-white bg-zinc-800 border border-zinc-700 rounded-md p-2" />
+                {uploading && <p className="text-xs text-blue-400 mt-1">جارٍ الرفع...</p>}
+                {uploadError && <p className="text-xs text-red-400 mt-1">{uploadError}</p>}
+                {imageUrl && !(imageUrl.startsWith("/uploads/") && !selectedActor) && <img src={imageUrl.startsWith("/uploads/") || imageUrl.startsWith("/api/storage/") ? (selectedActor ? "/api/actors/" + selectedActor.id + "/image" : imageUrl) : imageUrl} alt="preview" className="mt-2 h-20 w-20 object-cover rounded-md border border-zinc-700" onError={e => { (e.currentTarget as HTMLImageElement).src = placeholder(0); }} />}
+              </div>
               <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="صوت عميق، نظرات غامضة، درامي حاد..." required /></div>
-              <Button type="submit" disabled={createMutation.isPending} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{createMutation.isPending ? "جاري الحفظ..." : "بدء تسجيل الممثل"}</Button>
+              <Button type="submit" disabled={createMutation.isPending || uploading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{createMutation.isPending ? "جاري الحفظ..." : "بدء تسجيل الممثل"}</Button>
             </form>
           </DialogContent>
         </Dialog>
@@ -199,8 +251,15 @@ export default function ActorsPage() {
                 <div><Label>العمر</Label><Input type="number" value={age} onChange={e => setAge(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
               </div>
               <div><Label>رابط الصورة</Label><Input value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" /></div>
+              <div>
+                <Label>رفع صورة من الجهاز (PNG/JPEG، 10KB-5MB)</Label>
+                <input type="file" accept="image/png,image/jpeg" disabled={uploading} onChange={e => { const f = e.target.files?.[0]; if (f) void handleFileUpload(f); }} className="block w-full text-xs text-white bg-zinc-800 border border-zinc-700 rounded-md p-2" />
+                {uploading && <p className="text-xs text-blue-400 mt-1">جارٍ الرفع...</p>}
+                {uploadError && <p className="text-xs text-red-400 mt-1">{uploadError}</p>}
+                {imageUrl && !(imageUrl.startsWith("/uploads/") && !selectedActor) && <img src={imageUrl.startsWith("/uploads/") || imageUrl.startsWith("/api/storage/") ? (selectedActor ? "/api/actors/" + selectedActor.id + "/image" : imageUrl) : imageUrl} alt="preview" className="mt-2 h-20 w-20 object-cover rounded-md border border-zinc-700" onError={e => { (e.currentTarget as HTMLImageElement).src = placeholder(0); }} />}
+              </div>
               <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
-              <Button type="submit" disabled={editMutation.isPending} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{editMutation.isPending ? "جاري التحديث..." : "تأكيد وحفظ التغييرات"}</Button>
+              <Button type="submit" disabled={editMutation.isPending || uploading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{editMutation.isPending ? "جاري التحديث..." : "تأكيد وحفظ التغييرات"}</Button>
             </form>
           </DialogContent>
         </Dialog>

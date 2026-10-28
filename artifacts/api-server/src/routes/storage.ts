@@ -15,6 +15,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { getStorage, assertSafeKey, StorageError } from "../lib/storage/index";
 import { logger } from "../lib/logger";
+import { randomUUID } from "node:crypto";
+import { detectImageMime } from "../lib/actorReference";
 // KAYAN-TASK-79: signed URL endpoint requires auth.
 import { requireProductionAuth } from "../lib/securityMiddleware";
 
@@ -315,6 +317,90 @@ router.get("/storage/supabase/{*key}", requireProductionAuth, async (req: Reques
 
   res.setHeader("Content-Length", String(total));
   res.status(200).end(buf);
+});
+
+// ================================================================
+// KAYAN-6: pure, testable upload logic (no I/O, no globals).
+// ================================================================
+export interface UploadValidationOk {
+  ok: true;
+  buffer: Buffer;
+  mime: "image/png" | "image/jpeg";
+  ext: "png" | "jpg";
+}
+export interface UploadValidationErr {
+  ok: false;
+  status: number;
+  error: string;
+}
+
+export function validateUploadPayload(
+  body: { contentBase64?: unknown } | null | undefined,
+): UploadValidationOk | UploadValidationErr {
+  const raw = body && body.contentBase64;
+  if (typeof raw !== "string" || raw.length === 0) {
+    return { ok: false, status: 400, error: "contentBase64 is required" };
+  }
+  const c = raw;
+  if (c.length % 4 !== 0 || c.length > 7340032) {
+    return { ok: false, status: 400, error: "bad payload" };
+  }
+  const k = c.trim();
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(k)) {
+    return { ok: false, status: 400, error: "invalid base64" };
+  }
+  const buf = Buffer.from(k, "base64");
+  if (buf.length < 10240 || buf.length > 5242880) {
+    return { ok: false, status: 400, error: "size out of range" };
+  }
+  const mime = detectImageMime(buf);
+  if (!mime) {
+    return { ok: false, status: 400, error: "not png or jpeg" };
+  }
+  return { ok: true, buffer: buf, mime, ext: mime === "image/png" ? "png" : "jpg" };
+}
+
+export interface UploadResult {
+  status: number;
+  json: Record<string, unknown>;
+}
+export interface UploadDeps {
+  providerName: string;
+  write: (key: string, buf: Buffer, mime: string) => Promise<string>;
+  makeKey: (ext: "png" | "jpg") => string;
+}
+
+export async function processUpload(
+  body: { contentBase64?: unknown } | null | undefined,
+  deps: UploadDeps,
+): Promise<UploadResult> {
+  const v = validateUploadPayload(body);
+  if (v.ok === false) {
+    return { status: v.status, json: { error: v.error } };
+  }
+  if (deps.providerName !== "supabase") {
+    return { status: 400, json: { error: "requires supabase provider" } };
+  }
+  try {
+    const key = deps.makeKey(v.ext);
+    await deps.write(key, v.buffer, v.mime);
+    return { status: 201, json: { assetUrl: "/uploads/" + key, key } };
+  } catch {
+    return { status: 500, json: { error: "upload failed" } };
+  }
+}
+
+router.post("/storage/upload", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const p = getStorage();
+  const r = await processUpload(req.body || {}, {
+    providerName: p.name,
+    write: (key, buf, mime) => p.write(key, buf, mime),
+    makeKey: (ext) => "actor-refs/" + randomUUID() + "." + ext,
+  });
+  if (r.status >= 500) {
+    logger.error({ json: r.json }, "storage/upload: failed");
+  }
+  res.status(r.status).json(r.json);
 });
 
 export default router;
