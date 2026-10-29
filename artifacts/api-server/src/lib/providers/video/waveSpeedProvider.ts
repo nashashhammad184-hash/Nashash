@@ -77,6 +77,15 @@ export class WaveSpeedVideoProvider implements VideoProvider {
       throw new Error("i2v requires referenceImageBase64");
     }
 
+    // KAYAN-7.1: defense-in-depth cost guard. The external wrapper already
+    // enforces MAX_VIDEO_COST_USD, but a direct caller of this provider must
+    // not bypass it. Single source of truth: this.estimateCost() — no duplicate math.
+    const __limit = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
+    const __est = await this.estimateCost(payload);
+    if (__est > __limit) {
+      throw new Error(`COST_EXCEEDED: estimated $${__est.toFixed(3)} > limit $${__limit}`);
+    }
+
     const body: Record<string, unknown> = {
       prompt: payload.prompt,
       image: payload.referenceImageBase64,

@@ -1,6 +1,9 @@
 import './loadEnv';
 import { assertEnvOrThrow } from './lib/validateEnv';
 
+// KAYAN-7.1: assign role unconditionally — health.ts reads this at request time.
+process.env.SERVICE_ROLE = "queue-worker";
+
 // KAYAN-7: fail-fast on missing env for queue-worker role.
 assertEnvOrThrow('queue-worker');
 import { runScriptJob } from './lib/services/ScriptJobRunner';

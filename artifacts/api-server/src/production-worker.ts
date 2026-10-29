@@ -15,6 +15,9 @@
 import "./loadEnv";
 import { assertEnvOrThrow } from './lib/validateEnv';
 
+// KAYAN-7.1: assign role unconditionally — health.ts reads this at request time.
+process.env.SERVICE_ROLE = "production-worker";
+
 // KAYAN-7: fail-fast on missing env for production-worker role.
 assertEnvOrThrow('production-worker');
 import { startProductionWorker, stopProductionWorker } from "./lib/productionEngine";

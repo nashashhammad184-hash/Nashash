@@ -102,6 +102,17 @@ function checkProvider(role: ServiceRole, errs: string[], warns: string[]): Prov
     }
   }
 
+  // KAYAN-7.1: warn on known-dead providers when the role actually uses them.
+  // A "dead" provider is env-configured (ready:true) but unreachable (GPU tunnel /
+  // GPU LLM both dead since 2026-10-18). Warning ≠ ready:false — env IS set,
+  // the provider just won't produce output.
+  if (role === "production-worker" && video === "kayangpu") {
+    warns.push("VIDEO_PROVIDER_DEAD: kayangpu (GPU tunnel unreachable)");
+  }
+  if (role === "queue-worker" && (script === "local" || script === "")) {
+    warns.push("SCRIPT_PROVIDER_DEAD: local (GPU LLM unreachable)");
+  }
+
   return { video: videoName, script: script || "local", voice, storage };
 }
 

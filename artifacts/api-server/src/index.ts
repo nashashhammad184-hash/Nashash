@@ -1,6 +1,11 @@
 import "./loadEnv";
 import { assertEnvOrThrow } from "./lib/validateEnv";
 
+// KAYAN-7.1: assign role unconditionally — never rely on env being set manually.
+// health.ts reads SERVICE_ROLE at request time; this guarantees consistency
+// with the assertEnvOrThrow() role below.
+process.env.SERVICE_ROLE = "api";
+
 // KAYAN-7: fail-fast on missing env for this role (api).
 // Throws before Express binds — no silent QUEUED-then-FAILED cycles.
 const __envCheck = assertEnvOrThrow("api");
