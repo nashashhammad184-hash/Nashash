@@ -19,5 +19,11 @@ export interface Shot {
   dialogue?: string | null;
   /** @nullable */
   audioNote?: string | null;
+  /** @nullable */
+  videoUrl?: string | null;
+  /** @nullable */
+  audioUrl?: string | null;
+  /** @nullable */
+  audioStatus?: string | null;
   createdAt: string;
 }

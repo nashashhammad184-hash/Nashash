@@ -214,6 +214,12 @@ export interface Shot {
   dialogue?: string | null;
   /** @nullable */
   audioNote?: string | null;
+  /** @nullable */
+  videoUrl?: string | null;
+  /** @nullable */
+  audioUrl?: string | null;
+  /** @nullable */
+  audioStatus?: string | null;
   createdAt: string;
 }
 
@@ -228,6 +234,19 @@ export interface ShotInput {
   audioNote?: string;
 }
 
+/**
+ * @nullable
+ */
+export type ShotPatchAudioStatus = typeof ShotPatchAudioStatus[keyof typeof ShotPatchAudioStatus] | null;
+
+
+export const ShotPatchAudioStatus = {
+  QUEUED: 'QUEUED',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+} as const;
+
 export interface ShotPatch {
   sceneNumber?: number;
   description?: string;
@@ -235,6 +254,12 @@ export interface ShotPatch {
   durationSeconds?: number;
   dialogue?: string;
   audioNote?: string;
+  /** @nullable */
+  videoUrl?: string | null;
+  /** @nullable */
+  audioUrl?: string | null;
+  /** @nullable */
+  audioStatus?: ShotPatchAudioStatus;
 }
 
 export interface ProductionTask {

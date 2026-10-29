@@ -11,6 +11,15 @@ import {
 
 const router = Router();
 
+// KAYAN-8: URL validation for shots.videoUrl / shots.audioUrl.
+// Single source of truth (no OpenAPI pattern — Orval ignores it).
+// Allowed: null (clear), /uploads/*, /api/storage/*. Rejects data: and https:// external.
+export function isValidStorageUrl(url: string | null | undefined): boolean {
+  if (url === null || url === undefined) return true;
+  if (typeof url !== "string") return false;
+  return url.startsWith("/uploads/") || url.startsWith("/api/storage/");
+}
+
 // 1. GET /api/projects/:id/shots - جلب اللقطات السينمائية للمشروع الصحيح
 router.get("/projects/:id/shots", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = ListProjectShotsParams.safeParse(req.params);
@@ -111,6 +120,38 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
     if (parsed.data.durationSeconds !== undefined) updateData.durationSeconds = parsed.data.durationSeconds;
     if (parsed.data.dialogue !== undefined) updateData.dialogue = parsed.data.dialogue ?? null;
     if (parsed.data.audioNote !== undefined) updateData.audioNote = parsed.data.audioNote ?? null;
+
+    // KAYAN-8: PATCH handler — validate + apply storage URLs and audioStatus.
+    if (parsed.data.videoUrl !== undefined) {
+      if (!isValidStorageUrl(parsed.data.videoUrl)) {
+        res.status(400).json({ error: "INVALID_URL", field: "videoUrl", message: "videoUrl must be null, /uploads/*, or /api/storage/*" });
+        return;
+      }
+      updateData.videoUrl = parsed.data.videoUrl;
+    }
+    if (parsed.data.audioUrl !== undefined) {
+      if (!isValidStorageUrl(parsed.data.audioUrl)) {
+        res.status(400).json({ error: "INVALID_URL", field: "audioUrl", message: "audioUrl must be null, /uploads/*, or /api/storage/*" });
+        return;
+      }
+      updateData.audioUrl = parsed.data.audioUrl;
+    }
+    if (parsed.data.audioStatus !== undefined) {
+      updateData.audioStatus = parsed.data.audioStatus;
+    }
+    // KAYAN-8: soft warning — audioUrl set but audioStatus not COMPLETED.
+    // Not a hard error: pipeline may set FAILED with an audioUrl (recovery scenarios).
+    const willHaveAudioUrl = parsed.data.audioUrl !== undefined ? parsed.data.audioUrl : null;
+    const willHaveStatus = parsed.data.audioStatus !== undefined ? parsed.data.audioStatus : null;
+    if (willHaveAudioUrl !== null && willHaveStatus !== null && willHaveStatus !== "COMPLETED") {
+      console.warn("[shots PATCH] audioUrl set but audioStatus=" + willHaveStatus + " (expected COMPLETED) — allowed (recovery scenario)");
+    }
+
+    // KAYAN-8: reject empty updates (no fields to change → 400, not silent 200).
+    if (Object.keys(updateData).length === 0) {
+      res.status(400).json({ error: "NO_FIELDS_TO_UPDATE", message: "Request body contains no updatable fields" });
+      return;
+    }
 
     const [shot] = await db
       .update(shotsTable)

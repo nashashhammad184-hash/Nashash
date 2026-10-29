@@ -28,6 +28,7 @@ export * from './scriptGenerateInput';
 export * from './shot';
 export * from './shotInput';
 export * from './shotPatch';
+export * from './shotPatchAudioStatus';
 export * from './streamVideoParams';
 export * from './studioStats';
 export * from './taskInput';

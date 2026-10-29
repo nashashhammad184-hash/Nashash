@@ -5,6 +5,7 @@
  * AI Production Studio API
  * OpenAPI spec version: 0.1.0
  */
+import type { ShotPatchAudioStatus } from './shotPatchAudioStatus';
 
 export interface ShotPatch {
   sceneNumber?: number;
@@ -13,4 +14,10 @@ export interface ShotPatch {
   durationSeconds?: number;
   dialogue?: string;
   audioNote?: string;
+  /** @nullable */
+  videoUrl?: string | null;
+  /** @nullable */
+  audioUrl?: string | null;
+  /** @nullable */
+  audioStatus?: ShotPatchAudioStatus;
 }

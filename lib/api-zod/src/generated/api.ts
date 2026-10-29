@@ -291,6 +291,9 @@ export const ListProjectShotsResponseItem = zod.object({
   "durationSeconds": zod.number(),
   "dialogue": zod.string().nullish(),
   "audioNote": zod.string().nullish(),
+  "videoUrl": zod.string().nullish(),
+  "audioUrl": zod.string().nullish(),
+  "audioStatus": zod.string().nullish(),
   "createdAt": zod.string()
 })
 export const ListProjectShotsResponse = zod.array(ListProjectShotsResponseItem)
@@ -475,6 +478,9 @@ export const CreateShotResponse = zod.object({
   "durationSeconds": zod.number(),
   "dialogue": zod.string().nullish(),
   "audioNote": zod.string().nullish(),
+  "videoUrl": zod.string().nullish(),
+  "audioUrl": zod.string().nullish(),
+  "audioStatus": zod.string().nullish(),
   "createdAt": zod.string()
 })
 
@@ -492,7 +498,10 @@ export const UpdateShotBody = zod.object({
   "cameraMovement": zod.string().optional(),
   "durationSeconds": zod.number().optional(),
   "dialogue": zod.string().optional(),
-  "audioNote": zod.string().optional()
+  "audioNote": zod.string().optional(),
+  "videoUrl": zod.string().nullish(),
+  "audioUrl": zod.string().nullish(),
+  "audioStatus": zod.union([zod.literal('QUEUED'),zod.literal('PROCESSING'),zod.literal('COMPLETED'),zod.literal('FAILED'),zod.literal(null)]).nullish()
 })
 
 export const UpdateShotResponse = zod.object({
@@ -505,6 +514,9 @@ export const UpdateShotResponse = zod.object({
   "durationSeconds": zod.number(),
   "dialogue": zod.string().nullish(),
   "audioNote": zod.string().nullish(),
+  "videoUrl": zod.string().nullish(),
+  "audioUrl": zod.string().nullish(),
+  "audioStatus": zod.string().nullish(),
   "createdAt": zod.string()
 })
 

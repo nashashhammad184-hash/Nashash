@@ -917,6 +917,12 @@ components:
           type: ["string", "null"]
         audioNote:
           type: ["string", "null"]
+        videoUrl:
+          type: ["string", "null"]
+        audioUrl:
+          type: ["string", "null"]
+        audioStatus:
+          type: ["string", "null"]
         createdAt:
           type: string
 
@@ -956,6 +962,13 @@ components:
           type: string
         audioNote:
           type: string
+        videoUrl:
+          type: ["string", "null"]
+        audioUrl:
+          type: ["string", "null"]
+        audioStatus:
+          type: ["string", "null"]
+          enum: [QUEUED, PROCESSING, COMPLETED, FAILED]
 
     ProductionTask:
       type: object
