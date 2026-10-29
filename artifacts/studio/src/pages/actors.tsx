@@ -35,6 +35,9 @@ export default function ActorsPage() {
   const [imageUrl, setImageUrl] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [projects, setProjects] = useState<{ id: number; title: string }[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   async function handleFileUpload(file: File) {
     setUploadError("");
     if (!["image/png", "image/jpeg"].includes(file.type)) {
@@ -114,10 +117,19 @@ export default function ActorsPage() {
     onError: () => toast.error("تعذر حذف سجل الممثل.")
   });
 
-  const openCreateDialog = () => {
+  const openCreateDialog = async () => {
     setName(""); setActorType("عربي"); setAge("30"); setStyle(""); setImageUrl("");
     setUploadError("");
+    setSelectedProjectId(null);
     setIsCreateOpen(true);
+    if (projects.length === 0) {
+      setLoadingProjects(true);
+      try {
+        const r = await axios.get("/api/projects");
+        setProjects(Array.isArray(r.data) ? r.data.map((x: any) => ({ id: x.id, title: x.title })) : []);
+      } catch { /* ignore — dropdown stays empty */ }
+      finally { setLoadingProjects(false); }
+    }
   };
 
   const openEditDialog = (actor: any) => {
@@ -130,7 +142,9 @@ export default function ActorsPage() {
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !style.trim()) return;
-    createMutation.mutate({ name, type: actorType, age: parseInt(age, 10), style, imageUrl: imageUrl.trim() || null });
+    const payload: any = { name, type: actorType, age: parseInt(age, 10), style, imageUrl: imageUrl.trim() || null };
+    if (selectedProjectId) payload.projectId = selectedProjectId;
+    createMutation.mutate(payload);
   };
 
   const handleEditSubmit = (e: React.FormEvent) => {
@@ -235,6 +249,14 @@ export default function ActorsPage() {
                 {imageUrl && !(imageUrl.startsWith("/uploads/") && !selectedActor) && <img src={imageUrl.startsWith("/uploads/") || imageUrl.startsWith("/api/storage/") ? (selectedActor ? "/api/actors/" + selectedActor.id + "/image" : imageUrl) : imageUrl} alt="preview" className="mt-2 h-20 w-20 object-cover rounded-md border border-zinc-700" onError={e => { (e.currentTarget as HTMLImageElement).src = placeholder(0); }} />}
               </div>
               <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="صوت عميق، نظرات غامضة، درامي حاد..." required /></div>
+              <div>
+                <Label>ربط بمشروع (اختياري)</Label>
+                <select value={selectedProjectId ?? ""} onChange={e => setSelectedProjectId(e.target.value ? Number(e.target.value) : null)} disabled={loadingProjects} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-xs text-white">
+                  <option value="">{loadingProjects ? "جارٍ تحميل المشاريع..." : "بدون ربط بمشروع"}</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+                </select>
+                <p className="text-[10px] text-zinc-500 mt-1">عند الربط، يُضاف الممثل تلقائياً لطاقم المشروع بدور مساعد.</p>
+              </div>
               <Button type="submit" disabled={createMutation.isPending || uploading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{createMutation.isPending ? "جاري الحفظ..." : "بدء تسجيل الممثل"}</Button>
             </form>
           </DialogContent>

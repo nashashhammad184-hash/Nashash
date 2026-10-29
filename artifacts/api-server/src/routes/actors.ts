@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, actorsTable, characterReferencesTable } from "@workspace/db";
+import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
 import { eq } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
@@ -9,6 +9,15 @@ import { requireProductionAuth } from "../lib/securityMiddleware";
 import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
+
+// KAYAN-9a — DI for POST /actors create flow (defaults to real db; tests override)
+const _createActorDeps: { db: any } = { db };
+export function _setActorsCreateDeps(overrides: { db?: any }) {
+  if (overrides.db !== undefined) _createActorDeps.db = overrides.db;
+}
+export function _resetActorsCreateDeps() {
+  _createActorDeps.db = db;
+}
 // KAYAN-TASK-03 — canonical-face consumes GPU; rate limit + auth required.
 const canonicalFaceLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -50,32 +59,32 @@ router.get("/actors", requireProductionAuth, async (req: Request, res: Response)
   }
 });
 
-// 2. POST /api/actors - إنشاء ممثل رقمي جديد حقيقي داخل PostgreSQL
-router.post("/actors", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+// 2. POST /api/actors — KAYAN-9a: optional projectId links actor to project
+export async function handleCreateActor(req: Request, res: Response): Promise<void> {
   try {
-    const { name, type, age, style, imageUrl, category } = req.body;
-    if (!name || !type || !age || !style) {
-      res.status(400).json({ error: "جميع الحقول الأساسية (الاسم، النوع، العمر، أسلوب الأداء) مطلوبة." });
-      return;
+    const { name, type, age, style, imageUrl, category, projectId } = req.body;
+    if (!name || !type || !age || !style) { res.status(400).json({ error: "MISSING_FIELDS" }); return; }
+    if (projectId != null) {
+      if (typeof projectId !== "number" || !Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "INVALID_PROJECT_ID" }); return; }
     }
-    if (imageUrl != null && typeof imageUrl === "string" && imageUrl.trim() !== "") {
-      assertSyntheticReference(imageUrl.trim(), req.body);
-    }
-    const [newActor] = await db.insert(actorsTable).values({
-      name: name.trim(),
-      type: type.trim(),
-      age: parseInt(String(age), 10) || 30,
-      style: style.trim(),
-      imageUrl: imageUrl ? imageUrl.trim() : null,
-      category: category || "global",
-      createdAt: new Date()
-    }).returning();
+    if (imageUrl != null && typeof imageUrl === "string" && imageUrl.trim() !== "") { assertSyntheticReference(imageUrl.trim(), req.body); }
+    const newActor = await _createActorDeps.db.transaction(async (tx: any) => {
+      if (projectId != null) {
+        const projRows = await tx.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+        if (!projRows || projRows.length === 0) { const e: any = new Error("PROJECT_NOT_FOUND"); e.statusCode = 404; throw e; }
+      }
+      const [actor] = await tx.insert(actorsTable).values({ name: name.trim(), type: type.trim(), age: parseInt(String(age), 10) || 30, style: style.trim(), imageUrl: imageUrl ? imageUrl.trim() : null, category: category || "global", createdAt: new Date() }).returning();
+      if (projectId != null) { await tx.insert(projectActorsTable).values({ projectId, actorId: actor.id, roleName: actor.name, roleType: "supporting" }); }
+      return actor;
+    });
     res.status(201).json(newActor);
   } catch (err: any) {
+    if (err?.statusCode === 404) { res.status(404).json({ error: err.message }); return; }
     const isLegal = err?.statusCode === 400 || err?.code === "LEGAL_GUARD_NON_SYNTHETIC";
-    res.status(isLegal ? 400 : 500).json({ error: "فشل إنشاء الممثل داخل PostgreSQL: " + err.message });
+    res.status(isLegal ? 400 : 500).json({ error: "POST_ACTOR_FAIL: " + err.message });
   }
-});
+}
+router.post("/actors", requireProductionAuth, handleCreateActor);
 
 // 3. PATCH /api/actors/:id - تحديث بيانات الممثل الرقمي وأسلوب أدائه
 router.patch("/actors/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
