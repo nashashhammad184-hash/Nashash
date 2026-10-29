@@ -25,6 +25,7 @@ import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvid
 // KAYAN-TASK-DEPLOY-17: optional external video provider (fal.run / WaveSpeed).
 // Selected at runtime via VIDEO_PROVIDER=external. No-op otherwise.
 import { runExternalVideoJob } from "./providers/video/externalVideoProvider";
+import { isRealAIProvider } from "./providers/video/realAI";
 import { saveAudioBuffer } from "./audioAssets";
 import { logger } from "./logger";
 
@@ -443,6 +444,9 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
             videoPath: extVideoPath,
             videoUrl: ext.remote_path,
             storageKey: ext.storageKey,
+            // KAYAN-7: provider + isRealAI. Mock MP4 must NOT be presented as AI.
+            provider: ext.provider || "unknown",
+            isRealAI: isRealAIProvider(ext.provider),
           };
           videoUrl = ext.remote_path;
           providerJobId = ext.worker_jid;
@@ -469,7 +473,13 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         }
         const st = fs.statSync(result.videoPath);
         if (!st.isFile() || st.size === 0) throw new Error(`VIDEO_GEN output is empty: ${result.videoPath}`);
-        output = { videoPath: result.videoPath, videoUrl: result.videoUrl };
+        output = {
+          videoPath: result.videoPath,
+          videoUrl: result.videoUrl,
+          // KAYAN-7: in-process GPU worker is real AI (not mock).
+          provider: "kayan-gpu-worker",
+          isRealAI: true,
+        };
         videoUrl = result.videoUrl;
         providerJobId = result.jobId;
         break;

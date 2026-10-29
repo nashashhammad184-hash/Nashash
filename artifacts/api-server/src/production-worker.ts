@@ -13,6 +13,10 @@
  *   - graceful shutdown on SIGTERM/SIGINT via stopProductionWorker().
  */
 import "./loadEnv";
+import { assertEnvOrThrow } from './lib/validateEnv';
+
+// KAYAN-7: fail-fast on missing env for production-worker role.
+assertEnvOrThrow('production-worker');
 import { startProductionWorker, stopProductionWorker } from "./lib/productionEngine";
 import { logger } from "./lib/logger";
 

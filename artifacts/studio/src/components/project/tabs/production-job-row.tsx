@@ -83,6 +83,17 @@ export function ProductionJobRow({ job }: { job: ProductionJobRowData }): React.
           <AlertCircle className="w-2.5 h-2.5 shrink-0" /> {job.error}
         </div>
       )}
+      {job.status === "completed" && job.output && (job.output.isRealAI === false || job.output.provider === "mock") && (
+        <div
+          className="bg-red-950/60 border border-red-800 rounded p-2 text-[9px] text-red-200 leading-relaxed flex items-start gap-1"
+          data-testid="mock-video-warning"
+        >
+          <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+          <span>
+            <strong>MOCK_VIDEO_NOT_AI:</strong> هذا الفيديو ليس مخرجات ذكاء اصطناعي حقيقية (مزود=mock). لا تستخدمه كدليل على جاهزية الإنتاج.
+          </span>
+        </div>
+      )}
       {job.status === "completed" && job.output && (
         <div
           className="bg-zinc-950 p-1.5 rounded border border-zinc-800 text-[9px] text-zinc-400 break-all font-mono"

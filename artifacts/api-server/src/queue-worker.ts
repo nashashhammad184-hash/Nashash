@@ -1,4 +1,8 @@
 import './loadEnv';
+import { assertEnvOrThrow } from './lib/validateEnv';
+
+// KAYAN-7: fail-fast on missing env for queue-worker role.
+assertEnvOrThrow('queue-worker');
 import { runScriptJob } from './lib/services/ScriptJobRunner';
 import { GpuQueueService, JobRow } from './lib/services/GpuQueueService';
 import { runExternalVideoJob } from './lib/providers/video/externalVideoProvider';

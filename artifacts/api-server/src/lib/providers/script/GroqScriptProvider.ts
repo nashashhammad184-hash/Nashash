@@ -10,7 +10,7 @@
 import Groq from "groq-sdk";
 import type { ScriptProvider, ScriptRequest, ScriptResponse } from "./index";
 
-const DEFAULT_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const DEFAULT_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 export class GroqScriptProvider implements ScriptProvider {
   name = "GROQ";

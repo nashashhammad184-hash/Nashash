@@ -1,4 +1,10 @@
 import "./loadEnv";
+import { assertEnvOrThrow } from "./lib/validateEnv";
+
+// KAYAN-7: fail-fast on missing env for this role (api).
+// Throws before Express binds — no silent QUEUED-then-FAILED cycles.
+const __envCheck = assertEnvOrThrow("api");
+export const envCheck = __envCheck;
 import express from "express";
 import cors from "cors";
 import compression from "compression";
