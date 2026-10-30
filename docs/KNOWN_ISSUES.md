@@ -80,4 +80,30 @@ Align the Drizzle column with the DB column type and regenerate.
 
 ---
 
-_Last updated: 2026-10-29 (KAYAN-8)_
+## Timeline Manual Preservation
+
+**Mechanism** (implemented since TASK-10/TASK-24):
+- Rows with `metadata = {"origin":"manual"}` are preserved across `POST /projects/:id/timeline/sync`.
+- Rows with `metadata = null` or `{"origin":"generated"}` are updated via `upsertGenerated` keyed by `track:shotId:clipId`.
+- `pipeline.ts` rerun deletes only `!isManualRow` — manual rows retain their position.
+
+**Known pitfall** (encountered in KAYAN-6):
+- Rows inserted via direct SQL without `metadata.origin` are classified as `generated` → overwritten on next sync.
+- **Correct insertion pattern**:
+  ```sql
+  INSERT INTO timeline_items (project_id, shot_id, track, asset_url, start_time, duration, end_time, order_index, metadata)
+  VALUES (650, 737, 'VIDEO', '/api/storage/supabase/videos/<uuid>.mp4', 0, 5, 5, 1, '{"origin":"manual"}');
+  ```
+
+**Null-overwrite guard** (KAYAN-9b, 2026-10-30):
+- `upsertGenerated` now requires `values.assetUrl != null` before treating `prev.assetUrl` as needing update.
+- Previously, a shot with `videoUrl=null` during sync would clear the timeline row's assetUrl — the actual root cause of the KAYAN-6 manual-update workaround.
+- Upgrade (null → value) still allowed; downgrade (value → null) rejected.
+
+**Duplicate-row note:** manual rows and generated rows for the same `(track, shotId)` can coexist (no unique constraint). If the manual row already exists, a subsequent sync may insert an additional generated row. Harmless for playback but may show two rows in the timeline UI. Documented for future cleanup.
+
+No API endpoint currently exposes manual insertion — SQL via Northflank Shell is the only path. Adding `POST /timeline/items` is deferred until Studio needs it.
+
+---
+
+_Last updated: 2026-10-30 (KAYAN-9b docs)_
