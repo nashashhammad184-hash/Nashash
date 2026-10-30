@@ -1,11 +1,16 @@
 import { Router, Request, Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { db } from "@workspace/db";
-import { projectsTable, projectActorsTable } from "@workspace/db/schema";
+import { projectsTable, projectActorsTable, actorsTable } from "@workspace/db/schema";
 import { eq, and } from "drizzle-orm";
 import { UpdateProjectBody } from "@workspace/api-zod";
 
 const router = Router();
+
+// KI-004 — DI for GET /projects/:id/actors (tests override)
+const _projectsDeps: { db: any } = { db };
+export function _setProjectsDeps(o: { db?: any }) { if (o.db !== undefined) _projectsDeps.db = o.db; }
+export function _resetProjectsDeps() { _projectsDeps.db = db; }
 
 router.get("/", requireProductionAuth, async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -39,6 +44,26 @@ router.post("/", requireProductionAuth, async (req: Request, res: Response): Pro
   } catch (err: any) { res.status(500).json({ error: "فشل الحفظ: " + err.message }); }
 });
 
+// KI-004 — GET /api/projects/:id/actors (list assigned actors with details)
+export async function listProjectActorsHandler(req: Request, res: Response): Promise<void> {
+  const projectId = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "INVALID_PROJECT_ID" }); return; }
+  try {
+    const proj = await _projectsDeps.db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (!proj || proj.length === 0) { res.status(404).json({ error: "PROJECT_NOT_FOUND" }); return; }
+    const rows = await _projectsDeps.db
+      .select({
+        id: projectActorsTable.id, projectId: projectActorsTable.projectId, actorId: projectActorsTable.actorId,
+        roleName: projectActorsTable.roleName, roleType: projectActorsTable.roleType, createdAt: projectActorsTable.createdAt,
+        actor: { id: actorsTable.id, name: actorsTable.name, type: actorsTable.type, category: actorsTable.category, age: actorsTable.age, style: actorsTable.style, imageUrl: actorsTable.imageUrl },
+      })
+      .from(projectActorsTable)
+      .innerJoin(actorsTable, eq(projectActorsTable.actorId, actorsTable.id))
+      .where(eq(projectActorsTable.projectId, projectId));
+    res.json(rows);
+  } catch (err: any) { res.status(500).json({ error: "INTERNAL_ERROR: " + err.message }); }
+}
+router.get("/:id/actors", requireProductionAuth, listProjectActorsHandler);
 router.post("/:id/actors", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const projectId = parseInt(String(String(req.params.id)), 10);
   const { actorId, roleName, roleType } = req.body;
