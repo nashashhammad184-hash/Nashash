@@ -26,6 +26,9 @@ const SYNTHETIC_PATH_PREFIXES = [
 // KAYAN-TASK-73E: internal R2 storage paths served by this app's own proxy
 // route (/api/storage/r2/...) with strict key validation.
 const INTERNAL_R2_PREFIX = "/api/storage/r2/";
+// KAYAN-10: internal Supabase storage paths served by this app's own proxy
+// route (/api/storage/supabase/...) with strict key validation.
+const INTERNAL_SUPABASE_PREFIX = "/api/storage/supabase/";
 export function isSyntheticReference(url: string, _body?: any): boolean {
   if (!url || typeof url !== "string") return false;
   const u = url.trim();
@@ -38,6 +41,16 @@ export function isSyntheticReference(url: string, _body?: any): boolean {
     if (key.length === 0) return false;
     if (key.includes("..")) return false;
     if (key.includes(String.fromCharCode(92))) return false;
+    if (key.startsWith("/")) return false;
+    return true;
+  }
+  // KAYAN-10: accept internal Supabase proxy paths with safe keys only.
+  if (u.startsWith(INTERNAL_SUPABASE_PREFIX)) {
+    const key = u.slice(INTERNAL_SUPABASE_PREFIX.length);
+    if (key.length === 0) return false;
+    if (key.includes("..")) return false;
+    if (key.includes(String.fromCharCode(92))) return false;
+    if (key.includes("\u0000")) return false;
     if (key.startsWith("/")) return false;
     return true;
   }
