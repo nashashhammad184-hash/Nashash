@@ -146,4 +146,8 @@ assert.match(src, /looksLikeRealAsset\(shot\.videoUrl\)/, 'video asset validatio
 assert.match(src, /looksLikeRealAsset\(shot\.audioUrl\)/, 'audio asset validation missing');
 assert.match(src, /looksLikeRealAsset\(clip\.assetId\)/, 'clip asset validation missing');
 
+// Scenario 6: needAsset guard prevents null-overwrite of existing assetUrl.
+assert.match(src, /const needAsset = values\.assetUrl != null && \(prev\.assetUrl \?\? null\) !== \(values\.assetUrl \?\? null\)/, "needAsset must reject null downgrade (null-overwrite bug)");
+assert.doesNotMatch(src, /const needAsset = \(prev\.assetUrl \?\? null\) !== \(values\.assetUrl \?\? null\);/, "old unguarded needAsset must be gone");
+
 console.log('TIMELINE_SYNC_MERGE_TESTS_PASS');

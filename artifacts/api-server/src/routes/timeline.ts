@@ -166,7 +166,7 @@ router.post("/projects/:id/timeline/sync", requireProductionAuth, async (req: Re
       const prev = existingGenerated.get(key);
       const meta = JSON.stringify({ origin: "generated" });
       if (prev) {
-        const needAsset = (prev.assetUrl ?? null) !== (values.assetUrl ?? null);
+        const needAsset = values.assetUrl != null && (prev.assetUrl ?? null) !== (values.assetUrl ?? null);
         const needContent = (prev.content ?? null) !== (values.content ?? null);
         existingGenerated.delete(key);
         if (needAsset || needContent) {
