@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { validateVoiceProviderForDialogue } from "../lib/voice/validateVoiceProvider";
 import { saveAudioBuffer } from "../lib/audioAssets";
 import { resolveAudioShotId, persistAudioUrlToShot } from "../lib/audioShotLink";
 import { requireProductionAuth } from "../lib/securityMiddleware";

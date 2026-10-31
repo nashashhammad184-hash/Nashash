@@ -26,6 +26,7 @@ import { generateVideoKayanGpu, generateLipSyncKayanGpu } from "./kayanGpuProvid
 // Selected at runtime via VIDEO_PROVIDER=external. No-op otherwise.
 import { runExternalVideoJob } from "./providers/video/externalVideoProvider";
 import { isRealAIProvider } from "./providers/video/realAI";
+import { validateVoiceProviderForDialogue } from "./voice/validateVoiceProvider";
 import { saveAudioBuffer } from "./audioAssets";
 import { logger } from "./logger";
 
@@ -489,6 +490,8 @@ export async function processNextQueuedJob(): Promise<ProductionJob | null> {
         if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not configured");
         const text = (job.payload.text || job.payload.prompt)?.toString().trim();
         if (!text) throw new Error("VOICE_GEN requires text");
+        const v = validateVoiceProviderForDialogue({ dialogue: text, phoneAudioUrl: null, ttsProvider: "deepgram" });
+        if (v.ok === false) { const err: any = new Error(v.message); err.code = v.code; throw err; }
         const model = job.payload.model?.trim() || process.env.DEEPGRAM_TTS_MODEL?.trim() || "aura-asteria-en";
         const res = await fetch(`${DEEPGRAM_TTS_ENDPOINT}?model=${encodeURIComponent(model)}`, {
           method: "POST",
