@@ -44,6 +44,4 @@ router.use(productionRouter);
 // STORAGE_PROVIDER=r2). Under local, /uploads/* serves the files.
 router.use(storageRouter);
 
-export default router;
 
-router.use(workersRouter);
