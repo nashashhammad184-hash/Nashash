@@ -45,3 +45,7 @@ router.use(productionRouter);
 router.use(storageRouter);
 
 
+
+router.use(workersRouter);
+
+export default router;
