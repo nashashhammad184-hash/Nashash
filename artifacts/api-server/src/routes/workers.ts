@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { db, workerHeartbeatsTable } from "@workspace/db";
+import { sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -29,6 +30,49 @@ router.post("/workers/heartbeat", requireProductionAuth, async (req: Request, re
     res.json({ ok: true, name, lastSeenAt: now });
   } catch (e: any) {
     console.error("heartbeat failed", e);
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+
+
+router.get("/worker/audio-queue", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const limitRaw = parseInt(String(req.query.limit || "10"), 10);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 20) : 10;
+  const lang = String(req.query.lang || "all").toLowerCase();
+  
+  try {
+    let query = sql`
+      SELECT 
+        id AS "shotId",
+        project_id AS "projectId",
+        dialogue,
+        duration_seconds AS "durationSeconds",
+        audio_status AS "audioStatus",
+        audio_claimed_at AS "audioClaimedAt"
+      FROM shots
+      WHERE audio_status = 'QUEUED'
+        AND dialogue IS NOT NULL
+        AND TRIM(dialogue) != ''
+    `;
+    
+    if (lang === "ar") {
+      query = sql`${query} AND dialogue ~ '[\u0600-\u06FF]'`;
+    } else if (lang === "en") {
+      query = sql`${query} AND dialogue !~ '[\u0600-\u06FF]'`;
+    }
+    
+    query = sql`${query} 
+      ORDER BY 
+        CASE WHEN dialogue ~ '[\u0600-\u06FF]' THEN 0 ELSE 1 END,
+        created_at ASC
+      LIMIT ${limit}
+    `;
+    
+    const result = await db.execute(query);
+    const shots = (result as any).rows || result || [];
+    res.json({ ok: true, count: shots.length, shots });
+  } catch (err: any) {
+    console.error("[worker/audio-queue] error:", err);
     res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
