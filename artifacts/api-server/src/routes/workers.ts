@@ -6,13 +6,18 @@ const router = Router();
 
 router.post("/workers/heartbeat", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const name = String((req.body && req.body.name) || "").trim();
+  if (!name || name.length > 64) {
     res.status(400).json({ error: "INVALID_WORKER_NAME" });
     return;
   }
+  
   const now = new Date();
-  const metadata = typeof req.body.metadata === "string" 
-    ? req.body.metadata.slice(0, 512) 
-    : JSON.stringify(req.body.metadata || {}).slice(0, 512);
+  let metadata = "{}";
+  if (req.body && typeof req.body.metadata === "string") {
+    metadata = req.body.metadata.slice(0, 512);
+  } else if (req.body && req.body.metadata) {
+    metadata = JSON.stringify(req.body.metadata).slice(0, 512);
+  }
   
   try {
     await db.insert(workerHeartbeatsTable)
