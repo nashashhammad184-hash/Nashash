@@ -10,3 +10,5 @@ export * from "./timeline_and_render";
 export * from "./subtitles";
 export * from "./production_pipeline";
 export * from "./render_jobs";
+
+export * from "./worker_heartbeats";
