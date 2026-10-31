@@ -1,3 +1,4 @@
+import workersRouter from "./workers";
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import actorsRouter from "./actors";
@@ -44,3 +45,5 @@ router.use(productionRouter);
 router.use(storageRouter);
 
 export default router;
+
+router.use(workersRouter);
