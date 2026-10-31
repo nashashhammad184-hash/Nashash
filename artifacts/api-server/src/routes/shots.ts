@@ -101,6 +101,51 @@ router.post("/shots/bulk-update", requireProductionAuth, async (req: Request, re
 });
 
 // 4. PATCH /api/shots/:id - تعديل لقطة حقيقية
+
+router.post("/:id/claim", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "INVALID_SHOT_ID" });
+    return;
+  }
+  
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) {
+    res.status(404).json({ error: "SHOT_NOT_FOUND" });
+    return;
+  }
+  
+  if (shot.audioStatus === "COMPLETED") {
+    res.status(409).json({ error: "ALREADY_COMPLETED" });
+    return;
+  }
+  
+  const now = new Date();
+  const LEASE_MS = 5 * 60 * 1000;
+  const isStale = !shot.audioClaimedAt || (now.getTime() - new Date(shot.audioClaimedAt).getTime()) > LEASE_MS;
+  
+  if (shot.audioStatus === "PROCESSING" && !isStale) {
+    res.status(409).json({
+      error: "ALREADY_CLAIMED",
+      claimedAt: shot.audioClaimedAt,
+      leaseRemainingMs: LEASE_MS - (now.getTime() - new Date(shot.audioClaimedAt).getTime())
+    });
+    return;
+  }
+  
+  const [updated] = await db.update(shotsTable)
+    .set({ audioStatus: "PROCESSING", audioClaimedAt: now } as any)
+    .where(and(eq(shotsTable.id, id), eq(shotsTable.audioStatus, shot.audioStatus)))
+    .returning();
+  
+  if (!updated) {
+    res.status(409).json({ error: "CLAIM_RACE", hint: "Retry" });
+    return;
+  }
+  
+  res.json({ ok: true, claimedAt: now, shot: { id: updated.id, audioStatus: updated.audioStatus } });
+});
+
 router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const params = UpdateShotParams.safeParse(req.params);
   if (!params.success) {
