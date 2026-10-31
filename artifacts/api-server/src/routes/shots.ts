@@ -102,7 +102,7 @@ router.post("/shots/bulk-update", requireProductionAuth, async (req: Request, re
 
 // 4. PATCH /api/shots/:id - تعديل لقطة حقيقية
 
-router.post("/:id/claim", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+router.post("/shots/:id/claim", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "INVALID_SHOT_ID" });
