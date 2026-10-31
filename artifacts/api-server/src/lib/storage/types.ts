@@ -6,6 +6,7 @@
  * underlying storage (filesystem, R2, ...).
  */
 export interface StorageProvider {
+  getSignedUploadUrl?(key: string, options?: { upsert?: boolean }): Promise<{ signedUrl: string; token: string; path: string }>;
   readonly name: "local" | "r2" | "supabase";
   /** Write a buffer under key. Returns the public URL for serving. */
   write(key: string, data: Buffer, contentType?: string): Promise<string>;

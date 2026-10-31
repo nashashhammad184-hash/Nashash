@@ -347,13 +347,37 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       const shotVoiceId = (shot as any).voice_id as string | undefined;
       if (shotVoiceId) payload.voiceId = shotVoiceId;
 
+      let voiceJobId: string = "";
+      let voiceDone: any = null;
+      let phoneResolved: ResolvedLocalPath | null = null;
+      let phoneDuration = 0;
+      let phoneSizeBytes = 0;
+
+      if (shot.audioUrl && shot.audioUrl.startsWith('/api/storage/') && shot.audioStatus === 'PROCESSING') {
+          try {
+              phoneResolved = await resolveStorageUrlToLocal(shot.audioUrl);
+              const probe = await assertRealAudioFile(phoneResolved.path, `phone audio shot ${shot.id}`);
+              phoneDuration = probe.duration;
+              phoneSizeBytes = probe.sizeBytes;
+              
+              voiceJobId = "PHONE_UPLOAD_" + shot.id;
+              voiceDone = {
+                  status: 'completed',
+                  output: { audioUrl: shot.audioUrl, audioPath: phoneResolved.path }
+              };
+              logger.info({ shotId: shot.id, audioUrl: shot.audioUrl }, "VOICE_STAGE = USING_PHONE_AUDIO");
+          } catch (e: any) {
+              logger.warn({ err: e.message, shotId: shot.id }, "PHONE_AUDIO invalid, falling back to Deepgram");
+              phoneResolved = null;
+          }
+      }
+
+      if (!voiceDone) {
       // KAYAN-TASK-35: stage-level idempotent reuse.
       const voiceDecision = await decideStageReuse({
         runId, stage: "VOICE_GEN", shotId: shot.id,
         validateOutput: validateVoiceOutputOnDisk,
       });
-      let voiceJobId: string;
-      let voiceDone: any;
       if (voiceDecision.decision === "SKIPPED_EXISTING_RESULT" && voiceDecision.job) {
         voiceJobId = voiceDecision.job.id;
         voiceDone = voiceDecision.job;
@@ -379,6 +403,8 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           .where(eq(shotsTable.id, shot.id));
         throw new Error(`VOICE_GEN failed for shot ${shot.id}: ${voiceDone.error || "unknown"}`);
       }
+      } // end if (!voiceDone)
+
       const voiceOutput = (voiceDone.output || {}) as any;
       const jobAudioPath = String(voiceOutput.audioPath || "");
       const audioUrl = String(voiceOutput.audioUrl || "");
@@ -395,14 +421,25 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         throw new Error(`VOICE_GEN shot ${shot.id} returned a data: URL (not allowed in production)`);
       }
       let resolved: ResolvedLocalPath;
-      try {
-        resolved = await resolveStorageUrlToLocal(audioUrl);
-      } catch (e: any) {
-        await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
-        throw new Error(`VOICE_GEN shot ${shot.id}: audioUrl could not be resolved: ${e?.message || e}`);
+      let duration: number;
+      let sizeBytes: number;
+
+      if (phoneResolved && audioUrl === shot.audioUrl) {
+        resolved = phoneResolved;
+        duration = phoneDuration;
+        sizeBytes = phoneSizeBytes;
+      } else {
+        try {
+          resolved = await resolveStorageUrlToLocal(audioUrl);
+        } catch (e: any) {
+          await db.update(shotsTable).set({ audioStatus: "FAILED" } as any).where(eq(shotsTable.id, shot.id));
+          throw new Error(`VOICE_GEN shot ${shot.id}: audioUrl could not be resolved: ${e?.message || e}`);
+        }
+        const probe = await assertRealAudioFile(resolved.path, `voice audio shot ${shot.id}`);
+        duration = probe.duration;
+        sizeBytes = probe.sizeBytes;
       }
       resolvedAudioTracker.push(resolved);
-      const { duration, sizeBytes } = await assertRealAudioFile(resolved.path, `voice audio shot ${shot.id}`);
       // Persist per-shot association in shots table
       await db.update(shotsTable)
         .set({ audioUrl, audioStatus: "COMPLETED" } as any)

@@ -203,6 +203,16 @@ export class SupabaseProvider implements StorageProvider {
     return typeof size === "number" && Number.isFinite(size) ? size : null;
   }
 
+  async getSignedUploadUrl(key: string, options?: { upsert?: boolean }): Promise<{ signedUrl: string; token: string; path: string }> {
+    assertSafeKey(key);
+    const { client, cfg } = this.ensureClient();
+    const { data, error } = await client.storage.from(cfg.bucket).createSignedUploadUrl(key, options);
+    if (error || !data?.signedUrl) {
+      throw new StorageError("SIGN_FAILED", `Supabase sign upload failed for ${key}: ${error?.message ?? "no signedUrl"}`);
+    }
+    return { signedUrl: data.signedUrl, token: data.token, path: data.path };
+  }
+
   async getSignedUrl(
     key: string,
     expiresInSec: number,

@@ -17,6 +17,8 @@ import { getStorage, assertSafeKey, StorageError } from "../lib/storage/index";
 import { logger } from "../lib/logger";
 import { randomUUID } from "node:crypto";
 import { detectImageMime } from "../lib/actorReference";
+import { db, shotsTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 // KAYAN-TASK-79: signed URL endpoint requires auth.
 import { requireProductionAuth } from "../lib/securityMiddleware";
 
@@ -421,6 +423,49 @@ router.post("/storage/upload-video", requireProductionAuth, async (req: Request,
   } catch (err: any) {
     logger.error({ err: err && err.message }, "storage/upload-video: failed");
     res.status(500).json({ error: "video upload failed" });
+  }
+});
+
+router.post("/storage/sign-upload", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { projectId, shotId, mimeType, fileSize } = req.body || {};
+    
+    if (typeof projectId !== "number" || typeof shotId !== "number") {
+      res.status(400).json({ error: "projectId and shotId must be numbers" });
+      return;
+    }
+    if (mimeType !== "audio/mpeg") {
+      res.status(400).json({ error: "Only audio/mpeg is allowed" });
+      return;
+    }
+    if (typeof fileSize !== "number" || fileSize <= 0 || fileSize > 10 * 1024 * 1024) {
+      res.status(400).json({ error: "fileSize must be between 1 and 10MB" });
+      return;
+    }
+    
+    const shot = await db.select().from(shotsTable).where(and(eq(shotsTable.id, shotId), eq(shotsTable.projectId, projectId))).limit(1);
+    if (shot.length === 0) {
+      res.status(403).json({ error: "Shot not found or does not belong to project" });
+      return;
+    }
+    
+    const provider = getStorage();
+    if (typeof provider.getSignedUploadUrl !== "function") {
+      res.status(501).json({ error: "Current storage provider does not support signed uploads" });
+      return;
+    }
+    
+    const key = "audio/" + randomUUID() + ".mp3";
+    const result = await provider.getSignedUploadUrl(key, { upsert: false });
+    
+    res.status(200).json({
+      signedUrl: result.signedUrl,
+      token: result.token,
+      filePath: key
+    });
+  } catch (err: any) {
+    logger.error({ err: err.message }, "sign-upload failed");
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
