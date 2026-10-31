@@ -347,6 +347,28 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       const shotVoiceId = (shot as any).voice_id as string | undefined;
       if (shotVoiceId) payload.voiceId = shotVoiceId;
 
+      if (shot.audioStatus === "PROCESSING") {
+        const LEASE_MS = 5 * 60 * 1000;
+        const claimedAt = shot.audioClaimedAt;
+        const isStale = !claimedAt || (Date.now() - new Date(claimedAt).getTime()) > LEASE_MS;
+        
+        if (!isStale) {
+          logger.info({ shotId: shot.id }, "Shot is PROCESSING by phone, waiting up to 30s...");
+          for (let attempt = 0; attempt < 6; attempt++) {
+            await new Promise(r => setTimeout(r, 5000));
+            const [fresh] = await db.select().from(shotsTable).where(eq(shotsTable.id, shot.id)).limit(1);
+            if (fresh?.audioStatus === "COMPLETED") {
+              shot.audioUrl = fresh.audioUrl;
+              shot.audioStatus = fresh.audioStatus;
+              break;
+            }
+            if (fresh?.audioStatus === "FAILED") {
+              throw new Error(`PHONE_AUDIO_FAILED: ${shot.id}`);
+            }
+          }
+        }
+      }
+
       let voiceJobId: string = "";
       let voiceDone: any = null;
       let phoneResolved: ResolvedLocalPath | null = null;
