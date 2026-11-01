@@ -34,3 +34,26 @@ UPDATE shots SET audio_status = 'QUEUED', audio_url = NULL, audio_claimed_at = N
 SELECT COUNT(*) FROM shots WHERE audio_status = 'QUEUED' AND dialogue ~ '[؀-ۿ]';
 **Note:** Files in Supabase storage are NOT deleted.
 
+
+## KI-XXX: Northflank Security Incident (HIGH - DEFERRED)
+**Discovered:** 2026-10-31
+**Status:** DEFERRED (after KAYAN-15/KAYAN-13b)
+**Cause:** Northflank banner: 'Please rotate all user defined credentials.'
+**Exposed credentials (may need rotation):** GROQ_API_KEY, WAVESPEED_API_KEY, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL password, PRODUCTION_API_TOKEN, SESSION_SECRET.
+**Fix (KAYAN-12):**
+1. Rotate each via provider dashboard.
+2. Update Render + Northflank env vars.
+3. Re-deploy.
+4. Update phone worker script with new PRODUCTION_API_TOKEN.
+
+## KI-XXX: edge-tts Sounds Robotic (LOW)
+**Discovered:** 2026-11-01
+**Status:** Known, deferred.
+**Cause:** Microsoft Neural voices from ~2019, designed for announcements, not dramatic.
+**Options (future):**
+- Munsit API (recommended).
+- Azure Neural with SSML.
+- ElevenLabs.
+**Interim mitigation:**
+- Add --rate=-8% --pitch=-3Hz to edge-tts command.
+- Add post-processing EQ filters (KAYAN-15b).
