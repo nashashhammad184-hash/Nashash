@@ -44,7 +44,7 @@ export async function runScriptJob(payload: ScriptJobPayload): Promise<object> {
           description: shot.description.trim(),
           cameraMovement: shot.cameraMovement || 'Cinematic slow push-in',
           durationSeconds: shot.durationSeconds > 0 ? Math.round(shot.durationSeconds) : 5,
-          dialogue: shot.dialogue || null,
+          dialogue: (shot.dialogue && shot.dialogue.trim().length >= 5) ? shot.dialogue.trim() : `مشهد صامت: ${shot.description.slice(0, 100)}`,
           audioNote: shot.audioNote || null,
           audioStatus: 'QUEUED',
         });

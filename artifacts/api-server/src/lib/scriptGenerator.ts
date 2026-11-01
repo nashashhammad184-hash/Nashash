@@ -71,7 +71,7 @@ Lighting & Palette: ${worldBible?.lighting || "Cinematic"}, ${worldBible?.colorP
                   description: { type: "string" },
                   cameraMovement: { type: "string" },
                   durationSeconds: { type: "number" },
-                  dialogue: { type: "string" },
+                  dialogue: { type: "string", minLength: 5 },
                   audioNote: { type: "string" }
                 },
                 required: ["shotOrder","description","cameraMovement","durationSeconds","dialogue","audioNote"]
@@ -92,13 +92,19 @@ Lighting & Palette: ${worldBible?.lighting || "Cinematic"}, ${worldBible?.colorP
 - لا تكرر نفس sceneTitle أو visualDescription في أي مشهدين.
 - كل مشهد يجب أن يدفع القصة للأمام — لا حشو ولا حلقات.
 - أنهِ الـ JSON بشكل نظيف بعد آخر مشهد.
-- استخدم علامات ترقيم عربية قياسية فقط (. ، ؟ ! : ؛ -).`
+- استخدم علامات ترقيم عربية قياسية فقط (. ، ؟ ! : ؛ -).
+- حقل dialogue إجباري لكل shot (5 أحرف على الأقل).
+- للحوار: "صفية (بهمس): لماذا الآن؟". للقطات الصامتة: صوت سردي يصف المشهد.
+- لا تقبل dialogue فارغ (""). لا تتخطَّ الحقل.`
     : `[STRICT CONSTRAINTS]:
 - Produce between 3 and 5 scenes. Never exceed 5.
 - Do NOT repeat sceneTitle or visualDescription across scenes.
 - Every scene must advance the story — no filler, no loops.
 - End the JSON cleanly after the last scene.
-- Use only standard punctuation (. , ? ! : ; -).`;
+- Use only standard punctuation (. , ? ! : ; -).
+- dialogue field is MANDATORY for every shot (min 5 chars).
+- For dialogue: "Safia (whisper): Why now?". For silent shots: narrative voiceover.
+- NEVER leave dialogue empty (""). Do not omit it.`;
 
   const userPrompt = `IDEA:\n${idea}\n\n${characterBibleContext}\n\n${worldBibleContext}\n\n${continuityPrompt}\n\n${constraints}\n\n[REQUIRED JSON SHAPE - follow EXACTLY]:\n${JSON.stringify(schemaJson, null, 2)}\n\nReturn ONLY the JSON object. No markdown fences. No explanation. Every required field must be present.`;
 

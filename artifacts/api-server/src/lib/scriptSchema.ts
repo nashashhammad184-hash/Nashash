@@ -20,7 +20,7 @@ export const GeneratedShotSchema = z.object({
   description: z.string().min(1, "shot.description must be non-empty"),
   cameraMovement: z.string().min(1, "shot.cameraMovement must be non-empty"),
   durationSeconds: z.number().positive().max(60),
-  dialogue: z.string().default(""),
+  dialogue: z.string().min(5, "dialogue must be non-empty (min 5 chars)"),
   audioNote: z.string().default(""),
 });
 
