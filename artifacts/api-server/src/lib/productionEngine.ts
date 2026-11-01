@@ -1,3 +1,5 @@
+import { shotsTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 /**
  * productionEngine — DB-backed production job executor.
  *

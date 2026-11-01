@@ -34,7 +34,18 @@ router.get("/production/config", async (req: Request, res: Response): Promise<vo
 
 router.post("/production/jobs", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const { type, projectId, taskId, prompt, text, videoUrl, audioUrl, model,
-    actorId, task, referenceImageBase64 } = req.body;
+    actorId, task, referenceImageBase64, shotId } = req.body;
+  
+  let parsedShotId: number | undefined;
+  if (shotId !== undefined && shotId !== null && shotId !== "") {
+    const n = parseInt(String(shotId), 10);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ error: "INVALID_SHOT_ID" });
+      return;
+    }
+    parsedShotId = n;
+  }
+
   if (!type) {
     res.status(400).json({ error: "نوع مهمة الإنتاج (type) مطلوب بشكل صريح." });
     return;
@@ -93,6 +104,7 @@ router.post("/production/jobs", requireProductionAuth, async (req: Request, res:
       task: resolvedTask,
       referenceImageBase64: resolvedRef ?? undefined,
       actorId: resolvedActorId ?? undefined,
+      shotId: parsedShotId,
     });
     res.status(202).json({ success: true, job });
   } catch (error: any) {
