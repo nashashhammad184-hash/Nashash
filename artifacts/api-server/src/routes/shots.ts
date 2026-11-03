@@ -108,23 +108,19 @@ router.post("/shots/:id/claim", requireProductionAuth, async (req: Request, res:
     res.status(400).json({ error: "INVALID_SHOT_ID" });
     return;
   }
-  
   const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
   if (!shot) {
     res.status(404).json({ error: "SHOT_NOT_FOUND" });
     return;
   }
-  
   if (shot.audioStatus === "COMPLETED") {
     res.status(409).json({ error: "ALREADY_COMPLETED" });
     return;
   }
-  
   const now = new Date();
-  const LEASE_MS = 5 * 60 * 1000;
+  const LEASE_MS = 10 * 60 * 1000;
   const isStale = !shot.audioClaimedAt || (now.getTime() - new Date(shot.audioClaimedAt).getTime()) > LEASE_MS;
-  
-  if (shot.audioStatus === "PROCESSING" && !isStale) {
+  if (!isStale) {
     res.status(409).json({
       error: "ALREADY_CLAIMED",
       claimedAt: shot.audioClaimedAt,
@@ -132,18 +128,16 @@ router.post("/shots/:id/claim", requireProductionAuth, async (req: Request, res:
     });
     return;
   }
-  
+  const claimToken = "claim-" + Date.now() + "-" + Math.random().toString(36).substring(2, 15);
   const [updated] = await db.update(shotsTable)
-    .set({ audioStatus: "PROCESSING", audioClaimedAt: now } as any)
+    .set({ audioClaimedAt: now, audioClaimToken: claimToken, audioStage: "none" } as any)
     .where(and(eq(shotsTable.id, id), eq(shotsTable.audioStatus, shot.audioStatus)))
     .returning();
-  
   if (!updated) {
     res.status(409).json({ error: "CLAIM_RACE", hint: "Retry" });
     return;
   }
-  
-  res.json({ ok: true, claimedAt: now, shot: { id: updated.id, audioStatus: updated.audioStatus } });
+  res.json({ ok: true, claimedAt: now, claimToken, shot: { id: updated.id, audioStatus: updated.audioStatus } });
 });
 
 router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
@@ -158,6 +152,18 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
     return;
   }
   try {
+    const claimToken = (req.body as any).claimToken;
+    if (claimToken) {
+      const [currentShot] = await db.select().from(shotsTable).where(eq(shotsTable.id, params.data.id)).limit(1);
+      if (!currentShot) {
+        res.status(404).json({ error: "Shot not found" });
+        return;
+      }
+      if (currentShot.audioClaimToken !== claimToken) {
+        res.status(409).json({ error: "CLAIM_TOKEN_MISMATCH", message: "Claim lease expired or owned by another worker" });
+        return;
+      }
+    }
     const updateData: Record<string, any> = {};
     if (parsed.data.sceneNumber !== undefined) updateData.sceneNumber = String(parsed.data.sceneNumber);
     if (parsed.data.description !== undefined) updateData.description = parsed.data.description;
@@ -183,6 +189,11 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
     }
     if (parsed.data.audioStatus !== undefined) {
       updateData.audioStatus = parsed.data.audioStatus;
+      if (parsed.data.audioStatus === "PROCESSING") {
+        updateData.audioClaimToken = null;
+        updateData.audioClaimedAt = null;
+        updateData.audioStage = "none";
+      }
     }
     // KAYAN-8: soft warning — audioUrl set but audioStatus not COMPLETED.
     // Not a hard error: pipeline may set FAILED with an audioUrl (recovery scenarios).

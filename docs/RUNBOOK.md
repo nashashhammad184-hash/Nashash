@@ -58,3 +58,8 @@ POST /shots/:id/release-claim.
 3. Deploy.
 4. DROP TABLE worker_heartbeats;
 5. DROP COLUMN audio_claimed_at;
+
+---
+## KAYAN-11f Updates (Audar TTS Integration)
+- **Pipeline Timing:** يجب تشغيل الـ Pipeline فقط **بعد** أن ينتهي Samsung worker من معالجة المشاهد. الـ Pipeline ينتظر 30 ثانية فقط، بينما الـ Worker (Oracle) يستغرق ~40 ثانية لكل مشهد. تشغيلهما معاً سيؤدي إلى تداخل (Race Condition).
+- **Idempotency:** إذا تغيّر نص الحوار (dialogue) بعد أن قام الـ Worker بعملية PATCH، سيتغير الـ `idempotency-key`، وسيتم توليد MP3 جديد في المحاولة القادمة.

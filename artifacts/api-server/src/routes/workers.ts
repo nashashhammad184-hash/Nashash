@@ -53,6 +53,7 @@ router.get("/worker/audio-queue", requireProductionAuth, async (req: Request, re
       WHERE audio_status = 'QUEUED'
         AND dialogue IS NOT NULL
         AND TRIM(dialogue) != ''
+        AND (audio_claimed_at IS NULL OR audio_claimed_at < NOW() - INTERVAL '10 minutes')
     `;
     
     if (lang === "ar") {
