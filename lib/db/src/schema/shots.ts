@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -29,6 +29,15 @@ export const shotsTable = pgTable("shots", {
   audioFilePath: text("audio_file_path"),
   audioRetries: integer("audio_retries").default(0),
   audioUpdatedAt: timestamp("audio_updated_at"),
+  audioInstruction: jsonb("audio_instruction"),
+  manualInstruction: jsonb("manual_instruction"),
+  resolvedText: text("resolved_text"),
+  directorStatus: text("director_status").default("pending"),
+  directorError: text("director_error"),
+  directorAnalyzedAt: timestamp("director_analyzed_at"),
+  directorInputHash: text("director_input_hash"),
+  directorClaimToken: text("director_claim_token"),
+  directorLeaseExpiresAt: timestamp("director_lease_expires_at"),
 
   // الحفاظ الكامل على الأعمدة الـ 17 الحالية بنصوصها الأصلية لمنع فقدان البيانات والـ Data Loss
   season_number: text("season_number"),
