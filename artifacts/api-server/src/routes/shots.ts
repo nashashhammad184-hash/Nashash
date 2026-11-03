@@ -1,6 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc, and } from "drizzle-orm";
+import { runDirector } from "../lib/voice/voiceDirector";
+import { mergeFields, buildResolvedText } from "../lib/voice/resolveInstruction";
+import { EMOTIONS, AUDAR_TAGS } from "../lib/voice/directorSchema";
 import { db, shotsTable } from "@workspace/db";
 import {
   ListProjectShotsParams, ListProjectShotsResponse,
@@ -279,6 +282,70 @@ router.post("/shots/:id/release-claim", requireProductionAuth, async (req: Reque
     .where(eq(shotsTable.id, id));
     
   res.json({ ok: true, shotId: id, previousStatus: shot.audioStatus });
+});
+
+// KAYAN-13: Voice Director Endpoints
+
+router.post("/shots/:id/analyze", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+  if (shot.audioStatus === "COMPLETED" && !req.body?.force) {
+    res.status(409).json({ error: "SHOT_COMPLETED", hint: "Use force:true to override" }); return;
+  }
+  if (shot.directorStatus === "processing" && !req.body?.force) {
+    res.status(409).json({ error: "ALREADY_ANALYZING" }); return;
+  }
+  await db.update(shotsTable).set({ directorStatus: "processing" }).where(eq(shotsTable.id, id));
+  const result = await runDirector(shot.description || "", shot.dialogue || "", null);
+  if (!result.ok) {
+    await db.update(shotsTable).set({ directorStatus: "failed", directorError: result.error }).where(eq(shotsTable.id, id));
+    res.status(500).json({ error: "DIRECTOR_FAILED", detail: result.error }); return;
+  }
+  const merged = mergeFields(result.audio_instruction, shot.manualInstruction, shot.dialogue || "");
+  const resolved = buildResolvedText(shot.dialogue || "", merged);
+  await db.update(shotsTable).set({
+    audioInstruction: result.audio_instruction,
+    resolvedText: resolved,
+    directorStatus: "analyzed",
+    directorError: null,
+    directorAnalyzedAt: new Date(),
+    directorInputHash: result.audio_instruction.input_hash
+  }).where(eq(shotsTable.id, id));
+  res.json({ ok: true, audio_instruction: result.audio_instruction, resolved_text: resolved });
+});
+
+router.patch("/shots/:id/manual-instruction", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+  
+  const incoming = req.body?.fields || {};
+  const current = shot.manualInstruction || { updated_at: new Date().toISOString(), fields: {} };
+  
+  if (incoming.emotion && !EMOTIONS.includes(incoming.emotion)) { res.status(400).json({ error: "INVALID_EMOTION" }); return; }
+  if (incoming.audar_tag !== undefined && incoming.audar_tag !== null && !AUDAR_TAGS.includes(incoming.audar_tag)) { res.status(400).json({ error: "INVALID_TAG" }); return; }
+  
+  const newFields = { ...current.fields, ...incoming };
+  const newManual = { updated_at: new Date().toISOString(), fields: newFields };
+  
+  const merged = mergeFields(shot.audioInstruction, newManual, shot.dialogue || "");
+  const resolved = buildResolvedText(shot.dialogue || "", merged);
+  
+  await db.update(shotsTable).set({ manualInstruction: newManual, resolvedText: resolved }).where(eq(shotsTable.id, id));
+  res.json({ ok: true, manual_instruction: newManual, resolved_text: resolved });
+});
+
+router.post("/shots/:id/restore-director", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+  
+  const merged = mergeFields(shot.audioInstruction, null, shot.dialogue || "");
+  const resolved = buildResolvedText(shot.dialogue || "", merged);
+  
+  await db.update(shotsTable).set({ manualInstruction: null, resolvedText: resolved }).where(eq(shotsTable.id, id));
+  res.json({ ok: true, resolved_text: resolved });
 });
 
 export default router;
