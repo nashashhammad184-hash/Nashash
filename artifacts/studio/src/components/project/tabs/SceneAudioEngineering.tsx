@@ -8,6 +8,16 @@ import { getListProjectShotsQueryKey } from "@workspace/api-client-react";
 const EMOTIONS = ["neutral","joy","sadness","anger","fear","surprise","disgust","romantic","anxious","confident"];
 const AUDAR_TAGS = ["[laughs]","[curious]","[excited]","[sighs]","[exhales]","[mischievously]","[whispers]","[sarcastic]"];
 
+const EMOTION_LABELS: Record<string, string> = {
+  neutral: "محايد", joy: "فرح", sadness: "حزن", anger: "غضب", fear: "خوف",
+  surprise: "مفاجأة", disgust: "اشمئزاز", romantic: "رومانسي", anxious: "قلق", confident: "ثقة"
+};
+const TAG_LABELS: Record<string, string> = {
+  "[laughs]": "ضحك", "[curious]": "فضول", "[excited]": "حماس", "[sighs]": "تنهد",
+  "[exhales]": "زفير", "[mischievously]": "مكر", "[whispers]": "همس", "[sarcastic]": "سخرية"
+};
+
+
 export default function SceneAudioEngineering({ shot, projectId }: { shot: any; projectId: number }) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<"analyze"|"preview"|"restore"|null>(null);
@@ -93,7 +103,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot: any; 
           <select value={mergedEmotion ?? ""} onChange={e => patchManual({ emotion: e.target.value || null })}
             className="w-full h-8 rounded border border-white/10 bg-zinc-900 px-2 text-xs text-white">
             <option value="">—</option>
-            {EMOTIONS.map(x => <option key={x} value={x}>{x}</option>)}
+            {EMOTIONS.map(x => <option key={x} value={x}>{EMOTION_LABELS[x]}</option>)}
           </select>
         </div>
         <div>
@@ -101,7 +111,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot: any; 
           <select value={mergedTag ?? ""} onChange={e => patchManual({ audar_tag: e.target.value || null })}
             className="w-full h-8 rounded border border-white/10 bg-zinc-900 px-2 text-xs text-white">
             <option value="">—</option>
-            {AUDAR_TAGS.map(x => <option key={x} value={x}>{x}</option>)}
+            {AUDAR_TAGS.map(x => <option key={x} value={x}>{TAG_LABELS[x]}</option>)}
           </select>
         </div>
         <div>
