@@ -23,6 +23,12 @@ export const shotsTable = pgTable("shots", {
   videoUrl: text("video_url"),
   audioStatus: text("audio_status").notNull().default("QUEUED"), // QUEUED, PROCESSING, COMPLETED, FAILED
   audioClaimedAt: timestamp("audio_claimed_at"),
+  audioClaimToken: text("audio_claim_token"),
+  audioStage: text("audio_stage").default("none"),
+  audioIdempotencyKey: text("audio_idempotency_key"),
+  audioFilePath: text("audio_file_path"),
+  audioRetries: integer("audio_retries").default(0),
+  audioUpdatedAt: timestamp("audio_updated_at"),
 
   // الحفاظ الكامل على الأعمدة الـ 17 الحالية بنصوصها الأصلية لمنع فقدان البيانات والـ Data Loss
   season_number: text("season_number"),
