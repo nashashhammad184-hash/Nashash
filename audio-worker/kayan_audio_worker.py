@@ -11,7 +11,7 @@ API_TOKEN = os.environ.get("KAYAN_API_TOKEN", "")
 WORKER_NAME = "phone-samsung-01"
 VOICE = "demo_female_1"
 
-ALLOWED_TAGS = {"laughs", "curious", "excited", "sighs", "exhales", "mischievously", "whispers", "sarcastic"}
+ALLOWED_TAGS = {"laughs", "curious", "excited", "neutral", "sad", "mischievously", "whispers", "sarcastic"}
                 "laughs", "sarcastic", "mischievously", "neutral"}
 
 def parse_tag(text):

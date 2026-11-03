@@ -9,6 +9,9 @@ def make_idem_key(project_id, shot_id, tag, text, target_duration_s):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 def generate_mp3(text, tag, voice, target_duration_s, idem_key):
+    import re
+    m = re.match(r"^\s*\[(\w+)\]", text)
+    real_tag = m.group(1) if m else "neutral"
     audar_url = os.environ.get("AUDAR_URL")
     audar_token = os.environ.get("AUDAR_TOKEN")
     if not audar_url or not audar_token:
@@ -23,7 +26,7 @@ def generate_mp3(text, tag, voice, target_duration_s, idem_key):
         },
         json={
             "text": text,
-            "tag": tag,
+            "tag": real_tag,
             "voice": voice,
             "target_duration_s": float(target_duration_s),
         },
