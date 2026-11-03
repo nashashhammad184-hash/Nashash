@@ -48,7 +48,10 @@ router.get("/worker/audio-queue", requireProductionAuth, async (req: Request, re
         dialogue,
         duration_seconds AS "durationSeconds",
         audio_status AS "audioStatus",
-        audio_claimed_at AS "audioClaimedAt"
+        audio_claimed_at AS "audioClaimedAt",
+        resolved_text AS "resolvedText",
+        audio_instruction AS "audioInstruction",
+        manual_instruction AS "manualInstruction"
       FROM shots
       WHERE audio_status = 'QUEUED'
         AND dialogue IS NOT NULL
