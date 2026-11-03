@@ -53,9 +53,15 @@ def login():
 def process_shot(session, shot, state):
     shot_id = shot["shotId"]
     project_id = shot["projectId"]
-    text = (shot.get("dialogue") or "").strip()
+    dialogue_text = (shot.get("dialogue") or "").strip()
+    resolved = shot.get("resolvedText")
+    if resolved and resolved.strip():
+        text = resolved.strip()
+        tag = "resolved"
+    else:
+        text = dialogue_text
+        tag = parse_tag(dialogue_text)
     target_duration = float(shot.get("durationSeconds") or 5.0)
-    tag = parse_tag(text)
 
     if not text:
         return False
