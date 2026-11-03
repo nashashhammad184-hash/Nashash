@@ -12,6 +12,7 @@ import { Loader2, Plus, Clapperboard, Clock, Video, Trash2 } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import SceneAudioEngineering from "./SceneAudioEngineering";
 
 export default function DirectingTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
@@ -161,6 +162,8 @@ export default function DirectingTab({ project }: { project: Project }) {
                             "{shot.dialogue}"
                           </div>
                         )}
+                  <SceneAudioEngineering shot={shot} projectId={project.id} />
+
                       </div>
                       <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(shot.id)}>
                         <Trash2 className="w-4 h-4" />
