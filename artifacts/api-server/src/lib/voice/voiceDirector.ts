@@ -55,7 +55,26 @@ export async function runDirector(
   const body = {
     model: GROQ_MODEL,
     messages: [{ role: "user", content: prompt }],
-    response_format: { type: "json_object" },
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "director_output",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            emotion: { type: "string", enum: ["neutral","joy","sadness","anger","fear","surprise","disgust","romantic","anxious","confident"] },
+            delivery: { type: "string" },
+            intensity: { type: "number" },
+            audar_tag: { type: ["string", "null"], enum: ["[laughs]","[curious]","[excited]","[sighs]","[exhales]","[mischievously]","[whispers]","[sarcastic]", null] },
+            confidence: { type: "number" },
+            reasoning: { type: "string" }
+          },
+          required: ["emotion", "delivery", "intensity", "audar_tag", "confidence", "reasoning"],
+          additionalProperties: false
+        }
+      }
+    },
     temperature: 0.3,
   };
 
@@ -72,7 +91,9 @@ export async function runDirector(
       const data = await res.json() as any;
       const content = data?.choices?.[0]?.message?.content;
       if (!content) { lastErr = "GROQ_EMPTY"; continue; }
-      const parsed = GroqDirectorResponseSchema.safeParse(JSON.parse(content));
+      const match = content.match(/\{[\s\S]*\}/);
+      const jsonStr = match ? match[0] : content;
+      const parsed = GroqDirectorResponseSchema.safeParse(JSON.parse(jsonStr));
       if (!parsed.success) { lastErr = "GROQ_INVALID_JSON"; continue; }
 
       const instruction = AudioInstructionSchema.parse({
