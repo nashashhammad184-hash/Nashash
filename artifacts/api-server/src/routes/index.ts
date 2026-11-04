@@ -19,6 +19,7 @@ import pipelineRouter from "./pipeline";
 import renderRouter from "./render";
 import productionRouter from "./production";
 import storageRouter from "./storage";
+import audioLibraryRouter from "./audioLibrary";
 
 const router: IRouter = Router();
 
@@ -43,6 +44,7 @@ router.use(productionRouter);
 // KAYAN-TASK-73E: internal proxy for R2 objects (only active when
 // STORAGE_PROVIDER=r2). Under local, /uploads/* serves the files.
 router.use(storageRouter);
+router.use(audioLibraryRouter);
 
 
 

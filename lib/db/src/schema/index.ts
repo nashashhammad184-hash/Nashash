@@ -12,3 +12,4 @@ export * from "./production_pipeline";
 export * from "./render_jobs";
 
 export * from "./worker_heartbeats";
+export * from "./audio_library";
