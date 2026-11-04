@@ -290,28 +290,42 @@ router.post("/shots/:id/analyze", requireProductionAuth, async (req: Request, re
   const id = parseInt(String(req.params.id), 10);
   const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
   if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+  if (shot.audioStatus === "PROCESSING" && !req.body?.force) {
+    res.status(409).json({ error: "SHOT_PROCESSING", hint: "Audio is being generated. Use force:true to override" }); return;
+  }
   if (shot.audioStatus === "COMPLETED" && !req.body?.force) {
     res.status(409).json({ error: "SHOT_COMPLETED", hint: "Use force:true to override" }); return;
   }
   if (shot.directorStatus === "processing" && !req.body?.force) {
     res.status(409).json({ error: "ALREADY_ANALYZING" }); return;
   }
-  await db.update(shotsTable).set({ directorStatus: "processing" }).where(eq(shotsTable.id, id));
+
+  const directorClaimToken = "dclaim-" + Date.now() + "-" + Math.random().toString(36).substring(2, 15);
+  await db.update(shotsTable).set({ directorStatus: "processing", directorClaimToken }).where(eq(shotsTable.id, id));
+  
   const result = await runDirector(shot.description || "", shot.dialogue || "", null);
+  
   if (!result.ok) {
-    await db.update(shotsTable).set({ directorStatus: "failed", directorError: result.error }).where(eq(shotsTable.id, id));
+    await db.update(shotsTable).set({ directorStatus: "failed", directorError: result.error }).where(and(eq(shotsTable.id, id), eq(shotsTable.directorClaimToken, directorClaimToken)));
     res.status(500).json({ error: "DIRECTOR_FAILED", detail: result.error }); return;
   }
+  
   const merged = mergeFields(result.audio_instruction, shot.manualInstruction, shot.dialogue || "");
   const resolved = buildResolvedText(shot.dialogue || "", merged);
-  await db.update(shotsTable).set({
+  
+  const updated = await db.update(shotsTable).set({
     audioInstruction: result.audio_instruction,
     resolvedText: resolved,
     directorStatus: "analyzed",
     directorError: null,
     directorAnalyzedAt: new Date(),
-    directorInputHash: result.audio_instruction.input_hash
-  }).where(eq(shotsTable.id, id));
+    directorInputHash: result.audio_instruction.input_hash,
+    directorClaimToken: null
+  }).where(and(eq(shotsTable.id, id), eq(shotsTable.directorClaimToken, directorClaimToken))).returning();
+
+  if (updated.length === 0) {
+    res.status(409).json({ error: "CLAIM_EXPIRED", detail: "Another process took over this shot analysis" }); return;
+  }
   res.json({ ok: true, audio_instruction: result.audio_instruction, resolved_text: resolved });
 });
 

@@ -54,8 +54,19 @@ def process_shot(session, shot, state):
     shot_id = shot["shotId"]
     project_id = shot["projectId"]
     dialogue_text = (shot.get("dialogue") or "").strip()
+    description_text = (shot.get("description") or "").strip()
     resolved = shot.get("resolvedText")
-    if resolved and resolved.strip():
+    input_hash = shot.get("directorInputHash")
+    
+    is_fresh = False
+    if resolved and resolved.strip() and input_hash:
+        import json, hashlib
+        payload = json.dumps({"description": description_text, "dialogue": dialogue_text, "characterId": None}, separators=(',', ':'), ensure_ascii=False)
+        computed_hash = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+        if computed_hash == input_hash:
+            is_fresh = True
+
+    if is_fresh:
         text = resolved.strip()
         tag = "resolved"
     else:
