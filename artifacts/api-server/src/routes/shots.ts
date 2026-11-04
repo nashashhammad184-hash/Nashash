@@ -340,7 +340,25 @@ router.patch("/shots/:id/manual-instruction", requireProductionAuth, async (req:
   if (incoming.emotion && !EMOTIONS.includes(incoming.emotion)) { res.status(400).json({ error: "INVALID_EMOTION" }); return; }
   if (incoming.audar_tag !== undefined && incoming.audar_tag !== null && !AUDAR_TAGS.includes(incoming.audar_tag)) { res.status(400).json({ error: "INVALID_TAG" }); return; }
   
-  const newFields = { ...current.fields, ...incoming };
+  const newFields = { ...current.fields };
+  
+  if (incoming.emotion !== undefined) {
+    if (incoming.emotion === null) delete newFields.emotion;
+    else newFields.emotion = { value: incoming.emotion, source: "manual" };
+  }
+  if (incoming.audar_tag !== undefined) {
+    if (incoming.audar_tag === null) newFields.audar_tag = { value: null, source: "manual" };
+    else newFields.audar_tag = { value: incoming.audar_tag, source: "manual" };
+  }
+  if (incoming.intensity !== undefined) {
+    if (incoming.intensity === null) delete newFields.intensity;
+    else newFields.intensity = { value: incoming.intensity, source: "manual" };
+  }
+  if (incoming.delivery !== undefined) {
+    if (incoming.delivery === null) delete newFields.delivery;
+    else newFields.delivery = { value: incoming.delivery, source: "manual" };
+  }
+  
   const newManual = { updated_at: new Date().toISOString(), fields: newFields };
   
   const merged = mergeFields(shot.audioInstruction, newManual, shot.dialogue || "");
