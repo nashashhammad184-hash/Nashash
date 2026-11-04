@@ -408,7 +408,9 @@ router.post("/shots/:id/preview-audio", requireProductionAuth, async (req: Reque
   }
 
   const tagMatch = textToSpeak.match(/^\s*\[(\w+)\]/);
-  const tag = tagMatch ? tagMatch[1] : "neutral";
+  const allowedTags = ["whispers", "excited", "curious", "sad", "laughs", "sarcastic", "mischievously", "neutral"];
+  let tag = tagMatch ? tagMatch[1] : "neutral";
+  if (!allowedTags.includes(tag)) tag = "neutral";
   const targetDuration = shot.durationSeconds || 5.0;
   const idemKey = `preview-${id}-${Date.now()}`;
 

@@ -6,15 +6,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getListProjectShotsQueryKey } from "@workspace/api-client-react";
 
 const EMOTIONS = ["neutral","joy","sadness","anger","fear","surprise","disgust","romantic","anxious","confident"];
-const AUDAR_TAGS = ["[laughs]","[curious]","[excited]","[sighs]","[exhales]","[mischievously]","[whispers]","[sarcastic]"];
+const AUDAR_TAGS = ["[laughs]","[curious]","[excited]","[neutral]","[sad]","[mischievously]","[whispers]","[sarcastic]"];
 
 const EMOTION_LABELS: Record<string, string> = {
   neutral: "محايد", joy: "فرح", sadness: "حزن", anger: "غضب", fear: "خوف",
   surprise: "مفاجأة", disgust: "اشمئزاز", romantic: "رومانسي", anxious: "قلق", confident: "ثقة"
 };
 const TAG_LABELS: Record<string, string> = {
-  "[laughs]": "ضحك", "[curious]": "فضول", "[excited]": "حماس", "[sighs]": "تنهد",
-  "[exhales]": "زفير", "[mischievously]": "مكر", "[whispers]": "همس", "[sarcastic]": "سخرية"
+  "[laughs]": "ضحك", "[curious]": "فضول", "[excited]": "حماس", "[neutral]": "محايد",
+  "[sad]": "حزن", "[mischievously]": "مكر", "[whispers]": "همس", "[sarcastic]": "سخرية"
 };
 
 
