@@ -337,8 +337,8 @@ router.patch("/shots/:id/manual-instruction", requireProductionAuth, async (req:
   const incoming = req.body?.fields || {};
   const current = shot.manualInstruction || { updated_at: new Date().toISOString(), fields: {} };
   
-  if (incoming.emotion && !EMOTIONS.includes(incoming.emotion)) { res.status(400).json({ error: "INVALID_EMOTION" }); return; }
-  if (incoming.audar_tag !== undefined && incoming.audar_tag !== null && !AUDAR_TAGS.includes(incoming.audar_tag)) { res.status(400).json({ error: "INVALID_TAG" }); return; }
+  if (incoming.emotion && !(EMOTIONS as readonly string[]).includes(incoming.emotion)) { res.status(400).json({ error: "INVALID_EMOTION" }); return; }
+  if (incoming.audar_tag !== undefined && incoming.audar_tag !== null && !(AUDAR_TAGS as readonly string[]).includes(incoming.audar_tag)) { res.status(400).json({ error: "INVALID_TAG" }); return; }
   
   const newFields = { ...current.fields };
   

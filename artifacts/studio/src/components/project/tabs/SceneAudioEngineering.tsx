@@ -77,7 +77,10 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot: any; 
     setPreviewUrl(null);
     try {
       const r = await fetch(`/api/shots/${shot.id}/preview-audio`, { method: "POST" });
-      if (!r.ok) throw new Error("فشل التوليد");
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.detail ? `فشل: ${d.detail}` : (d.error || "فشل التوليد"));
+      }
       const blob = await r.blob();
       setPreviewUrl(URL.createObjectURL(blob));
     } catch (e: any) { toast.error(e.message); }
