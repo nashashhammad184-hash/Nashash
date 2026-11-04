@@ -52,7 +52,16 @@ export function buildResolvedText(dialogue: string, merged: MergedFields): strin
   if (!merged.emotion && !merged.audar_tag) {
     return null;
   }
-  const base = dialogue.trim();
+  let base = dialogue.trim();
+  
+  // إزالة أسماء الشخصيات والتوجيهات قبل النقطتين (مثل "صفية تهمس: ")
+  base = base.replace(/^[^:\{\[]+:\s*/, "");
+  // إزالة الأقواس المعقوفة
+  base = base.replace(/[{}]/g, "");
+  base = base.trim();
+
+  if (!base) return null;
+
   const tag = merged.audar_tag?.value;
   if (!tag) {
     return base;
