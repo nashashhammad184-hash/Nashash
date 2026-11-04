@@ -80,6 +80,14 @@ export interface CreateRenderJobInput {
    *  If absent or empty → video-only MP4 (dialogue-free projects).
    *  Silent fallback (anullsrc / silent.mp3) is still FORBIDDEN. */
   audioUrl?: string;
+  additionalAudio?: Array<{
+    url: string;
+    startTime: number;
+    volume: number;
+    fadeIn: number;
+    fadeOut: number;
+    endTime: number;
+  }>;
   watermarkText?: string;
   subtitlesText?: string;
   /** TASK-34: link this render job to a pipeline run for reuse on resume. */
@@ -538,32 +546,59 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
 
     const finalVf = vfParts.length > 0 ? vfParts.join(",") : "null";
 
-    const finalArgs: string[] = [
-      "-y", "-hide_banner", "-loglevel", "error",
-      "-i", concatPath,
-    ];
+  const finalArgs: string[] = [
+    "-y", "-hide_banner", "-loglevel", "error",
+    "-i", concatPath,
+  ];
+  const additional = (input.additionalAudio || []).filter((a: any) => a.url);
+  if (audioMode === "AUDIO" && audioLocal) {
+    finalArgs.push("-i", audioLocal);
+  }
+  for (const a of additional) {
+    finalArgs.push("-i", a.url);
+  }
+  if (finalVf !== "null") {
+    finalArgs.push("-vf", finalVf);
+  }
+  finalArgs.push("-map", "0:v:0");
+
+  const totalAudioInputs = (audioMode === "AUDIO" && audioLocal ? 1 : 0) + additional.length;
+  if (totalAudioInputs > 0) {
+    const filterParts: string[] = [];
+    let ai = 0;
     if (audioMode === "AUDIO" && audioLocal) {
-      finalArgs.push("-i", audioLocal);
+      filterParts.push(`[1:a]apad=whole_dur=${videoDuration}[a0]`);
+      ai = 1;
     }
-    if (finalVf !== "null") {
-      finalArgs.push("-vf", finalVf);
+    let inputIdx = (audioMode === "AUDIO" && audioLocal ? 2 : 1);
+    for (const extra of additional) {
+      let chain = `[${inputIdx}:a]`;
+      if (extra.volume !== 1.0) chain += `volume=${extra.volume},`;
+      if (extra.fadeIn > 0) chain += `afade=t=in:st=${extra.startTime}:d=${extra.fadeIn},`;
+      if (extra.fadeOut > 0) chain += `afade=t=out:st=${extra.endTime - extra.fadeOut}:d=${extra.fadeOut},`;
+      if (extra.startTime > 0) chain += `adelay=${Math.round(extra.startTime*1000)}|${Math.round(extra.startTime*1000)},`;
+      chain += `atrim=0:${Math.min(extra.endTime, videoDuration)},`;
+      chain += `apad=whole_dur=${videoDuration}`;
+      filterParts.push(`${chain}[a${ai}]`);
+      ai++;
+      inputIdx++;
     }
-    finalArgs.push("-map", "0:v:0");
-    if (audioMode === "AUDIO") {
-      finalArgs.push("-map", "1:a:0");
-    }
-    finalArgs.push(
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-    );
-    if (audioMode === "AUDIO") {
-      finalArgs.push("-c:a", "aac", "-b:a", "192k");
-    }
-    finalArgs.push(
-      "-t", String(videoDuration),
-      "-movflags", "+faststart",
-      outputPath,
-    );
-    await spawnFfmpeg(finalArgs);
+    const amixInputs = Array.from({length: ai}, (_, i) => `[a${i}]`).join('');
+    filterParts.push(`${amixInputs}amix=inputs=${ai}:duration=longest:dropout_transition=0[amix]`);
+    finalArgs.push("-filter_complex", filterParts.join(";"));
+    finalArgs.push("-map", "[amix]");
+    finalArgs.push("-c:a", "aac", "-b:a", "192k");
+  }
+
+  finalArgs.push(
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+  );
+  finalArgs.push(
+    "-t", String(videoDuration),
+    "-movflags", "+faststart",
+    outputPath,
+  );
+  await spawnFfmpeg(finalArgs);
 
     // ─── Verify final output ───
     if (!fs.existsSync(outputPath)) throw new Error("ffmpeg reported success but output file is missing");

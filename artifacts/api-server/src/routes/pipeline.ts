@@ -28,6 +28,7 @@ import {
   productionPipeline,
   timelineItemsTable,
   editClipsTable,
+  shotAudioAssetsTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import {
@@ -972,11 +973,43 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       }
     }
 
+    // KAYAN-14: build additionalAudio from shot_audio_assets (music, ambience, foley, sfx)
+    const shotIds = shots.map((sh) => sh.id);
+    let additionalAudio: Array<{ url: string; startTime: number; volume: number; fadeIn: number; fadeOut: number; endTime: number }> = [];
+    if (shotIds.length > 0) {
+      try {
+        const shotAudioRows = await db.select().from(shotAudioAssetsTable)
+          .where(and(inArray(shotAudioAssetsTable.shotId, shotIds), eq(shotAudioAssetsTable.status, "approved")));
+        // Build shot start times from timelineInserted
+        const shotStartMap = new Map<number, number>();
+        let cursor = 0;
+        for (const t of timelineInserted) {
+          shotStartMap.set(t.shotId, cursor);
+          cursor += t.duration;
+        }
+        for (const row of shotAudioRows) {
+          if (!row.audioUrl) continue;
+          const shotStart = shotStartMap.get(row.shotId) ?? 0;
+          additionalAudio.push({
+            url: row.audioUrl,
+            startTime: shotStart + (row.startTime || 0),
+            endTime: shotStart + (row.endTime || 5),
+            volume: row.volume ?? 1.0,
+            fadeIn: row.fadeIn ?? 0,
+            fadeOut: row.fadeOut ?? 0,
+          });
+        }
+      } catch (e: any) {
+        logger.warn({ err: e.message }, "KAYAN-14: additionalAudio query failed, continuing with VOICE only");
+      }
+    }
+
     if (!renderJob) {
       const created = await createRenderJob({
         projectId,
         clips: renderClips,
         audioUrl: renderAudioUrl,
+        additionalAudio: additionalAudio.length > 0 ? additionalAudio : undefined,
         watermarkText: "PRODUCED BY KAYAN AI PRODUCTIONS",
         pipelineRunId: runId,
       });
