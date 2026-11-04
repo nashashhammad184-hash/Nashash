@@ -362,4 +362,72 @@ router.post("/shots/:id/restore-director", requireProductionAuth, async (req: Re
   res.json({ ok: true, resolved_text: resolved });
 });
 
+router.post("/shots/:id/preview-audio", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "INVALID_SHOT_ID" });
+    return;
+  }
+
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) {
+    res.status(404).json({ error: "SHOT_NOT_FOUND" });
+    return;
+  }
+
+  const textToSpeak = shot.resolvedText || shot.dialogue;
+  if (!textToSpeak || textToSpeak.trim().length === 0) {
+    res.status(400).json({ error: "EMPTY_TEXT" });
+    return;
+  }
+
+  const audarUrl = process.env.AUDAR_URL;
+  const audarToken = process.env.AUDAR_TOKEN;
+
+  if (!audarUrl || !audarToken) {
+    res.status(500).json({ error: "AUDAR_CONFIG_MISSING" });
+    return;
+  }
+
+  const tagMatch = textToSpeak.match(/^\s*\[(\w+)\]/);
+  const tag = tagMatch ? tagMatch[1] : "neutral";
+  const targetDuration = shot.durationSeconds || 5.0;
+  const idemKey = `preview-${id}-${Date.now()}`;
+
+  try {
+    const response = await fetch(`${audarUrl}/tts`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${audarToken}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": idemKey,
+      },
+      body: JSON.stringify({
+        text: textToSpeak,
+        tag: tag,
+        voice: "demo_female_1",
+        target_duration_s: targetDuration,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("Preview Oracle error:", errText);
+      res.status(502).json({ error: "ORACLE_TTS_FAILED", detail: errText });
+      return;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Length", buffer.length.toString());
+    res.send(buffer);
+
+  } catch (error: any) {
+    console.error("Preview error:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", detail: error.message });
+  }
+});
+
 export default router;
