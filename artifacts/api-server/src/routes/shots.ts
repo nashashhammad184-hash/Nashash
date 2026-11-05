@@ -483,28 +483,32 @@ router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Reque
 
   // Save suggestions as "proposed" (user must approve before render)
   const savedSuggestions: any[] = [];
+  const skipped: string[] = [];
   if (result.suggestions && result.suggestions.length > 0) {
     // Clean old "proposed" suggestions for this shot (keep approved/rejected)
     await db.delete(shotAudioAssetsTable).where(
       and(eq(shotAudioAssetsTable.shotId, id), eq(shotAudioAssetsTable.status, "proposed"))
     );
-    // Skip asset types that already have an approved asset (avoid duplicates)
+    // Skip asset types that already have an approved asset + dedupe within same call
     const approvedRows = await db.select({ t: shotAudioAssetsTable.assetType })
       .from(shotAudioAssetsTable)
       .where(and(eq(shotAudioAssetsTable.shotId, id), eq(shotAudioAssetsTable.status, "approved")));
-    const approvedTypes = new Set(approvedRows.map(r => r.t));
+    const blockedTypes = new Set(approvedRows.map(r => r.t));
+    const insertedTypes = new Set<string>();
 
     for (const sug of result.suggestions) {
-      if (approvedTypes.has(sug.asset_type)) continue;
       const libAsset = normalizedAssets.find(a => a.asset_id === sug.asset_id);
       if (!libAsset) continue;
-      // Lookup library URL
+      // Lookup library row (authoritative asset type)
       const [libRow] = await db.select().from(audioLibraryAssetsTable).where(eq(audioLibraryAssetsTable.assetId, sug.asset_id)).limit(1);
       if (!libRow) continue;
+      const realType = libRow.assetType;
+      if (blockedTypes.has(realType)) { skipped.push(realType + "(approved)"); continue; }
+      if (insertedTypes.has(realType)) { skipped.push(realType + "(dup)"); continue; }
       const [inserted] = await db.insert(shotAudioAssetsTable).values({
         shotId: id,
         libraryAssetId: libRow.id,
-        assetType: sug.asset_type || libRow.assetType,
+        assetType: realType,
         audioUrl: libRow.audioUrl,
         startTime: sug.start_time ?? 0,
         endTime: sug.end_time ?? (shot.durationSeconds || 5),
@@ -514,11 +518,12 @@ router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Reque
         status: "proposed",
         source: "director",
       }).returning();
+      insertedTypes.add(realType);
       savedSuggestions.push(inserted);
     }
   }
 
-  res.json({ ok: true, suggestions: savedSuggestions });
+  res.json({ ok: true, suggestions: savedSuggestions, skipped });
 });
 
 export default router;
