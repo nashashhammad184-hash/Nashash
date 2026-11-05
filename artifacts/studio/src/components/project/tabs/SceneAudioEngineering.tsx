@@ -227,48 +227,61 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     stopSingle();
     stopAll();
     const approved = assets.filter(a => a.status === "approved");
-    const items: {label:string; url:string; start:number; end:number; volume:number}[] = [];
     const voiceUrl = s.audioUrl || shot.audioUrl;
-    if (voiceUrl) items.push({ label:"🎙️ حوار", url: voiceUrl, start: 0, end: 60, volume: 1.0 });
-    approved.forEach(a => items.push({ label:`#${a.id} ${a.assetType||""}`, url: a.audioUrl, start: a.startTime ?? 0, end: a.endTime ?? 10, volume: a.volume ?? 0.7 }));
-    if (items.length === 0) { toast.error("لا يوجد صوت للتشغيل — وافق على أصل واحد على الأقل أو ولّد الحوار أولاً"); return; }
-    toast.loading(`تحميل ${items.length} مسار...`, { id: "load" });
-    const loaded: {el:HTMLAudioElement; start:number; end:number; label:string}[] = [];
-    for (const it of items) {
-      const u = await resolveToPlayableUrl(it.url);
-      if (!u) { console.warn("[preview] skip", it.label, it.url); continue; }
-      const el = new Audio(u);
-      el.preload = "auto";
-      el.volume = Math.max(0, Math.min(1, it.volume));
-      try { el.crossOrigin = "anonymous"; } catch {}
-      await new Promise<void>(res => {
-        if (el.readyState >= 1) return res();
-        el.addEventListener("loadedmetadata", () => res(), { once: true });
-        el.addEventListener("error", (ev) => { console.warn("[preview] audio error", it.label, it.url, ev); res(); }, { once: true });
-        setTimeout(res, 4000);
-      });
-      loaded.push({ el, start: it.start, end: it.end, label: it.label });
+    if (!voiceUrl && approved.length === 0) {
+      toast.error("لا يوجد صوت — ولّد الحوار أو اعتمد أصلاً واحداً على الأقل");
+      return;
     }
-    toast.dismiss("load");
-    if (loaded.length === 0) { toast.error("فشل تحميل الصوت (افتح Console لمزيد التفاصيل)"); return; }
-    console.log("[preview] loaded", loaded.map(l => l.label));
-    audioRefs.current = loaded.map(l => l.el);
-    const t0 = Date.now();
-    loaded.forEach(({ el, start, end }) => {
-      if (start > 0) setTimeout(() => { el.play().catch((e)=>console.warn("play err", e)); }, start * 1000);
-      else el.play().catch((e)=>console.warn("play err", e));
-      if (end < 60) setTimeout(() => { try { el.pause(); el.currentTime = 0; } catch {} }, end * 1000);
-    });
-    const maxDur = Math.max(...loaded.map(l => l.end), 5);
-    setPlayDuration(maxDur); setPlaying(true);
-    timerRef.current = window.setInterval(() => {
-      const el2 = (Date.now() - t0) / 1000;
-      setPlayCurrent(Math.min(el2, maxDur));
-      setPlayProgress(Math.min(1, el2 / maxDur));
-      if (el2 >= maxDur) stopAll();
-    }, 100);
-    if (loaded.length < items.length) {
-      toast.warning(`تم تحميل ${loaded.length}/${items.length} فقط`);
+    try {
+      const created: {el:HTMLAudioElement; start:number; end:number; targetVol:number; label:string}[] = [];
+      const makeEl = (url:string) => {
+        const el = new Audio(url);
+        el.preload = "auto";
+        try { el.crossOrigin = "anonymous"; } catch {}
+        return el;
+      };
+      if (voiceUrl) {
+        created.push({ el: makeEl(voiceUrl), start: 0, end: 600, targetVol: 1.0, label: "voice" });
+      }
+      approved.forEach(a => {
+        created.push({ el: makeEl(a.audioUrl), start: a.startTime ?? 0, end: a.endTime ?? 10, targetVol: a.volume ?? 0.7, label: `#${a.id}` });
+      });
+      created.forEach(c => { try { c.el.volume = 0; } catch {} });
+      const playResults = await Promise.allSettled(created.map(c => c.el.play()));
+      const playable = created.filter((_, i) => playResults[i].status === "fulfilled");
+      if (playable.length === 0) {
+        const reason = (playResults[0] as PromiseRejectedResult)?.reason?.message || "غير معروف";
+        toast.error(`فشل التشغيل: ${reason}`);
+        return;
+      }
+      audioRefs.current = playable.map(c => c.el);
+      const t0 = Date.now();
+      const maxDur = Math.max(...playable.map(c => c.end), 5);
+      setPlayDuration(maxDur); setPlaying(true);
+      playable.forEach(c => {
+        if (c.start > 0) {
+          setTimeout(() => { try { c.el.volume = Math.max(0, Math.min(1, c.targetVol)); } catch {} }, c.start * 1000);
+        } else {
+          try { c.el.volume = Math.max(0, Math.min(1, c.targetVol)); } catch {}
+        }
+        if (c.end < 60) {
+          setTimeout(() => { try { c.el.pause(); c.el.currentTime = 0; } catch {} }, c.end * 1000);
+        }
+      });
+      if (playable.length < created.length) {
+        toast.warning(`تم تشغيل ${playable.length}/${created.length} مساراً`);
+      } else {
+        toast.success(`تشغيل ${playable.length} مسار`);
+      }
+      timerRef.current = window.setInterval(() => {
+        const t = (Date.now() - t0) / 1000;
+        setPlayCurrent(Math.min(t, maxDur));
+        setPlayProgress(Math.min(1, t / maxDur));
+        if (t >= maxDur) stopAll();
+      }, 100);
+    } catch (e:any) {
+      toast.error(`فشل التشغيل: ${e?.message || "خطأ"}`);
+      setPlaying(false);
     }
   };
 
