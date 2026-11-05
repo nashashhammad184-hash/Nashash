@@ -551,7 +551,16 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     "-y", "-hide_banner", "-loglevel", "error",
     "-i", concatPath,
   ];
-  const additional = (input.additionalAudio || []).filter((a: any) => a.url);
+  const additionalRaw = (input.additionalAudio || []).filter((a: any) => a.url);
+  const additional: any[] = [];
+  for (const a of additionalRaw) {
+    try {
+      const resolvedPath = await resolveAssetToLocal(a.url, tempTracker, storageCleanupTracker);
+      additional.push({ ...a, url: resolvedPath });
+    } catch (e: any) {
+      console.warn(`[renderEngine] failed to resolve additional audio ${a.url}:`, e.message);
+    }
+  }
   if (audioMode === "AUDIO" && audioLocal) {
     finalArgs.push("-i", audioLocal);
   }
