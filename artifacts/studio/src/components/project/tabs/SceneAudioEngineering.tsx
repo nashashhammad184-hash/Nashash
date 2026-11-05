@@ -207,48 +207,57 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     }
   };
 
-  const fetchAsUrl = async (url:string): Promise<string|null> => {
+  const resolveToPlayableUrl = async (url:string): Promise<string|null> => {
+    if (!url) return null;
+    // External absolute URL (http/https) — use directly, avoids CORS blob issues
+    if (/^https?:\/\//i.test(url)) return url;
+    // Relative /api path — fetch with credentials → blob
     try {
       const r = await fetch(url, { credentials:"include" });
-      if (!r.ok) return null;
+      if (!r.ok) { console.warn("[preview] fetch failed", url, r.status); return null; }
       const b = await r.blob();
       const u = URL.createObjectURL(b);
       urlRefs.current.push(u);
       return u;
-    } catch { return null; }
+    } catch (e) { console.warn("[preview] fetch error", url, e); return null; }
   };
 
   const previewAll = async () => {
     if (playing) { stopAll(); return; }
+    stopSingle();
     stopAll();
     const approved = assets.filter(a => a.status === "approved");
-    const items: {url:string; start:number; end:number; volume:number}[] = [];
-    if (s.audioUrl) items.push({ url: s.audioUrl, start: 0, end: 60, volume: 1.0 });
-    approved.forEach(a => items.push({ url: a.audioUrl, start: a.startTime ?? 0, end: a.endTime ?? 10, volume: a.volume ?? 0.7 }));
-    if (items.length === 0) { toast.error("لا يوجد صوت للتشغيل"); return; }
-    toast.loading("تحميل...", { id: "load" });
-    const loaded: {el:HTMLAudioElement; start:number; end:number}[] = [];
+    const items: {label:string; url:string; start:number; end:number; volume:number}[] = [];
+    const voiceUrl = s.audioUrl || shot.audioUrl;
+    if (voiceUrl) items.push({ label:"🎙️ حوار", url: voiceUrl, start: 0, end: 60, volume: 1.0 });
+    approved.forEach(a => items.push({ label:`#${a.id} ${a.assetType||""}`, url: a.audioUrl, start: a.startTime ?? 0, end: a.endTime ?? 10, volume: a.volume ?? 0.7 }));
+    if (items.length === 0) { toast.error("لا يوجد صوت للتشغيل — وافق على أصل واحد على الأقل أو ولّد الحوار أولاً"); return; }
+    toast.loading(`تحميل ${items.length} مسار...`, { id: "load" });
+    const loaded: {el:HTMLAudioElement; start:number; end:number; label:string}[] = [];
     for (const it of items) {
-      const u = await fetchAsUrl(it.url);
-      if (!u) continue;
+      const u = await resolveToPlayableUrl(it.url);
+      if (!u) { console.warn("[preview] skip", it.label, it.url); continue; }
       const el = new Audio(u);
       el.preload = "auto";
       el.volume = Math.max(0, Math.min(1, it.volume));
+      try { el.crossOrigin = "anonymous"; } catch {}
       await new Promise<void>(res => {
         if (el.readyState >= 1) return res();
         el.addEventListener("loadedmetadata", () => res(), { once: true });
-        el.addEventListener("error", () => res(), { once: true });
-        setTimeout(res, 3000);
+        el.addEventListener("error", (ev) => { console.warn("[preview] audio error", it.label, it.url, ev); res(); }, { once: true });
+        setTimeout(res, 4000);
       });
-      loaded.push({ el, start: it.start, end: it.end });
+      loaded.push({ el, start: it.start, end: it.end, label: it.label });
     }
     toast.dismiss("load");
-    if (loaded.length === 0) { toast.error("فشل تحميل الصوت"); return; }
+    if (loaded.length === 0) { toast.error("فشل تحميل الصوت (افتح Console لمزيد التفاصيل)"); return; }
+    console.log("[preview] loaded", loaded.map(l => l.label));
     audioRefs.current = loaded.map(l => l.el);
     const t0 = Date.now();
     loaded.forEach(({ el, start, end }) => {
-      setTimeout(() => { el.play().catch(()=>{}); }, start * 1000);
-      if (end < 60) setTimeout(() => { el.pause(); el.currentTime = 0; }, end * 1000);
+      if (start > 0) setTimeout(() => { el.play().catch((e)=>console.warn("play err", e)); }, start * 1000);
+      else el.play().catch((e)=>console.warn("play err", e));
+      if (end < 60) setTimeout(() => { try { el.pause(); el.currentTime = 0; } catch {} }, end * 1000);
     });
     const maxDur = Math.max(...loaded.map(l => l.end), 5);
     setPlayDuration(maxDur); setPlaying(true);
@@ -258,6 +267,9 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       setPlayProgress(Math.min(1, el2 / maxDur));
       if (el2 >= maxDur) stopAll();
     }, 100);
+    if (loaded.length < items.length) {
+      toast.warning(`تم تحميل ${loaded.length}/${items.length} فقط`);
+    }
   };
 
   const analyze = async (force = false) => {
