@@ -222,14 +222,33 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     } catch (e) { console.warn("[preview] fetch error", url, e); return null; }
   };
 
+  const resolveVoiceUrl = async (): Promise<string|null> => {
+    const existing = s.audioUrl || shot.audioUrl;
+    if (existing) return existing;
+    // Generate dialogue on-demand via preview-audio endpoint
+    try {
+      toast.loading("توليد الحوار...", { id: "voice" });
+      const r = await fetch(`/api/shots/${shot.id}/preview-audio`, { method: "POST" });
+      if (!r.ok) { toast.error("فشل توليد الحوار — نشغّل الأصول فقط", { id: "voice" }); return null; }
+      const b = await r.blob();
+      const u = URL.createObjectURL(b);
+      urlRefs.current.push(u);
+      toast.success("تم توليد الحوار", { id: "voice" });
+      return u;
+    } catch {
+      toast.error("فشل توليد الحوار", { id: "voice" });
+      return null;
+    }
+  };
+
   const previewAll = async () => {
     if (playing) { stopAll(); return; }
     stopSingle();
     stopAll();
     const approved = assets.filter(a => a.status === "approved");
-    const voiceUrl = s.audioUrl || shot.audioUrl;
+    const voiceUrl = await resolveVoiceUrl();
     if (!voiceUrl && approved.length === 0) {
-      toast.error("لا يوجد صوت — ولّد الحوار أو اعتمد أصلاً واحداً على الأقل");
+      toast.error("لا يوجد صوت — اعتمد أصلاً واحداً على الأقل أو تأكد من resolved_text");
       return;
     }
     try {
