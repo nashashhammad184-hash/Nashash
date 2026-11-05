@@ -333,12 +333,40 @@ router.post("/projects/:id/timeline/sync", requireProductionAuth, async (req: Re
       return;
     }
 
+    // KAYAN-14: fetch approved additional audio (music, sfx, ambience, foley)
+    let additionalAudio: Array<{ url: string; startTime: number; volume: number; fadeIn: number; fadeOut: number; endTime: number }> = [];
+    try {
+      const shotAudioResult: any = await db.execute(sql`
+        SELECT saa.audio_url, saa.start_time, saa.end_time, saa.volume, saa.fade_in, saa.fade_out,
+               ti.start_time AS shot_start_time
+        FROM shot_audio_assets saa
+        JOIN timeline_items ti ON ti.shot_id = saa.shot_id AND ti.project_id = ${projectId} AND ti.track = 'VIDEO'
+        WHERE saa.status = 'approved' AND saa.audio_url IS NOT NULL
+      `);
+      const rows: any[] = shotAudioResult?.rows ?? shotAudioResult ?? [];
+      for (const row of rows) {
+        const shotStart = Number(row.shot_start_time) || 0;
+        additionalAudio.push({
+          url: row.audio_url,
+          startTime: shotStart + (Number(row.start_time) || 0),
+          endTime: shotStart + (Number(row.end_time) || 5),
+          volume: Number(row.volume) || 1.0,
+          fadeIn: Number(row.fade_in) || 0,
+          fadeOut: Number(row.fade_out) || 0,
+        });
+      }
+      console.log("[timeline] additionalAudio count:", additionalAudio.length);
+    } catch (e: any) {
+      console.warn("[timeline] additionalAudio query failed:", e.message);
+    }
+
     const activeRenderJob = await createRenderJob({
       projectId,
       watermarkText: "Produced by Kayan AI Productions",
       subtitlesText: undefined,
       clips: renderClips,
       audioUrl,
+      additionalAudio: additionalAudio.length > 0 ? additionalAudio : undefined,
     });
 
     // Kick off background execution
