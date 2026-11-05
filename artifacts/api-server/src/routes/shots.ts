@@ -488,7 +488,14 @@ router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Reque
     await db.delete(shotAudioAssetsTable).where(
       and(eq(shotAudioAssetsTable.shotId, id), eq(shotAudioAssetsTable.status, "proposed"))
     );
+    // Skip asset types that already have an approved asset (avoid duplicates)
+    const approvedRows = await db.select({ t: shotAudioAssetsTable.assetType })
+      .from(shotAudioAssetsTable)
+      .where(and(eq(shotAudioAssetsTable.shotId, id), eq(shotAudioAssetsTable.status, "approved")));
+    const approvedTypes = new Set(approvedRows.map(r => r.t));
+
     for (const sug of result.suggestions) {
+      if (approvedTypes.has(sug.asset_type)) continue;
       const libAsset = normalizedAssets.find(a => a.asset_id === sug.asset_id);
       if (!libAsset) continue;
       // Lookup library URL
