@@ -338,10 +338,11 @@ router.post("/projects/:id/timeline/sync", requireProductionAuth, async (req: Re
     try {
       const shotAudioResult: any = await db.execute(sql`
         SELECT saa.audio_url, saa.start_time, saa.end_time, saa.volume, saa.fade_in, saa.fade_out,
-               ti.start_time AS shot_start_time
+               MIN(ti.start_time) AS shot_start_time
         FROM shot_audio_assets saa
         JOIN timeline_items ti ON ti.shot_id = saa.shot_id AND ti.project_id = ${projectId} AND ti.track = 'VIDEO'
         WHERE saa.status = 'approved' AND saa.audio_url IS NOT NULL
+        GROUP BY saa.id, saa.audio_url, saa.start_time, saa.end_time, saa.volume, saa.fade_in, saa.fade_out
       `);
       const rows: any[] = shotAudioResult?.rows ?? shotAudioResult ?? [];
       for (const row of rows) {
