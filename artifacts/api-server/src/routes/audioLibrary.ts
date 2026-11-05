@@ -56,7 +56,7 @@ router.post("/shots/:id/audio-assets", requireProductionAuth, async (req: Reques
 // PATCH /api/shot-audio-assets/:id
 router.patch("/shot-audio-assets/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const { start_time, end_time, volume, fade_in, fade_out, status } = req.body;
+  const { start_time, end_time, volume, fade_in, fade_out, status, library_asset_id, libraryAssetId, audio_url, audioUrl } = req.body;
   const patch: any = {};
   if (start_time !== undefined) patch.startTime = start_time;
   if (end_time !== undefined) patch.endTime = end_time;
@@ -64,6 +64,16 @@ router.patch("/shot-audio-assets/:id", requireProductionAuth, async (req: Reques
   if (fade_in !== undefined) patch.fadeIn = fade_in;
   if (fade_out !== undefined) patch.fadeOut = fade_out;
   if (status !== undefined) patch.status = status;
+  const libId = library_asset_id ?? libraryAssetId;
+  const newUrl = audio_url ?? audioUrl;
+  if (libId !== undefined) patch.libraryAssetId = libId;
+  if (newUrl !== undefined) patch.audioUrl = newUrl;
+  if (libId !== undefined && newUrl === undefined) {
+    const [lib] = await db.select().from(audioLibraryAssetsTable).where(eq(audioLibraryAssetsTable.id, libId)).limit(1);
+    if (!lib) { res.status(404).json({ error: "LIBRARY_ASSET_NOT_FOUND" }); return; }
+    patch.audioUrl = (lib as any).audioUrl;
+    if (!patch.assetType) patch.assetType = (lib as any).assetType;
+  }
   if (Object.keys(patch).length === 0) { res.status(400).json({ error: "NO_FIELDS" }); return; }
   try {
     const [asset] = await db.update(shotAudioAssetsTable).set(patch).where(eq(shotAudioAssetsTable.id, id)).returning();
