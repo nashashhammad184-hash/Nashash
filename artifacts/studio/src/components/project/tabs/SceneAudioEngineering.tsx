@@ -35,10 +35,13 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
   const [playDuration, setPlayDuration] = useState(0);
   const [freshShot, setFreshShot] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
+  const [library, setLibrary] = useState<Record<string, any[]>>({});
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const urlRefs = useRef<string[]>([]);
   const timerRef = useRef<number|null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [currentlyPlayingId, setCurrentlyPlayingId] = useState<number|null>(null);
+  const singleAudioRef = useRef<HTMLAudioElement|null>(null);
 
   const s = freshShot || shot;
   const instr = s.audioInstruction;
@@ -69,6 +72,34 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     setPlaying(false); setPlayProgress(0); setPlayCurrent(0);
   };
 
+  const loadLibrary = async () => {
+    try {
+      const types = ["music","ambience","foley","sfx"] as const;
+      const results = await Promise.all(types.map(async t => {
+        const r = await fetch(`/api/audio-library?type=${t}`, { credentials:"include" });
+        if (!r.ok) return [t, []] as [string, any[]];
+        const d = await r.json();
+        return [t, d.assets || d.items || []] as [string, any[]];
+      }));
+      const map: Record<string, any[]> = {};
+      results.forEach(([t, arr]) => { map[t] = arr; });
+      setLibrary(map);
+    } catch {}
+  };
+
+  const handleAssetChange = async (assetId:number, libIdStr:string) => {
+    if (!libIdStr) return;
+    const libId = Number(libIdStr);
+    setAssetBusy(assetId);
+    try {
+      const r = await fetch(`/api/shot-audio-assets/${assetId}`, { method:"PATCH", credentials:"include", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ library_asset_id: libId }) });
+      if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || "فشل التبديل"); }
+      const d = await r.json();
+      setAssets(p => p.map(a => a.id===assetId ? d.asset : a));
+      toast.success("تم تبديل الصوت");
+    } catch (e:any) { toast.error(e.message); } finally { setAssetBusy(null); }
+  };
+
   const reloadAssets = async () => {
     try {
       const r = await fetch(`/api/shots/${shot.id}/audio-assets`, { credentials:"include" });
@@ -81,6 +112,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     setAssetsLoading(true);
     setFreshShot(null);
     reloadFresh();
+    loadLibrary();
     reloadAssets().finally(() => setAssetsLoading(false));
     return () => stopAll();
   }, [shot.id]);
@@ -111,6 +143,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
 
   const deleteAsset = async (id:number) => {
     if (!confirm("حذف هذا الأصل؟")) return;
+    if (currentlyPlayingId === id) stopSingle();
     setAssetBusy(id);
     try {
       const r = await fetch(`/api/shot-audio-assets/${id}`, { method:"DELETE", credentials:"include" });
@@ -145,6 +178,33 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       toast.success("تم رفع الصوت وإضافته");
     } catch (e:any) { toast.error(e.message); }
     finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+  };
+
+  const stopSingle = () => {
+    if (singleAudioRef.current) {
+      try { singleAudioRef.current.pause(); singleAudioRef.current.currentTime = 0; } catch {}
+      singleAudioRef.current = null;
+    }
+    setCurrentlyPlayingId(null);
+  };
+
+  const playOne = async (asset: any) => {
+    if (currentlyPlayingId === asset.id) { stopSingle(); return; }
+    stopSingle();
+    if (playing) stopAll();
+    try {
+      const el = new Audio(asset.audioUrl);
+      el.volume = Math.max(0, Math.min(1, asset.volume ?? 1));
+      el.onended = () => { setCurrentlyPlayingId(null); singleAudioRef.current = null; };
+      el.onerror = () => { toast.error("فشل تحميل الصوت"); setCurrentlyPlayingId(null); singleAudioRef.current = null; };
+      singleAudioRef.current = el;
+      setCurrentlyPlayingId(asset.id);
+      await el.play();
+    } catch {
+      toast.error("فشل التشغيل");
+      setCurrentlyPlayingId(null);
+      singleAudioRef.current = null;
+    }
   };
 
   const fetchAsUrl = async (url:string): Promise<string|null> => {
@@ -325,16 +385,29 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${st.cls}`}>{st.emoji} {a.status}</span>
-                        <span className="text-[11px] font-mono truncate">#{a.id} · {a.startTime ?? 0}s–{a.endTime ?? "?"}s · vol {Math.round((a.volume ?? 1)*100)}%</span>
+                        <select
+                          value={String(a.libraryAssetId ?? "")}
+                          onChange={e => handleAssetChange(a.id, e.target.value)}
+                          disabled={assetBusy===a.id}
+                          className="flex-1 min-w-0 h-7 rounded border border-white/10 bg-zinc-900 px-1 text-[11px] text-white truncate"
+                        >
+                          <option value="">— اختر من المكتبة —</option>
+                          {(library[a.assetType || "sfx"] || []).map((lib:any) => (
+                            <option key={lib.id} value={String(lib.id)}>{lib.name || `#${lib.id}`}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="flex items-center gap-2">
                         <button onClick={() => updateStatus(a.id, "approved")} disabled={assetBusy===a.id} title="اعتماد" className="w-9 h-9 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/40 disabled:opacity-30 flex items-center justify-center">
                           {assetBusy===a.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}</button>
                         <button onClick={() => updateStatus(a.id, "rejected")} disabled={assetBusy===a.id} title="رفض" className="w-9 h-9 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/40 disabled:opacity-30 flex items-center justify-center"><X className="w-4 h-4" /></button>
                         <button onClick={() => { setEditingId(isEditing ? null : a.id); setEditFields({ start_time: a.startTime ?? 0, end_time: a.endTime ?? shotDuration, volume: a.volume ?? 1, fade_in: a.fadeIn ?? 0, fade_out: a.fadeOut ?? 0 }); }} title="تعديل" className="w-9 h-9 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/40 flex items-center justify-center"><Pencil className="w-4 h-4" /></button>
+                        <button onClick={() => playOne(a)} title="تشغيل" className="w-9 h-9 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/40 flex items-center justify-center">
+                          {currentlyPlayingId === a.id ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}</button>
                         <button onClick={() => deleteAsset(a.id)} disabled={assetBusy===a.id} title="حذف" className="w-9 h-9 rounded-lg bg-zinc-500/20 text-zinc-400 hover:bg-zinc-500/40 disabled:opacity-30 flex items-center justify-center"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
+                    <div className="text-[10px] text-muted-foreground font-mono mt-1">#{a.id} · {a.startTime ?? 0}s–{a.endTime ?? "?"}s · vol {Math.round((a.volume ?? 1)*100)}%</div>
                     {isEditing && (
                       <div className="mt-2 pt-2 border-t border-white/10 space-y-2">
                         {sliders.map(({ k, label, min, max, step, fmt }) => {
