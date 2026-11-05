@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc, and } from "drizzle-orm";
 import { runDirector } from "../lib/voice/voiceDirector";
+import { suggestAudio } from "../lib/voice/audioSuggestion";
+import { audioLibraryAssetsTable } from "@workspace/db";
 import { mergeFields, buildResolvedText } from "../lib/voice/resolveInstruction";
 import { EMOTIONS, AUDAR_TAGS } from "../lib/voice/directorSchema";
 import { db, shotsTable } from "@workspace/db";
@@ -335,7 +337,7 @@ router.patch("/shots/:id/manual-instruction", requireProductionAuth, async (req:
   if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
   
   const incoming = req.body?.fields || {};
-  const current = shot.manualInstruction || { updated_at: new Date().toISOString(), fields: {} };
+  const current: any = shot.manualInstruction || { updated_at: new Date().toISOString(), fields: {} };
   
   if (incoming.emotion && !(EMOTIONS as readonly string[]).includes(incoming.emotion)) { res.status(400).json({ error: "INVALID_EMOTION" }); return; }
   if (incoming.audar_tag !== undefined && incoming.audar_tag !== null && !(AUDAR_TAGS as readonly string[]).includes(incoming.audar_tag)) { res.status(400).json({ error: "INVALID_TAG" }); return; }
@@ -448,6 +450,37 @@ router.post("/shots/:id/preview-audio", requireProductionAuth, async (req: Reque
     console.error("Preview error:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", detail: error.message });
   }
+});
+
+router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "INVALID_SHOT_ID" });
+    return;
+  }
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, id)).limit(1);
+  if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+
+  const assets = await db.select({
+    asset_id: audioLibraryAssetsTable.assetId,
+    name: audioLibraryAssetsTable.name,
+    asset_type: audioLibraryAssetsTable.assetType,
+    tags: audioLibraryAssetsTable.tags,
+  }).from(audioLibraryAssetsTable);
+
+  const normalizedAssets = assets.map(a => ({
+    asset_id: a.asset_id,
+    name: a.name,
+    asset_type: a.asset_type,
+    tags: Array.isArray(a.tags) ? (a.tags as string[]) : [],
+  }));
+
+  const result = await suggestAudio(shot.description || "", shot.dialogue || "", normalizedAssets);
+  if (!result.ok) {
+    res.status(500).json({ error: "SUGGESTION_FAILED", detail: result.error });
+    return;
+  }
+  res.json({ ok: true, suggestions: result.suggestions });
 });
 
 export default router;
