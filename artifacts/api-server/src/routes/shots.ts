@@ -3,7 +3,7 @@ import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc, and } from "drizzle-orm";
 import { runDirector } from "../lib/voice/voiceDirector";
 import { suggestAudio } from "../lib/voice/audioSuggestion";
-import { audioLibraryAssetsTable } from "@workspace/db";
+import { audioLibraryAssetsTable, shotAudioAssetsTable } from "@workspace/db";
 import { mergeFields, buildResolvedText } from "../lib/voice/resolveInstruction";
 import { EMOTIONS, AUDAR_TAGS } from "../lib/voice/directorSchema";
 import { db, shotsTable } from "@workspace/db";
@@ -480,7 +480,38 @@ router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Reque
     res.status(500).json({ error: "SUGGESTION_FAILED", detail: result.error });
     return;
   }
-  res.json({ ok: true, suggestions: result.suggestions });
+
+  // Save suggestions as "proposed" (user must approve before render)
+  const savedSuggestions: any[] = [];
+  if (result.suggestions && result.suggestions.length > 0) {
+    // Clean old "proposed" suggestions for this shot (keep approved/rejected)
+    await db.delete(shotAudioAssetsTable).where(
+      and(eq(shotAudioAssetsTable.shotId, id), eq(shotAudioAssetsTable.status, "proposed"))
+    );
+    for (const sug of result.suggestions) {
+      const libAsset = normalizedAssets.find(a => a.asset_id === sug.asset_id);
+      if (!libAsset) continue;
+      // Lookup library URL
+      const [libRow] = await db.select().from(audioLibraryAssetsTable).where(eq(audioLibraryAssetsTable.assetId, sug.asset_id)).limit(1);
+      if (!libRow) continue;
+      const [inserted] = await db.insert(shotAudioAssetsTable).values({
+        shotId: id,
+        libraryAssetId: libRow.id,
+        assetType: sug.asset_type || libRow.assetType,
+        audioUrl: libRow.audioUrl,
+        startTime: sug.start_time ?? 0,
+        endTime: sug.end_time ?? (shot.durationSeconds || 5),
+        volume: sug.volume ?? 0.5,
+        fadeIn: sug.fade_in ?? 0,
+        fadeOut: sug.fade_out ?? 0,
+        status: "proposed",
+        source: "director",
+      }).returning();
+      savedSuggestions.push(inserted);
+    }
+  }
+
+  res.json({ ok: true, suggestions: savedSuggestions });
 });
 
 export default router;
