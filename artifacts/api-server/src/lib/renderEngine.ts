@@ -143,6 +143,7 @@ export async function createRenderJob(input: CreateRenderJobInput): Promise<Rend
       input: {
         clips: input.clips,
         audioUrl: audioProvided ? input.audioUrl!.trim() : null,
+        additionalAudio: input.additionalAudio ?? null,
         watermarkText: input.watermarkText ?? null,
         subtitlesText: input.subtitlesText ?? null,
         pipelineRunId: input.pipelineRunId ?? null,
