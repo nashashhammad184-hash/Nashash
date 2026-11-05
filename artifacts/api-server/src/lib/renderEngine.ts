@@ -577,7 +577,7 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
     const filterParts: string[] = [];
     let ai = 0;
     if (audioMode === "AUDIO" && audioLocal) {
-      filterParts.push(`[1:a]apad=whole_dur=${videoDuration}[a0]`);
+      filterParts.push(`[1:a]apad=whole_dur=${videoDuration},aresample=44100[a0]`);
       ai = 1;
     }
     let inputIdx = (audioMode === "AUDIO" && audioLocal ? 2 : 1);
@@ -588,13 +588,13 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
       if (extra.fadeOut > 0) chain += `afade=t=out:st=${extra.endTime - extra.fadeOut}:d=${extra.fadeOut},`;
       if (extra.startTime > 0) chain += `adelay=${Math.round(extra.startTime*1000)}|${Math.round(extra.startTime*1000)},`;
       chain += `atrim=0:${Math.min(extra.endTime, videoDuration)},`;
-      chain += `apad=whole_dur=${videoDuration}`;
+      chain += `apad=whole_dur=${videoDuration},aresample=44100`;
       filterParts.push(`${chain}[a${ai}]`);
       ai++;
       inputIdx++;
     }
     const amixInputs = Array.from({length: ai}, (_, i) => `[a${i}]`).join('');
-    filterParts.push(`${amixInputs}amix=inputs=${ai}:duration=longest:dropout_transition=0[amix]`);
+    filterParts.push(`${amixInputs}amix=inputs=${ai}:duration=longest:dropout_transition=0:normalize=0[amix]`);
     finalArgs.push("-filter_complex", filterParts.join(";"));
     finalArgs.push("-map", "[amix]");
     finalArgs.push("-c:a", "aac", "-b:a", "192k");
