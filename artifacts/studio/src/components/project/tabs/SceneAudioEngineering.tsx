@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Sparkles, RotateCcw, Eye, Play, Square, Check, X, Pencil, Trash2, Music } from "lucide-react";
+import { Loader2, Sparkles, RotateCcw, Eye, Play, Square, Check, X, Pencil, Trash2, Music, Plus, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { getListProjectShotsQueryKey } from "@workspace/api-client-react";
@@ -33,17 +33,32 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
   const [playProgress, setPlayProgress] = useState(0);
   const [playCurrent, setPlayCurrent] = useState(0);
   const [playDuration, setPlayDuration] = useState(0);
+  const [freshShot, setFreshShot] = useState<any>(null);
+  const [uploading, setUploading] = useState(false);
   const audioRefs = useRef<HTMLAudioElement[]>([]);
   const urlRefs = useRef<string[]>([]);
   const timerRef = useRef<number|null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const instr = shot.audioInstruction;
-  const manual = shot.manualInstruction;
+  const s = freshShot || shot;
+  const instr = s.audioInstruction;
+  const manual = s.manualInstruction;
   const mergedEmotion = manual?.fields?.emotion?.value ?? instr?.fields?.emotion?.value ?? null;
   const mergedTag = manual?.fields?.audar_tag?.value ?? instr?.fields?.audar_tag?.value ?? null;
   const mergedIntensity = manual?.fields?.intensity?.value ?? instr?.fields?.intensity?.value ?? null;
-  const resolved = shot.resolvedText;
+  const resolved = s.resolvedText;
   const confidence = instr?.fields?.emotion?.confidence ?? null;
+  const shotDuration = Number(s.duration) || 5;
+
+  const reloadFresh = async () => {
+    try {
+      const r = await fetch(`/api/shots/${shot.id}`, { credentials:"include" });
+      if (!r.ok) return;
+      const d = await r.json();
+      const obj = d.shot || d;
+      if (obj && typeof obj === "object") setFreshShot(obj);
+    } catch {}
+  };
 
   const stopAll = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -56,7 +71,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
 
   const reloadAssets = async () => {
     try {
-      const r = await fetch(`/api/shots/${shot.id}/audio-assets`, { credentials: "include" });
+      const r = await fetch(`/api/shots/${shot.id}/audio-assets`, { credentials:"include" });
       const d = await r.json();
       setAssets(d.assets || []);
     } catch {}
@@ -64,6 +79,8 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
 
   useEffect(() => {
     setAssetsLoading(true);
+    setFreshShot(null);
+    reloadFresh();
     reloadAssets().finally(() => setAssetsLoading(false));
     return () => stopAll();
   }, [shot.id]);
@@ -82,7 +99,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     try {
       const body:any = {};
       for (const k of ["start_time","end_time","volume","fade_in","fade_out"] as const) {
-        if (editFields[k] !== undefined) body[k] = parseFloat(editFields[k]);
+        if (editFields[k] !== undefined) body[k] = Number(editFields[k]);
       }
       const r = await fetch(`/api/shot-audio-assets/${id}`, { method:"PATCH", credentials:"include", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
       if (!r.ok) throw new Error("فشل الحفظ");
@@ -111,6 +128,25 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     } catch (e:any) { toast.error(e.message); } finally { setAiBusy(false); }
   };
 
+  const onFilePicked = async (file: File) => {
+    if (file.type !== "audio/mpeg" && !file.name.toLowerCase().endsWith(".mp3")) { toast.error("يُقبل MP3 فقط"); return; }
+    if (file.size > 10*1024*1024) { toast.error("الحد الأقصى 10MB"); return; }
+    setUploading(true);
+    try {
+      const sr = await fetch("/api/storage/sign-upload", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ projectId, shotId: shot.id, mimeType:"audio/mpeg", fileSize: file.size }) });
+      if (!sr.ok) { const d = await sr.json().catch(()=>({})); throw new Error(d.error || "فشل الحصول على رابط الرفع"); }
+      const { signedUrl, filePath } = await sr.json();
+      const pr = await fetch(signedUrl, { method:"PUT", headers:{"Content-Type":"audio/mpeg"}, body: file });
+      if (!pr.ok) throw new Error("فشل رفع الملف");
+      const audio_url = "/api/storage/supabase/" + filePath;
+      const ar = await fetch(`/api/shots/${shot.id}/audio-assets`, { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ asset_type:"sfx", audio_url, start_time:0, end_time: shotDuration, volume:1.0, fade_in:0, fade_out:0, status:"approved", source:"manual" }) });
+      if (!ar.ok) { const d = await ar.json().catch(()=>({})); throw new Error(d.detail || d.error || "فشل إضافة الأصل"); }
+      await reloadAssets();
+      toast.success("تم رفع الصوت وإضافته");
+    } catch (e:any) { toast.error(e.message); }
+    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+  };
+
   const fetchAsUrl = async (url:string): Promise<string|null> => {
     try {
       const r = await fetch(url, { credentials:"include" });
@@ -127,7 +163,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     stopAll();
     const approved = assets.filter(a => a.status === "approved");
     const items: {url:string; start:number; end:number; volume:number}[] = [];
-    if (shot.audioUrl) items.push({ url: shot.audioUrl, start: 0, end: 30, volume: 1.0 });
+    if (s.audioUrl) items.push({ url: s.audioUrl, start: 0, end: 60, volume: 1.0 });
     approved.forEach(a => items.push({ url: a.audioUrl, start: a.startTime ?? 0, end: a.endTime ?? 10, volume: a.volume ?? 0.7 }));
     if (items.length === 0) { toast.error("لا يوجد صوت للتشغيل"); return; }
     toast.loading("تحميل...", { id: "load" });
@@ -171,6 +207,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "فشل التحليل");
       toast.success("تم تحليل المشهد");
+      await reloadFresh();
       queryClient.invalidateQueries({ queryKey: getListProjectShotsQueryKey(projectId) });
     } catch (e:any) { toast.error(e.message); } finally { setBusy(null); }
   };
@@ -182,6 +219,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "فشل الحفظ");
       toast.success("تم الحفظ");
+      await reloadFresh();
       queryClient.invalidateQueries({ queryKey: getListProjectShotsQueryKey(projectId) });
     } catch (e:any) { toast.error(e.message); } finally { setBusy(null); }
   };
@@ -192,6 +230,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       const r = await fetch(`/api/shots/${shot.id}/restore-director`, { method:"POST" });
       if (!r.ok) throw new Error("فشل الاستعادة");
       toast.success("تمت الاستعادة");
+      await reloadFresh();
       queryClient.invalidateQueries({ queryKey: getListProjectShotsQueryKey(projectId) });
     } catch (e:any) { toast.error(e.message); } finally { setBusy(null); }
   };
@@ -211,6 +250,14 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
     (acc[k] ||= []).push(a);
     return acc;
   }, {});
+
+  const sliders = [
+    { k:"start_time", label:"البداية", min:0, max:shotDuration, step:0.1, fmt:(v:number)=>`${v.toFixed(1)}s` },
+    { k:"end_time",   label:"النهاية", min:0, max:shotDuration, step:0.1, fmt:(v:number)=>`${v.toFixed(1)}s` },
+    { k:"volume",     label:"الصوت",   min:0, max:1, step:0.05, fmt:(v:number)=>`${Math.round(v*100)}%` },
+    { k:"fade_in",    label:"Fade In",  min:0, max:3, step:0.1, fmt:(v:number)=>`${v.toFixed(1)}s` },
+    { k:"fade_out",   label:"Fade Out", min:0, max:3, step:0.1, fmt:(v:number)=>`${v.toFixed(1)}s` },
+  ];
 
   return (
     <div className="mt-3 p-3 rounded-lg border border-primary/20 bg-primary/5 space-y-3" dir="rtl">
@@ -251,16 +298,21 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
       {previewUrl && <audio src={previewUrl} controls className="w-full h-8 mt-2" />}
 
       <div className="border-t border-white/10 pt-3 space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-bold text-primary">
             <Music className="w-4 h-4" /> أصول صوتية <span className="text-[10px] text-muted-foreground">({assets.length})</span>
           </div>
-          <Button size="sm" variant="outline" onClick={suggestAI} disabled={aiBusy || playing} className="h-7 text-xs gap-1">
-            {aiBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} اقترح من AI</Button>
+          <div className="flex gap-1">
+            <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading || playing} className="h-7 text-xs gap-1">
+              {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />} إضافة صوت يدوي</Button>
+            <Button size="sm" variant="outline" onClick={suggestAI} disabled={aiBusy || playing} className="h-7 text-xs gap-1">
+              {aiBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} اقترح من AI</Button>
+          </div>
+          <input ref={fileInputRef} type="file" accept="audio/mpeg,.mp3" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onFilePicked(f); }} />
         </div>
 
         {assetsLoading ? <div className="flex justify-center py-2"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
-        : assets.length === 0 ? <p className="text-[11px] text-muted-foreground text-center py-2">لا توجد أصول بعد — اضغط "اقترح من AI"</p>
+        : assets.length === 0 ? <p className="text-[11px] text-muted-foreground text-center py-2">لا توجد أصول بعد — اضغط "اقترح من AI" أو "إضافة صوت يدوي"</p>
         : Object.entries(grouped).map(([type, list]) => (
           <div key={type}>
             <div className="text-[10px] text-muted-foreground mb-1">{ASSET_TYPE_META[type]?.emoji} {ASSET_TYPE_META[type]?.label} <span className="opacity-50">({list.length})</span></div>
@@ -269,29 +321,39 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
                 const st = STATUS_META[a.status] || STATUS_META.proposed;
                 const isEditing = editingId === a.id;
                 return (
-                  <div key={a.id} className="bg-black/30 border border-white/5 rounded px-2 py-1">
+                  <div key={a.id} className="bg-black/30 border border-white/5 rounded px-2 py-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${st.cls}`}>{st.emoji} {a.status}</span>
-                        <span className="text-[11px] font-mono truncate">#{a.id} · {a.startTime ?? 0}s–{a.endTime ?? "?"}s · vol {a.volume ?? 1}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${st.cls}`}>{st.emoji} {a.status}</span>
+                        <span className="text-[11px] font-mono truncate">#{a.id} · {a.startTime ?? 0}s–{a.endTime ?? "?"}s · vol {Math.round((a.volume ?? 1)*100)}%</span>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => updateStatus(a.id, "approved")} disabled={assetBusy===a.id} title="اعتماد" className="w-6 h-6 rounded bg-green-500/20 text-green-400 hover:bg-green-500/40 disabled:opacity-30 flex items-center justify-center">
-                          {assetBusy===a.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}</button>
-                        <button onClick={() => updateStatus(a.id, "rejected")} disabled={assetBusy===a.id} title="رفض" className="w-6 h-6 rounded bg-red-500/20 text-red-400 hover:bg-red-500/40 disabled:opacity-30 flex items-center justify-center"><X className="w-3 h-3" /></button>
-                        <button onClick={() => { setEditingId(isEditing ? null : a.id); setEditFields({ start_time: a.startTime ?? 0, end_time: a.endTime ?? 5, volume: a.volume ?? 1, fade_in: a.fadeIn ?? 0, fade_out: a.fadeOut ?? 0 }); }} title="تعديل" className="w-6 h-6 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/40 flex items-center justify-center"><Pencil className="w-3 h-3" /></button>
-                        <button onClick={() => deleteAsset(a.id)} disabled={assetBusy===a.id} title="حذف" className="w-6 h-6 rounded bg-zinc-500/20 text-zinc-400 hover:bg-zinc-500/40 disabled:opacity-30 flex items-center justify-center"><Trash2 className="w-3 h-3" /></button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => updateStatus(a.id, "approved")} disabled={assetBusy===a.id} title="اعتماد" className="w-9 h-9 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/40 disabled:opacity-30 flex items-center justify-center">
+                          {assetBusy===a.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}</button>
+                        <button onClick={() => updateStatus(a.id, "rejected")} disabled={assetBusy===a.id} title="رفض" className="w-9 h-9 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/40 disabled:opacity-30 flex items-center justify-center"><X className="w-4 h-4" /></button>
+                        <button onClick={() => { setEditingId(isEditing ? null : a.id); setEditFields({ start_time: a.startTime ?? 0, end_time: a.endTime ?? shotDuration, volume: a.volume ?? 1, fade_in: a.fadeIn ?? 0, fade_out: a.fadeOut ?? 0 }); }} title="تعديل" className="w-9 h-9 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/40 flex items-center justify-center"><Pencil className="w-4 h-4" /></button>
+                        <button onClick={() => deleteAsset(a.id)} disabled={assetBusy===a.id} title="حذف" className="w-9 h-9 rounded-lg bg-zinc-500/20 text-zinc-400 hover:bg-zinc-500/40 disabled:opacity-30 flex items-center justify-center"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
                     {isEditing && (
-                      <div className="mt-1 pt-1 border-t border-white/5 grid grid-cols-5 gap-1 text-[10px]">
-                        {(["start_time","end_time","volume","fade_in","fade_out"] as const).map(k => (
-                          <div key={k}><label className="text-muted-foreground">{k.replace("_"," ")}</label>
-                            <input type="number" step="0.1" min="0" value={editFields[k] ?? 0} onChange={e => setEditFields({ ...editFields, [k]: e.target.value })} className="w-full h-6 rounded border border-white/10 bg-zinc-900 px-1 text-[10px] text-white" /></div>
-                        ))}
-                        <div className="col-span-5 flex gap-1 mt-1">
-                          <Button size="sm" onClick={() => saveEdit(a.id)} disabled={assetBusy===a.id} className="h-6 text-[10px] flex-1">{assetBusy===a.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "حفظ"}</Button>
-                          <Button size="sm" variant="outline" onClick={() => setEditingId(null)} className="h-6 text-[10px] flex-1">إلغاء</Button>
+                      <div className="mt-2 pt-2 border-t border-white/10 space-y-2">
+                        {sliders.map(({ k, label, min, max, step, fmt }) => {
+                          const v = Number(editFields[k] ?? 0);
+                          return (
+                            <div key={k}>
+                              <div className="flex items-center justify-between text-[10px] mb-0.5">
+                                <label className="text-muted-foreground">{label}</label>
+                                <span className="font-mono text-white">{fmt(v)}</span>
+                              </div>
+                              <input type="range" min={min} max={max} step={step} value={v}
+                                onChange={e => setEditFields({ ...editFields, [k]: Number(e.target.value) })}
+                                className="w-full accent-primary" />
+                            </div>
+                          );
+                        })}
+                        <div className="flex gap-2 pt-1">
+                          <Button size="sm" onClick={() => saveEdit(a.id)} disabled={assetBusy===a.id} className="h-8 text-[11px] flex-1">{assetBusy===a.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "حفظ"}</Button>
+                          <Button size="sm" variant="outline" onClick={() => setEditingId(null)} className="h-8 text-[11px] flex-1">إلغاء</Button>
                         </div>
                       </div>
                     )}
@@ -302,7 +364,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
           </div>
         ))}
 
-        <Button onClick={previewAll} disabled={assets.length === 0 && !shot.audioUrl} variant={playing ? "default" : "outline"} size="sm" className="w-full h-8 text-xs gap-1 mt-2">
+        <Button onClick={previewAll} disabled={assets.length === 0 && !s.audioUrl} variant={playing ? "default" : "outline"} size="sm" className="w-full h-9 text-xs gap-1 mt-2">
           {playing ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />} {playing ? "⏸️ إيقاف" : "▶️ معاينة الكل"}
         </Button>
         {playing && (
