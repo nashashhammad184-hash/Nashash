@@ -223,8 +223,7 @@ export default function SceneAudioEngineering({ shot, projectId }: { shot:any; p
   };
 
   const resolveVoiceUrl = async (): Promise<string|null> => {
-    const existing = s.audioUrl || shot.audioUrl;
-    if (existing) return existing;
+    // Always regenerate from CURRENT dialogue (ignore stale cached audioUrl in preview)
     // Generate dialogue on-demand via preview-audio endpoint
     try {
       toast.loading("توليد الحوار...", { id: "voice" });
