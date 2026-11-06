@@ -395,7 +395,23 @@ router.post("/shots/:id/preview-audio", requireProductionAuth, async (req: Reque
     return;
   }
 
-  const textToSpeak = shot.resolvedText || shot.dialogue;
+  // Build text from CURRENT dialogue + current tag (avoid stale resolved_text)
+  const dialogueRaw = (shot.dialogue || "").trim();
+  if (!dialogueRaw) {
+    res.status(400).json({ error: "EMPTY_TEXT" });
+    return;
+  }
+  const baseClean = dialogueRaw
+    .replace(/^[^:\\[\\{]+:\\s*/, "")
+    .replace(/[{}]/g, "")
+    .trim();
+  const dialogueTag = baseClean.match(/^\\[(\\w+)\\]/)?.[1] || null;
+  const instrTag = (shot.audioInstruction as any)?.fields?.audar_tag?.value
+    || (shot.manualInstruction as any)?.fields?.audar_tag?.value
+    || null;
+  const rawTag = dialogueTag || (instrTag ? String(instrTag).replace(/[\\[\\]]/g, "") : null);
+  const cleanBody = baseClean.replace(/^\\[\\w+\\]\\s*/, "").trim();
+  const textToSpeak = rawTag ? `[${rawTag}] ${cleanBody}` : cleanBody;
   if (!textToSpeak || textToSpeak.trim().length === 0) {
     res.status(400).json({ error: "EMPTY_TEXT" });
     return;
