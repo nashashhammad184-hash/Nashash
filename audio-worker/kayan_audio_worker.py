@@ -21,13 +21,16 @@ def parse_tag(text):
         return m.group(1).lower()
     return "neutral"
 
-def generate_mp3_lahgtna(text, voice, idem):
+def generate_mp3_lahgtna(text, voice, target_duration, idem):
     if not LAHGTNA_URL or not LAHGTNA_TOKEN:
         raise RuntimeError("LAHGTNA_URL/LAHGTNA_TOKEN not configured")
+    payload = {"text": text, "voice": voice or "jordanian"}
+    if target_duration and target_duration > 0:
+        payload["target_duration"] = float(target_duration)
     r = requests.post(
         f"{LAHGTNA_URL}/tts",
         headers={"Authorization": f"Bearer {LAHGTNA_TOKEN}", "Content-Type": "application/json"},
-        json={"text": text, "voice": voice or "jordanian"},
+        json=payload,
         timeout=300,
     )
     if r.status_code != 200:
@@ -38,7 +41,7 @@ def generate_mp3_lahgtna(text, voice, idem):
 def generate_audio(text, tag, engine, voice_name, target_duration, idem):
     if engine == "lahgtna":
         print(f"  Lahgtna /tts (voice={voice_name})...", flush=True)
-        return generate_mp3_lahgtna(text, voice_name, idem)
+        return generate_mp3_lahgtna(text, voice_name, target_duration, idem)
     print("  Audar /tts...", flush=True)
     return generate_mp3(text, tag, VOICE, target_duration, idem)
 
