@@ -96,4 +96,19 @@ router.delete("/shot-audio-assets/:id", requireProductionAuth, async (req: Reque
   }
 });
 
+
+// DELETE /api/audio-library/:assetId
+router.delete("/audio-library/:assetId", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const assetId = String(req.params.assetId);
+  try {
+    const [lib] = await db.select().from(audioLibraryAssetsTable).where(eq(audioLibraryAssetsTable.assetId, assetId)).limit(1);
+    if (!lib) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+    await db.delete(shotAudioAssetsTable).where(eq(shotAudioAssetsTable.libraryAssetId, (lib as any).id));
+    await db.delete(audioLibraryAssetsTable).where(eq(audioLibraryAssetsTable.assetId, assetId));
+    res.json({ ok: true, deleted: assetId });
+  } catch (error: any) {
+    res.status(500).json({ error: "INTERNAL_ERROR", detail: error.message });
+  }
+});
+
 export default router;
