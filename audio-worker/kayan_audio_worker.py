@@ -10,15 +10,38 @@ KAYAN_URL = "https://nashash-1.onrender.com"
 API_TOKEN = os.environ.get("KAYAN_API_TOKEN", "")
 WORKER_NAME = "phone-samsung-01"
 VOICE = "demo_female_1"
+LAHGTNA_URL = os.environ.get("LAHGTNA_URL", "").rstrip("/")
+LAHGTNA_TOKEN = os.environ.get("LAHGTNA_TOKEN", "")
 
 ALLOWED_TAGS = {"laughs", "curious", "excited", "neutral", "sad", "mischievously", "whispers", "sarcastic"}
-                "laughs", "sarcastic", "mischievously", "neutral"}
 
 def parse_tag(text):
     m = re.match(r"^\s*\[(\w+)\]", text or "")
     if m and m.group(1).lower() in ALLOWED_TAGS:
         return m.group(1).lower()
     return "neutral"
+
+def generate_mp3_lahgtna(text, voice, idem):
+    if not LAHGTNA_URL or not LAHGTNA_TOKEN:
+        raise RuntimeError("LAHGTNA_URL/LAHGTNA_TOKEN not configured")
+    r = requests.post(
+        f"{LAHGTNA_URL}/tts",
+        headers={"Authorization": f"Bearer {LAHGTNA_TOKEN}", "Content-Type": "application/json"},
+        json={"text": text, "voice": voice or "jordanian"},
+        timeout=300,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Lahgtna HTTP {r.status_code}: {r.text[:200]}")
+    return r.content
+
+
+def generate_audio(text, tag, engine, voice_name, target_duration, idem):
+    if engine == "lahgtna":
+        print(f"  Lahgtna /tts (voice={voice_name})...", flush=True)
+        return generate_mp3_lahgtna(text, voice_name, idem)
+    print("  Audar /tts...", flush=True)
+    return generate_mp3(text, tag, VOICE, target_duration, idem)
+
 
 def heartbeat_loop():
     print("[Heartbeat] Thread started.", flush=True)
@@ -58,6 +81,10 @@ def process_shot(session, shot, state):
     resolved = shot.get("resolvedText")
     input_hash = shot.get("directorInputHash")
     
+    engine = (shot.get("voiceEngine") or "audar").strip().lower()
+    voice_profile = shot.get("voiceProfile") or {}
+    voice_name = (voice_profile.get("voice") if isinstance(voice_profile, dict) else None) or "jordanian"
+
     is_fresh = False
     if resolved and resolved.strip() and input_hash:
         import json, hashlib
@@ -96,13 +123,13 @@ def process_shot(session, shot, state):
         stage = entry.get("stage")
 
     print(f"\n--- Shot {shot_id} (P{project_id}) stage={stage} tag={tag} ---", flush=True)
-    idem = entry.get("idem_key") or make_idem_key(project_id, shot_id, tag, text, target_duration)
+    idem = entry.get("idem_key") or make_idem_key(project_id, shot_id, f"{tag}_{engine}", text, target_duration)
 
     mp3_bytes = None
     try:
         if stage != "uploaded":
             print("  Oracle /tts...", flush=True)
-            mp3_bytes = generate_mp3(text, tag, VOICE, target_duration, idem)
+            mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
             print(f"  Oracle OK: {len(mp3_bytes)} bytes", flush=True)
             set_stage(state, shot_id, "generated", idem_key=idem, claim_token=claim_token)
             entry = state[str(shot_id)]
@@ -112,7 +139,7 @@ def process_shot(session, shot, state):
 
         if not file_path:
             if mp3_bytes is None:
-                mp3_bytes = generate_mp3(text, tag, VOICE, target_duration, idem)
+                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
             payload = {
                 "projectId": project_id,
                 "shotId": shot_id,
@@ -134,7 +161,7 @@ def process_shot(session, shot, state):
 
         if stage != "uploaded":
             if mp3_bytes is None:
-                mp3_bytes = generate_mp3(text, tag, VOICE, target_duration, idem)
+                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
             print("  PUT to signedUrl...", flush=True)
             r = requests.put(signed_url, data=mp3_bytes,
                              headers={"Content-Type": "audio/mpeg"}, timeout=60)
