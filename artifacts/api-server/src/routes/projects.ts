@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { db } from "@workspace/db";
-import { projectsTable, projectActorsTable, actorsTable } from "@workspace/db/schema";
+import { projectsTable, projectActorsTable, actorsTable, characterVoiceProfilesTable } from "@workspace/db/schema";
 import { eq, and } from "drizzle-orm";
 import { UpdateProjectBody } from "@workspace/api-zod";
 
@@ -171,6 +171,22 @@ router.delete("/:id", requireProductionAuth, async (req: Request, res: Response)
     res.status(204).end();
   } catch (err: any) {
     res.status(500).json({ error: "فشل حذف المشروع: " + err.message });
+  }
+});
+
+// KAYAN-VR: GET /projects/:id/characters
+router.get("/:id/characters", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params.id);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "INVALID_PROJECT_ID" });
+    return;
+  }
+  try {
+    const characters = await db.select().from(characterVoiceProfilesTable)
+      .where(eq(characterVoiceProfilesTable.projectId, projectId));
+    res.json({ ok: true, characters });
+  } catch (err: any) {
+    res.status(500).json({ error: "INTERNAL_ERROR", detail: err.message });
   }
 });
 
