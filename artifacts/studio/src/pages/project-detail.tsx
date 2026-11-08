@@ -25,7 +25,13 @@ export default function ProjectDetail() {
     query: { enabled: !!projectId, queryKey: getGetProjectQueryKey(projectId) } 
   });
 
-  const [activeTab, setActiveTab] = useState("overview");
+  const initialTab = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("tab") || "overview";
+    } catch { return "overview"; }
+  })();
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   if (isLoading) {
     return (

@@ -76,7 +76,17 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([reloadShots(), reloadCharacters(), reloadLibrary()]).finally(() => setLoading(false));
+    Promise.all([reloadShots(), reloadCharacters(), reloadLibrary()]).finally(() => {
+      setLoading(false);
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const shotParam = params.get("shot");
+        if (shotParam) {
+          const sid = Number(shotParam);
+          if (Number.isInteger(sid) && sid > 0) setSelectedShotId(sid);
+        }
+      } catch {}
+    });
   }, [project.id]);
 
   useEffect(() => {

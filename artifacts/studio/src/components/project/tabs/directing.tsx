@@ -8,11 +8,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Loader2, Plus, Clapperboard, Clock, Video, Trash2 } from "lucide-react";
+import { Loader2, Plus, Clapperboard, Clock, Video, Trash2, Mic } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import SceneAudioEngineering from "./SceneAudioEngineering";
+
+const AUDIO_STATUS_META: Record<string, { emoji: string; cls: string; label: string }> = {
+  NONE:       { emoji: "⚪", cls: "bg-zinc-500/20 text-zinc-400",     label: "لا صوت" },
+  QUEUED:     { emoji: "🔵", cls: "bg-blue-500/20 text-blue-400",     label: "بالطابور" },
+  PROCESSING: { emoji: "🟡", cls: "bg-yellow-500/20 text-yellow-400", label: "جاري" },
+  COMPLETED:  { emoji: "🟢", cls: "bg-green-500/20 text-green-400",   label: "جاهز" },
+  FAILED:     { emoji: "🔴", cls: "bg-red-500/20 text-red-400",       label: "فشل" },
+};
+
+function getAudioStatusMeta(shot: any) {
+  const k = (shot?.audioStatus || "NONE").toUpperCase();
+  return AUDIO_STATUS_META[k] || AUDIO_STATUS_META.NONE;
+}
+
+function openVoiceRoom(projectId: number, shotId: number) {
+  window.location.href = `/projects/${projectId}?tab=voice-room&shot=${shotId}`;
+}
 
 export default function DirectingTab({ project }: { project: Project }) {
   const queryClient = useQueryClient();
@@ -162,7 +178,19 @@ export default function DirectingTab({ project }: { project: Project }) {
                             "{shot.dialogue}"
                           </div>
                         )}
-                  <SceneAudioEngineering shot={shot} projectId={project.id} />
+                  <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`text-[11px] px-2 py-1 rounded ${getAudioStatusMeta(shot).cls}`}>
+                    🎙️ {getAudioStatusMeta(shot).emoji} {getAudioStatusMeta(shot).label}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openVoiceRoom(project.id, shot.id)}
+                    className="h-7 text-xs gap-1"
+                  >
+                    <Mic className="w-3 h-3" /> فتح في غرفة الصوت
+                  </Button>
+                </div>
 
                       </div>
                       <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(shot.id)}>
