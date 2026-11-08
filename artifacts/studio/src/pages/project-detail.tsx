@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useRoute } from "wouter";
 import { useGetProject, getGetProjectQueryKey } from "@workspace/api-client-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Settings, Globe, Users, PenTool, Clapperboard, CheckSquare, Film, Archive as ArchiveIcon } from "lucide-react";
+import { Loader2, Settings, Globe, Users, PenTool, Clapperboard, CheckSquare, Film, Archive as ArchiveIcon, Mic } from "lucide-react";
 import { motion } from "framer-motion";
 
 // Sub-components for tabs
@@ -14,6 +14,7 @@ import DirectingTab from "@/components/project/tabs/directing";
 import ProductionTab from "@/components/project/tabs/production";
 import EditingTab from "@/components/project/tabs/editing";
 import ArchiveTab from "@/components/project/tabs/archive";
+import VoiceRoomTab from "@/components/project/tabs/VoiceRoomTab";
 
 export default function ProjectDetail() {
   const [match, rawParams] = useRoute("/projects/:id");
@@ -49,6 +50,7 @@ export default function ProjectDetail() {
     { id: "characters", label: "قسم الشخصيات", icon: Users },
     { id: "writing", label: "غرفة الكتابة", icon: PenTool },
     { id: "directing", label: "غرفة الإخراج", icon: Clapperboard },
+    { id: "voice-room", label: "غرفة الصوت", icon: Mic },
     { id: "production", label: "غرفة الإنتاج", icon: CheckSquare },
     { id: "editing", label: "غرفة المونتاج", icon: Film },
     { id: "archive", label: "الأرشيف", icon: ArchiveIcon },
@@ -103,6 +105,9 @@ export default function ProjectDetail() {
             <TabsContent value="directing" className="mt-0 outline-none">
               <DirectingTab project={project} />
             </TabsContent>
+          <TabsContent value="voice-room" className="mt-0 outline-none">
+            <VoiceRoomTab project={project} />
+          </TabsContent>
             <TabsContent value="production" className="mt-0 outline-none">
               <ProductionTab {...{ project } as any} />
             </TabsContent>

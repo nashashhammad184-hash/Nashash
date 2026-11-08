@@ -170,6 +170,11 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
       }
     }
     const updateData: Record<string, any> = {};
+    // KAYAN-VR: raw body fields (not in zod schema yet)
+    const rawBody = req.body as any;
+    if (rawBody.characterId !== undefined) updateData.characterId = rawBody.characterId;
+    if (rawBody.voiceEngine !== undefined) updateData.voiceEngine = rawBody.voiceEngine;
+    if (rawBody.voiceProfile !== undefined) updateData.voiceProfile = rawBody.voiceProfile;
     if (parsed.data.sceneNumber !== undefined) updateData.sceneNumber = String(parsed.data.sceneNumber);
     if (parsed.data.description !== undefined) updateData.description = parsed.data.description;
     if (parsed.data.cameraMovement !== undefined) updateData.cameraMovement = parsed.data.cameraMovement;
