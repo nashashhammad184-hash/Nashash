@@ -21,6 +21,14 @@ def parse_tag(text):
         return m.group(1).lower()
     return "neutral"
 
+def sanitize_dialogue(text):
+    """Strip narrator/character prefixes like 'صفية تهمس: ' or 'صوت سردي: '"""
+    if not text:
+        return text
+    cleaned = re.sub(r'^[^:\{\[]+:\s*', '', text.strip())
+    return cleaned.strip() or text.strip()
+
+
 def generate_mp3_lahgtna(text, voice, target_duration, idem):
     if not LAHGTNA_URL or not LAHGTNA_TOKEN:
         raise RuntimeError("LAHGTNA_URL/LAHGTNA_TOKEN not configured")
@@ -104,6 +112,9 @@ def process_shot(session, shot, state):
         tag = parse_tag(dialogue_text)
     target_duration = float(shot.get("durationSeconds") or 5.0)
 
+    if not text:
+        return False
+    text = sanitize_dialogue(text)
     if not text:
         return False
 
