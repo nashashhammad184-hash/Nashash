@@ -8,6 +8,8 @@ export const shotsTable = pgTable("shots", {
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   scriptId: integer("script_id"),
   characterId: integer("character_id"),
+  voiceEngine: text("voice_engine"),
+  voiceProfile: jsonb("voice_profile"),
   
   // ضبط حقول الأرقام لتقرأ كـ text متطابقة مع داتابيز السيرفر الحالية ومنع تعارض الأنواع
   sceneNumber: text("scene_number").notNull().default("1"), 
