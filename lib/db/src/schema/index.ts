@@ -13,3 +13,4 @@ export * from "./render_jobs";
 
 export * from "./worker_heartbeats";
 export * from "./audio_library";
+export * from "./character_voice_profiles";

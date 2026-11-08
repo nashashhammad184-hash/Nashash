@@ -7,6 +7,7 @@ export const shotsTable = pgTable("shots", {
   id: serial("id").primaryKey(),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   scriptId: integer("script_id"),
+  characterId: integer("character_id"),
   
   // ضبط حقول الأرقام لتقرأ كـ text متطابقة مع داتابيز السيرفر الحالية ومنع تعارض الأنواع
   sceneNumber: text("scene_number").notNull().default("1"), 
