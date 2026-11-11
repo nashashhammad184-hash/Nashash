@@ -11,6 +11,12 @@ const STATUS_COLORS: Record<string, { label: string; cls: string; emoji: string 
   FAILED:     { label: "فشل",      cls: "bg-red-500/20 text-red-400",       emoji: "🔴" },
 };
 
+const ENGINE_LABELS: Record<string, string> = {
+  audar_flash: "Audar-Flash",
+  audar: "Audar (فصحى)",
+  lahgtna: "Lahgtna (احتياطي)",
+};
+
 interface Project { id: number; title: string; }
 interface EditState { id: number; start_time: number; end_time: number; volume: number; fade_in: number; fade_out: number; }
 
@@ -368,7 +374,7 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
             <select value={selectedCharacterId ?? ""} onChange={e => updateShotCharacter(Number(e.target.value))} className="flex-1 h-9 rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white">
               <option value="">— اختر شخصية —</option>
               {characters.map(c => (
-                <option key={c.id} value={c.id}>{c.name} — {c.engine} ({c.dialect})</option>
+                <option key={c.id} value={c.id}>{c.name} — {c.dialect} ({ENGINE_LABELS[c.engine] || c.engine})</option>
               ))}
             </select>
             {selectedCharacter?.engine === "lahgtna" && (
