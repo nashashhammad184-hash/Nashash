@@ -125,11 +125,12 @@ def _gen_codes(text: str, tag: str, desired: str, custom_ref: Optional[str] = No
         _load_llama(desired)
 
     ref_str = "".join(f"<|speech_{c}|>" for c in ref_codes)
+    effective_text = f"[{tag}] {text}" if tag and tag != "neutral" else text
     prompt = (f"user: Convert the text to speech:"
-              f"<|REF_TEXT_START|>{custom_ref_text if custom_ref_text else REF_TEXT}<|REF_TEXT_END|>"
-              f"<|REF_SPEECH_START|>{ref_str}<|REF_SPEECH_END|>"
-              f"<|TARGET_TEXT_START|>{text}<|TARGET_TEXT_END|>"
-              f"\nassistant:<|TARGET_CODES_START|>")
+                  f"<|REF_TEXT_START|>{custom_ref_text if custom_ref_text else REF_TEXT}<|REF_TEXT_END|>"
+                  f"<|REF_SPEECH_START|>{ref_str}<|REF_SPEECH_END|>"
+                  f"<|TARGET_TEXT_START|>{effective_text}<|TARGET_TEXT_END|>"
+                  f"\nassistant:<|TARGET_CODES_START|>")
     tce = _llm.tokenize(b"<|TARGET_CODES_END|>", add_bos=False, special=True)[0]
     toks = _llm.tokenize(prompt.encode(), add_bos=False, special=True)
     temp = 0.7 if tag == "whispers" else 1.0
