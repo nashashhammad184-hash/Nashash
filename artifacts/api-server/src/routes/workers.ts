@@ -43,37 +43,41 @@ router.get("/worker/audio-queue", requireProductionAuth, async (req: Request, re
   try {
     let query = sql`
       SELECT 
-        id AS "shotId",
-        project_id AS "projectId",
-        dialogue,
-        description,
-        duration_seconds AS "durationSeconds",
-        audio_status AS "audioStatus",
-        audio_claimed_at AS "audioClaimedAt",
-        resolved_text AS "resolvedText",
-        audio_instruction AS "audioInstruction",
-        manual_instruction AS "manualInstruction",
-        director_input_hash AS "directorInputHash",
-                    voice_engine AS "voiceEngine",
-                    voice_profile AS "voiceProfile",
-                    character_id AS "characterId"
-      FROM shots
-      WHERE audio_status = 'QUEUED'
-        AND dialogue IS NOT NULL
-        AND TRIM(dialogue) != ''
-        AND (audio_claimed_at IS NULL OR audio_claimed_at < NOW() - INTERVAL '10 minutes')
+        s.id AS "shotId",
+        s.project_id AS "projectId",
+        s.dialogue,
+        s.description,
+        s.duration_seconds AS "durationSeconds",
+        s.audio_status AS "audioStatus",
+        s.audio_claimed_at AS "audioClaimedAt",
+        s.resolved_text AS "resolvedText",
+        s.audio_instruction AS "audioInstruction",
+        s.manual_instruction AS "manualInstruction",
+        s.director_input_hash AS "directorInputHash",
+                    s.voice_engine AS "voiceEngine",
+                    s.voice_profile AS "voiceProfile",
+                    s.character_id AS "characterId",
+                    cvp.ref_wav_path AS "refWavPath",
+                    cvp.ref_text AS "refText"
+      FROM shots s
+      LEFT JOIN character_voice_profiles cvp
+        ON cvp.id = s.character_id
+      WHERE s.audio_status = 'QUEUED'
+        AND s.dialogue IS NOT NULL
+        AND TRIM(s.dialogue) != ''
+        AND (s.audio_claimed_at IS NULL OR s.audio_claimed_at < NOW() - INTERVAL '10 minutes')
     `;
     
     if (lang === "ar") {
-      query = sql`${query} AND dialogue ~ '[\u0600-\u06FF]'`;
+      query = sql`${query} AND s.dialogue ~ '[\u0600-\u06FF]'`;
     } else if (lang === "en") {
-      query = sql`${query} AND dialogue !~ '[\u0600-\u06FF]'`;
+      query = sql`${query} AND s.dialogue !~ '[\u0600-\u06FF]'`;
     }
     
     query = sql`${query} 
       ORDER BY 
-        CASE WHEN dialogue ~ '[\u0600-\u06FF]' THEN 0 ELSE 1 END,
-        created_at ASC
+        CASE WHEN s.dialogue ~ '[\u0600-\u06FF]' THEN 0 ELSE 1 END,
+        s.created_at ASC
       LIMIT ${limit}
     `;
     
