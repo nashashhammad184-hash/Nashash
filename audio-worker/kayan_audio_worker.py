@@ -46,12 +46,14 @@ def generate_mp3_lahgtna(text, voice, target_duration, idem):
     return r.content
 
 
-def generate_audio(text, tag, engine, voice_name, target_duration, idem):
+def generate_audio(text, tag, engine, voice_name, target_duration, idem,
+                    audio_prompt_path=None, ref_text=None):
     if engine == "lahgtna":
         print(f"  Lahgtna /tts (voice={voice_name})...", flush=True)
         return generate_mp3_lahgtna(text, voice_name, target_duration, idem)
-    print("  Audar /tts...", flush=True)
-    return generate_mp3(text, tag, VOICE, target_duration, idem)
+    print(f"  Audar /tts... (ref={audio_prompt_path or 'default'})", flush=True)
+    return generate_mp3(text, tag, VOICE, target_duration, idem,
+                        audio_prompt_path=audio_prompt_path, ref_text=ref_text)
 
 
 def heartbeat_loop():
@@ -95,6 +97,8 @@ def process_shot(session, shot, state):
     engine = (shot.get("voiceEngine") or "audar").strip().lower()
     voice_profile = shot.get("voiceProfile") or {}
     voice_name = (voice_profile.get("voice") if isinstance(voice_profile, dict) else None) or "jordanian"
+    ref_wav_path = shot.get("refWavPath")
+    ref_text = shot.get("refText")
 
     is_fresh = False
     if resolved and resolved.strip() and input_hash:
@@ -143,7 +147,7 @@ def process_shot(session, shot, state):
     try:
         if stage != "uploaded":
             print("  Oracle /tts...", flush=True)
-            mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
+            mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem, audio_prompt_path=ref_wav_path, ref_text=ref_text)
             print(f"  Oracle OK: {len(mp3_bytes)} bytes", flush=True)
             set_stage(state, shot_id, "generated", idem_key=idem, claim_token=claim_token)
             entry = state[str(shot_id)]
@@ -153,7 +157,7 @@ def process_shot(session, shot, state):
 
         if not file_path:
             if mp3_bytes is None:
-                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
+                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem, audio_prompt_path=ref_wav_path, ref_text=ref_text)
             payload = {
                 "projectId": project_id,
                 "shotId": shot_id,
@@ -175,7 +179,7 @@ def process_shot(session, shot, state):
 
         if stage != "uploaded":
             if mp3_bytes is None:
-                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem)
+                mp3_bytes = generate_audio(text, tag, engine, voice_name, target_duration, idem, audio_prompt_path=ref_wav_path, ref_text=ref_text)
             print("  PUT to signedUrl...", flush=True)
             r = requests.put(signed_url, data=mp3_bytes,
                              headers={"Content-Type": "audio/mpeg"}, timeout=60)
