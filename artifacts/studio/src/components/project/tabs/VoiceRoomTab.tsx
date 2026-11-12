@@ -115,7 +115,7 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
       setSelectedEmotion("neutral");
     }
     }
-  }, [selectedShotId]);
+  }, [selectedShotId, selectedShot?.voiceProfile?.tag]);
 
   // KAYAN Sprint F2: polling — auto-refresh shots + assets every 6s while shot is open
   useEffect(() => {
