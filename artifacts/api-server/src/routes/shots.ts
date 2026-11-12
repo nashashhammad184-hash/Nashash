@@ -204,6 +204,13 @@ router.patch("/shots/:id", requireProductionAuth, async (req: Request, res: Resp
         updateData.audioClaimedAt = null;
         updateData.audioStage = "none";
       }
+      // KAYAN Sprint F2: reset claim when re-queueing (allow Worker to re-claim immediately)
+      if (parsed.data.audioStatus === "QUEUED") {
+        updateData.audioClaimToken = null;
+        updateData.audioClaimedAt = null;
+        updateData.audioStage = "none";
+        updateData.audioIdempotencyKey = null;
+      }
     }
     // KAYAN-8: soft warning — audioUrl set but audioStatus not COMPLETED.
     // Not a hard error: pipeline may set FAILED with an audioUrl (recovery scenarios).
