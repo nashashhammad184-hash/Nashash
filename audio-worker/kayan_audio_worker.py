@@ -13,7 +13,7 @@ VOICE = "demo_female_1"
 LAHGTNA_URL = os.environ.get("LAHGTNA_URL", "").rstrip("/")
 LAHGTNA_TOKEN = os.environ.get("LAHGTNA_TOKEN", "")
 
-ALLOWED_TAGS = {"laughs", "curious", "excited", "neutral", "sad", "mischievously", "whispers", "sarcastic"}
+ALLOWED_TAGS = {"laughs", "curious", "excited", "sighs", "exhales", "mischievously", "whispers", "sarcastic", "neutral"}
 
 def parse_tag(text):
     m = re.match(r"^\s*\[(\w+)\]", text or "")
@@ -110,9 +110,13 @@ def process_shot(session, shot, state):
 
     if is_fresh:
         text = resolved.strip()
-        tag = "resolved"
     else:
         text = dialogue_text
+    # Priority: voice_profile.tag > [tag] in dialogue > neutral
+    _profile_tag = voice_profile.get("tag") if isinstance(voice_profile, dict) else None
+    if _profile_tag and _profile_tag in ALLOWED_TAGS:
+        tag = _profile_tag
+    else:
         tag = parse_tag(dialogue_text)
     target_duration = float(shot.get("durationSeconds") or 5.0)
 
