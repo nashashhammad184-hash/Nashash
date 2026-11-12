@@ -17,8 +17,8 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { randomUUID } from "node:crypto";
-import { eq, desc, sql } from "drizzle-orm";
-import { db, renderJobsTable, type RenderJobRow, type RenderStatus } from "@workspace/db";
+import { eq, and, desc, sql } from "drizzle-orm";
+import { db, renderJobsTable, shotsTable, type RenderJobRow, type RenderStatus } from "@workspace/db";
 // KAYAN-TASK-73F: storage-aware asset resolution for r2 URLs.
 import { resolveStorageUrlToLocal } from "./storage/index";
 import { persistRenderFile } from "./storage/persist";
@@ -653,6 +653,19 @@ export async function runRenderPipeline(jobId: string): Promise<void> {
       finishedAt: new Date(),
       error: null,
     });
+
+  // KAYAN Sprint B: mark all PROCESSING shots in this project as COMPLETED
+  try {
+    await _deps.getDb()
+      .update(shotsTable)
+      .set({ audioStatus: "COMPLETED" })
+      .where(and(
+        eq(shotsTable.projectId, row.projectId),
+        eq(shotsTable.audioStatus, "PROCESSING"),
+      ));
+  } catch (e) {
+    console.error("[pipeline] audio_status update failed:", e);
+  }
   } catch (err: any) {
     const message = err instanceof Error ? err.message : String(err);
     // KAYAN-TASK-66: cleanup on failure (was previously leaking temp files).
