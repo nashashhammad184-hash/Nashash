@@ -117,6 +117,16 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
     }
   }, [selectedShotId]);
 
+  // KAYAN Sprint F2: polling — auto-refresh shots + assets every 6s while shot is open
+  useEffect(() => {
+    if (!selectedShotId) return undefined;
+    const interval = setInterval(() => {
+      reloadShots();
+      reloadAssets(selectedShotId);
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [selectedShotId]);
+
   // === Playback ===
   const stopPlayback = () => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
