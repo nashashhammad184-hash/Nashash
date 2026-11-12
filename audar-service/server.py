@@ -28,7 +28,7 @@ REFS = {
     "demo_male_3":   f"{AUDAR_DIR}/samples/ref_5s_16k.wav",
 }
 REF_TEXT = "هل تعرف أن الفلافل لم تخترع في الشام؟ وإنما يرجع أصلها إلى مصر؟"
-ALLOWED_TAGS = {"whispers","excited","curious","sad","laughs","sarcastic","mischievously","neutral"}
+ALLOWED_TAGS = {"whispers","excited","curious","laughs","sarcastic","mischievously","sighs","exhales","neutral"}
 AUTH_TOKEN = os.environ.get("AUDAR_AUTH_TOKEN", "").strip()
 TTL_SEC = 600
 
@@ -133,7 +133,7 @@ def _gen_codes(text: str, tag: str, desired: str, custom_ref: Optional[str] = No
                   f"\nassistant:<|TARGET_CODES_START|>")
     tce = _llm.tokenize(b"<|TARGET_CODES_END|>", add_bos=False, special=True)[0]
     toks = _llm.tokenize(prompt.encode(), add_bos=False, special=True)
-    temp = 0.7 if tag == "whispers" else 1.0
+    temp = 1.0
     out = []
     for tid in _llm.generate(toks, temp=temp, top_k=40, top_p=0.9, repeat_penalty=1.1):
         if tid == tce or len(out) >= 800: break
@@ -153,7 +153,7 @@ def _codes_to_mp3(codes: list[int], target_duration: float) -> bytes:
     trim()
     tts_dur = len(wav)/24000.0
     ratio = tts_dur / target_duration
-    if ratio > 1.15:
+    if ratio > 1.6:
         raise HTTPException(422, {"error":"SHOT_TOO_SHORT_FOR_AUDIO","tts_duration_s":round(tts_dur,3),"target_s":target_duration,"ratio":round(ratio,3)})
 
     wav_in = f"/tmp/in_{uuid.uuid4().hex}.wav"
@@ -161,7 +161,7 @@ def _codes_to_mp3(codes: list[int], target_duration: float) -> bytes:
     sf.write(wav_in, wav, 24000)
     extra_args = []
     if ratio > 1.0:
-        af = f"atempo={min(ratio,1.15):.4f}"
+        af = f"atempo={min(ratio,1.6):.4f}"
     else:
         af = "apad"
         extra_args = ["-t", f"{target_duration:.3f}"]
@@ -210,7 +210,7 @@ async def _run_tts(job_id: str, body: TTSBody, body_hash: str):
     global _requests_ok, _requests_fail, _ttl_last_ts
     async with _lock:
         try:
-            desired = "Q8_0" if body.tag == "whispers" else "Q4_K_M"
+            desired = "Q8_0"  # always Q8 for quality
             codes = await asyncio.to_thread(_gen_codes, body.text, body.tag, desired, body.audio_prompt_path, body.ref_text)
             mp3 = await asyncio.to_thread(_codes_to_mp3, codes, body.target_duration_s)
             _idem_cache[job_id] = {"body_hash":body_hash,"bytes":mp3,"ts":time.time()}
