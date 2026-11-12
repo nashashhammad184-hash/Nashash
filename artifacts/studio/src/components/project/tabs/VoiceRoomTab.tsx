@@ -17,6 +17,14 @@ const ENGINE_LABELS: Record<string, string> = {
   lahgtna: "Lahgtna (احتياطي)",
 };
 
+// KAYAN Sprint F2: 4 approved emotion tags
+const EMOTIONS: { value: string; label: string; tag: string }[] = [
+  { value: "neutral", label: "محايد", tag: "neutral" },
+  { value: "curious", label: "فضولي", tag: "curious" },
+  { value: "excited", label: "متحمس", tag: "excited" },
+  { value: "mischievously", label: "ماكر", tag: "mischievously" },
+];
+
 interface Project { id: number; title: string; }
 interface EditState { id: number; start_time: number; end_time: number; volume: number; fade_in: number; fade_out: number; }
 
@@ -26,6 +34,7 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
   const [library, setLibrary] = useState<any[]>([]);
   const [selectedShotId, setSelectedShotId] = useState<number | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
+  const [selectedEmotion, setSelectedEmotion] = useState<string>("neutral");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
@@ -99,6 +108,12 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
     if (selectedShotId) {
       reloadAssets(selectedShotId);
       if (selectedShot?.characterId) setSelectedCharacterId(selectedShot.characterId);
+    const dbTag = selectedShot?.voiceProfile?.tag;
+    if (dbTag && EMOTIONS.some(e => e.value === dbTag)) {
+      setSelectedEmotion(dbTag);
+    } else {
+      setSelectedEmotion("neutral");
+    }
     }
   }, [selectedShotId]);
 
@@ -162,7 +177,10 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
     if (!c) { toast.error("اختر شخصية أولاً"); return; }
     setBusy("generate");
     try {
-      const voiceProfile = { voice: c.dialect === "jordanian" ? "jordanian" : "default" };
+      const voiceProfile = {
+        voice: c.dialect === "jordanian" ? "jordanian" : "default",
+        tag: selectedEmotion,
+      };
       const r = await fetch(`/api/shots/${selectedShotId}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -385,6 +403,19 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
             )}
           </div>
         </div>
+              <div>
+                <label className="text-xs text-muted-foreground">المشاعر</label>
+                <select
+                  value={selectedEmotion}
+                  onChange={e => setSelectedEmotion(e.target.value)}
+                  className="w-full h-9 rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white mt-1"
+                >
+                  {EMOTIONS.map(em => (
+                    <option key={em.value} value={em.value}>{em.label}</option>
+                  ))}
+                </select>
+              </div>
+
 
         <div>
           <label className="text-xs text-muted-foreground">النص</label>
