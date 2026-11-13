@@ -309,7 +309,8 @@ router.get("/actors/:id", requireProductionAuth, async (req: Request, res: Respo
 // 6. POST /actors/:id/voice (Upload)
 router.post("/actors/:id/voice", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const actorId = parseInt(String(req.params.id));
-  const { projectId, audioBase64, refText, dialect, engine = 'audar_flash' } = req.body;
+  const { projectId, audioBase64, refText, dialect, engine = 'audar_flash', makeDefault = true } = req.body;
+  const shouldBeDefault = makeDefault === true;
   if (!projectId || !refText || !audioBase64) { res.status(400).json({ error: "Missing required fields" }); return; }
   if (refText.length < 5) { res.status(400).json({ error: "REF_TEXT_TOO_SHORT" }); return; }
   const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
@@ -339,12 +340,14 @@ router.post("/actors/:id/voice", requireProductionAuth, async (req: Request, res
     }
   }
   
-  await db.update(characterVoiceProfilesTable).set({ isDefault: false })
-    .where(and(eq(characterVoiceProfilesTable.actorId, actorId), eq(characterVoiceProfilesTable.projectId, projectId), eq(characterVoiceProfilesTable.isDefault, true)));
+  if (shouldBeDefault) {
+    await db.update(characterVoiceProfilesTable).set({ isDefault: false })
+      .where(and(eq(characterVoiceProfilesTable.actorId, actorId), eq(characterVoiceProfilesTable.projectId, projectId), eq(characterVoiceProfilesTable.isDefault, true)));
+  }
   
   const [voice] = await db.insert(characterVoiceProfilesTable).values({
     projectId, actorId, name: actor.name, gender: actor.gender, dialect: dialect || actor.dialect || 'أردني',
-    engine, refWavPath: oraclePath, refText, isDefault: true,
+    engine, refWavPath: oraclePath, refText, isDefault: shouldBeDefault,
   }).returning();
   res.json({ ok: true, voice });
 });

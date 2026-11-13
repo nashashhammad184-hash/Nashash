@@ -181,6 +181,7 @@ router.get("/:id/characters", requireProductionAuth, async (req: Request, res: R
     res.status(400).json({ error: "INVALID_PROJECT_ID" });
     return;
   }
+  const includeAlternatives = String(req.query.includeAlternatives || "false").toLowerCase() === "true";
   try {
     const characters = await db
       .select({
@@ -210,10 +211,12 @@ router.get("/:id/characters", requireProductionAuth, async (req: Request, res: R
         )
       )
       .where(
-        and(
-          eq(characterVoiceProfilesTable.projectId, projectId),
-          eq(characterVoiceProfilesTable.isDefault, true)
-        )
+        includeAlternatives
+          ? eq(characterVoiceProfilesTable.projectId, projectId)
+          : and(
+              eq(characterVoiceProfilesTable.projectId, projectId),
+              eq(characterVoiceProfilesTable.isDefault, true)
+            )
       );
     res.json({ ok: true, characters });
   } catch (err: any) {
