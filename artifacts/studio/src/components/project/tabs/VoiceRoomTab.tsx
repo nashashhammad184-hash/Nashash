@@ -402,7 +402,9 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
             <select value={selectedCharacterId ?? ""} onChange={e => updateShotCharacter(Number(e.target.value))} className="flex-1 h-9 rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white">
               <option value="">— اختر شخصية —</option>
               {characters.map(c => (
-                <option key={c.id} value={c.id}>{c.name} — {c.dialect} ({ENGINE_LABELS[c.engine] || c.engine})</option>
+                <option key={c.id} value={c.id}>
+                  {c.name}{c.roleName ? ` (${c.roleName})` : ''} — {c.dialect} ({ENGINE_LABELS[c.engine] || c.engine})
+                </option>
               ))}
             </select>
             {selectedCharacter?.engine === "lahgtna" && (
