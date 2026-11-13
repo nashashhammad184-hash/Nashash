@@ -385,7 +385,7 @@ router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (re
   if (!voice || !voice.refWavPath) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   if (!voice.projectId && !voice.actorId) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   const basename = String(voice.refWavPath).split('/').pop();
-  if (!basename || !basename.endsWith(".wav")) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
+  if (!basename || !/^[a-f0-9-]{36}\.wav$/.test(basename)) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   const oracleUrl = process.env.ORACLE_REFS_URL || "https://kayan-audar.duckdns.org";
   const oracleToken = process.env.ORACLE_REFS_TOKEN;
   if (!oracleToken) { res.status(503).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
@@ -394,13 +394,18 @@ router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (re
       headers: { "Authorization": `Bearer ${oracleToken}` },
     });
     if (!upstream.ok) {
-      res.status(upstream.status === 401 ? 503 : 404).json({ error: "NO_SAMPLE" });
+      if (upstream.status === 404) {
+        res.status(404).json({ error: "NO_SAMPLE" });
+        return;
+      }
+      console.error(`[sample] Oracle status=${upstream.status} voiceId=${voiceId}`);
+      res.status(503).json({ error: "SAMPLE_UNAVAILABLE" });
       return;
     }
     res.setHeader("Content-Type", "audio/wav");
     res.setHeader("Cache-Control", "private, max-age=300");
     const reader = upstream.body?.getReader();
-    if (!reader) { res.status(502).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
+    if (!reader) { res.status(503).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -408,7 +413,8 @@ router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (re
     }
     res.end();
   } catch (e) {
-    if (!res.headersSent) res.status(502).json({ error: "SAMPLE_UNAVAILABLE" });
+    console.error(`[sample] Fetch failed voiceId=${voiceId}`);
+    if (!res.headersSent) res.status(503).json({ error: "SAMPLE_UNAVAILABLE" });
     else res.end();
   }
 });
