@@ -377,13 +377,40 @@ router.delete("/actors/:id/voice/:voiceId", requireProductionAuth, async (req: R
   res.json({ ok: true });
 });
 
-// 9. GET /actors/:id/voice/:voiceId/sample
+// 9. GET /actors/:id/voice/:voiceId/sample (proxy — token stays between servers)
 router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const voiceId = parseInt(String(req.params.voiceId));
+  if (isNaN(voiceId)) { res.status(400).json({ error: "INVALID_VOICE_ID" }); return; }
   const [voice] = await db.select().from(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.id, voiceId));
   if (!voice || !voice.refWavPath) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
-  const basename = voice.refWavPath.split('/').pop();
-  res.redirect("https://kayan-audar.duckdns.org/references/" + basename);
+  if (!voice.projectId && !voice.actorId) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
+  const basename = String(voice.refWavPath).split('/').pop();
+  if (!basename || !basename.endsWith(".wav")) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
+  const oracleUrl = process.env.ORACLE_REFS_URL || "https://kayan-audar.duckdns.org";
+  const oracleToken = process.env.ORACLE_REFS_TOKEN;
+  if (!oracleToken) { res.status(503).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
+  try {
+    const upstream = await fetch(`${oracleUrl}/references/${basename}`, {
+      headers: { "Authorization": `Bearer ${oracleToken}` },
+    });
+    if (!upstream.ok) {
+      res.status(upstream.status === 401 ? 503 : 404).json({ error: "NO_SAMPLE" });
+      return;
+    }
+    res.setHeader("Content-Type", "audio/wav");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    const reader = upstream.body?.getReader();
+    if (!reader) { res.status(502).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+    res.end();
+  } catch (e) {
+    if (!res.headersSent) res.status(502).json({ error: "SAMPLE_UNAVAILABLE" });
+    else res.end();
+  }
 });
 
 export default router;
