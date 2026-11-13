@@ -11,6 +11,8 @@ export const actorsTable = pgTable("actors", {
   age: integer("age").notNull(),
   style: text("style").notNull(),
   imageUrl: text("image_url").$type<string>(),
+  dialect: text("dialect"),
+  description: text("description"),
   
   // ── PRESERVED COLUMNS (للمحافظة على الـ 31 ممثلاً الحاليين) ──
   gender: text("gender"),

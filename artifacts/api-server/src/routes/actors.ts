@@ -1,7 +1,8 @@
+import { randomUUID } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable } from "@workspace/db";
+import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
-import { eq } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
 import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
@@ -236,5 +237,153 @@ router.post(
     }
   },
 );
+
+
+// --- Sprint G3: Voice DNA & Cast APIs ---
+
+// 1. GET /actors/library
+router.get("/actors/library", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const actors = await db.select({
+    id: actorsTable.id, name: actorsTable.name, age: actorsTable.age,
+    dialect: actorsTable.dialect, description: actorsTable.description, imageUrl: actorsTable.imageUrl,
+  }).from(actorsTable).orderBy(actorsTable.name);
+  res.json({ ok: true, actors });
+});
+
+// 2. GET /projects/:id/cast
+router.get("/projects/:id/cast", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = parseInt(String(req.params.id));
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid project id" }); return; }
+
+  const cast = await db.select({
+      castId: projectActorsTable.id, actorId: actorsTable.id, roleName: projectActorsTable.roleName, roleType: projectActorsTable.roleType,
+      name: actorsTable.name, age: actorsTable.age, dialect: actorsTable.dialect, description: actorsTable.description, imageUrl: actorsTable.imageUrl,
+      defaultVoiceId: sql<number | null>`(SELECT id FROM character_voice_profiles WHERE actor_id = ${actorsTable.id} AND (project_id = ${projectId} OR project_id IS NULL) AND is_default = TRUE ORDER BY project_id DESC NULLS LAST LIMIT 1)`,
+      defaultEngine: sql<string | null>`(SELECT engine FROM character_voice_profiles WHERE actor_id = ${actorsTable.id} AND (project_id = ${projectId} OR project_id IS NULL) AND is_default = TRUE ORDER BY project_id DESC NULLS LAST LIMIT 1)`,
+      voicesCount: sql<number>`(SELECT COUNT(*) FROM character_voice_profiles WHERE actor_id = ${actorsTable.id} AND (project_id = ${projectId} OR project_id IS NULL))`,
+    }).from(projectActorsTable)
+    .innerJoin(actorsTable, eq(projectActorsTable.actorId, actorsTable.id))
+    .where(eq(projectActorsTable.projectId, projectId));
+  res.json({ ok: true, cast });
+});
+
+// 3. POST /projects/:id/cast
+router.post("/projects/:id/cast", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = parseInt(String(req.params.id));
+  const { actorId, roleName, roleType = 'supporting' } = req.body;
+  if (isNaN(projectId) || !actorId) { res.status(400).json({ error: "Invalid params" }); return; }
+  const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+  if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
+  const [existing] = await db.select().from(projectActorsTable).where(and(eq(projectActorsTable.projectId, projectId), eq(projectActorsTable.actorId, actorId)));
+  if (existing) { res.status(409).json({ error: "ACTOR_ALREADY_IN_CAST" }); return; }
+  const [entry] = await db.insert(projectActorsTable).values({ projectId, actorId, roleName: roleName || 'شخصية', roleType }).returning();
+  res.json({ ok: true, castEntry: entry });
+});
+
+// 4. DELETE /projects/:id/cast/:actorId
+router.delete("/projects/:id/cast/:actorId", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = parseInt(String(req.params.id));
+  const actorId = parseInt(String(req.params.actorId));
+  if (isNaN(projectId) || isNaN(actorId)) { res.status(400).json({ error: "Invalid params" }); return; }
+  const checks = await db.execute(sql`
+    SELECT (SELECT COUNT(*) FROM shots s JOIN character_voice_profiles cvp ON cvp.id = s.character_id WHERE cvp.actor_id = ${actorId} AND s.project_id = ${projectId}) AS shots_count,
+           (SELECT COUNT(*) FROM character_references cr WHERE cr.actor_id = ${actorId}) AS refs_count`);
+  const row: any = (checks as any).rows ? (checks as any).rows[0] : (checks as any)[0];
+  if (parseInt(row?.shots_count || '0') > 0) { res.status(409).json({ error: "ACTOR_IN_USE_IN_SHOTS" }); return; }
+  if (parseInt(row?.refs_count || '0') > 0) { res.status(409).json({ error: "ACTOR_HAS_REFERENCES" }); return; }
+  await db.delete(projectActorsTable).where(and(eq(projectActorsTable.projectId, projectId), eq(projectActorsTable.actorId, actorId)));
+  res.json({ ok: true, message: "أُزيل من Cast" });
+});
+
+// 5. GET /actors/:id (Details)
+router.get("/actors/:id", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const actorId = parseInt(String(req.params.id));
+  if (isNaN(actorId)) { res.status(400).json({ error: "Invalid actorId" }); return; }
+  const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+  if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
+  const voices = await db.select().from(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.actorId, actorId)).orderBy(desc(characterVoiceProfilesTable.isDefault));
+  const projects = await db.select({ projectId: projectActorsTable.projectId, roleName: projectActorsTable.roleName }).from(projectActorsTable).where(eq(projectActorsTable.actorId, actorId));
+  res.json({ ok: true, actor, voices, projects });
+});
+
+// 6. POST /actors/:id/voice (Upload)
+router.post("/actors/:id/voice", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const actorId = parseInt(String(req.params.id));
+  const { projectId, audioBase64, refText, dialect, engine = 'audar_flash' } = req.body;
+  if (!projectId || !refText || !audioBase64) { res.status(400).json({ error: "Missing required fields" }); return; }
+  if (refText.length < 5) { res.status(400).json({ error: "REF_TEXT_TOO_SHORT" }); return; }
+  const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+  if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
+  const buffer = Buffer.from(audioBase64, 'base64');
+  if (buffer.length > 5 * 1024 * 1024) { res.status(413).json({ error: "AUDIO_TOO_LARGE" }); return; }
+  const isWav = buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46;
+  const isMp3 = buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33;
+  if (!isWav && !isMp3) { res.status(400).json({ error: "INVALID_AUDIO_FORMAT" }); return; }
+  
+  const filename = randomUUID() + ".wav";
+  const oracleUrl = process.env.ORACLE_REFS_URL || "https://kayan-audar.duckdns.org";
+  const oracleToken = process.env.ORACLE_REFS_TOKEN;
+  let oraclePath = "/home/ubuntu/tts-test/samples/" + filename;
+  
+  if (oracleToken) {
+    try {
+      const uploadRes = await fetch(oracleUrl + "/references/upload", {
+        method: 'POST', headers: { 'Authorization': "Bearer " + oracleToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wav_base64: audioBase64, filename, ref_text: refText }),
+      });
+      if (!uploadRes.ok) throw new Error("Oracle upload failed");
+      const data = await uploadRes.json() as any;
+      oraclePath = data.path;
+    } catch (err: any) {
+      res.status(502).json({ error: "ORACLE_UPLOAD_FAILED", detail: err.message }); return;
+    }
+  }
+  
+  await db.update(characterVoiceProfilesTable).set({ isDefault: false })
+    .where(and(eq(characterVoiceProfilesTable.actorId, actorId), eq(characterVoiceProfilesTable.projectId, projectId), eq(characterVoiceProfilesTable.isDefault, true)));
+  
+  const [voice] = await db.insert(characterVoiceProfilesTable).values({
+    projectId, actorId, name: actor.name, gender: actor.gender, dialect: dialect || actor.dialect || 'أردني',
+    engine, refWavPath: oraclePath, refText, isDefault: true,
+  }).returning();
+  res.json({ ok: true, voice });
+});
+
+// 7. PATCH /actors/:id/voice/:voiceId
+router.patch("/actors/:id/voice/:voiceId", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const voiceId = parseInt(String(req.params.voiceId));
+  const { refText, dialect, isDefault } = req.body;
+  const [current] = await db.select().from(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.id, voiceId));
+  if (!current) { res.status(404).json({ error: "VOICE_NOT_FOUND" }); return; }
+  if (isDefault === true) {
+    await db.update(characterVoiceProfilesTable).set({ isDefault: false })
+      .where(and(eq(characterVoiceProfilesTable.actorId, current.actorId), eq(characterVoiceProfilesTable.projectId, current.projectId)));
+  }
+  const updates: any = {};
+  if (refText) updates.refText = refText;
+  if (dialect) updates.dialect = dialect;
+  if (isDefault !== undefined) updates.isDefault = isDefault;
+  const [updated] = await db.update(characterVoiceProfilesTable).set(updates).where(eq(characterVoiceProfilesTable.id, voiceId)).returning();
+  res.json({ ok: true, voice: updated });
+});
+
+// 8. DELETE /actors/:id/voice/:voiceId
+router.delete("/actors/:id/voice/:voiceId", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const voiceId = parseInt(String(req.params.voiceId));
+  const usage = await db.execute(sql`SELECT COUNT(*) as count FROM shots WHERE character_id = ${voiceId}`);
+  const row: any = (usage as any).rows ? (usage as any).rows[0] : (usage as any)[0];
+  if (parseInt(row?.count || '0') > 0) { res.status(409).json({ error: "VOICE_IN_USE_IN_SHOTS" }); return; }
+  await db.delete(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.id, voiceId));
+  res.json({ ok: true });
+});
+
+// 9. GET /actors/:id/voice/:voiceId/sample
+router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const voiceId = parseInt(String(req.params.voiceId));
+  const [voice] = await db.select().from(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.id, voiceId));
+  if (!voice || !voice.refWavPath) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
+  const basename = voice.refWavPath.split('/').pop();
+  res.redirect("https://kayan-audar.duckdns.org/references/" + basename);
+});
 
 export default router;
