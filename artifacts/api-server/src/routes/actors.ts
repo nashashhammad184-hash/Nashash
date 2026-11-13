@@ -385,7 +385,12 @@ router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (re
   if (!voice || !voice.refWavPath) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   if (!voice.projectId && !voice.actorId) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   const basename = String(voice.refWavPath).split('/').pop();
-  if (!basename || !/^[a-f0-9-]{36}\.wav$/.test(basename)) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
+  const isSafeWav = (n: string) =>
+    !!n && n.length <= 200 && n.endsWith(".wav") &&
+    !n.includes("/") && !n.includes("\\") &&
+    n !== "." && n !== ".." && !n.startsWith(".") &&
+    /^[a-zA-Z0-9_\-\u0600-\u06FF]+\.wav$/.test(n);
+  if (!basename || !isSafeWav(basename)) { res.status(404).json({ error: "NO_SAMPLE" }); return; }
   const oracleUrl = process.env.ORACLE_REFS_URL || "https://kayan-audar.duckdns.org";
   const oracleToken = process.env.ORACLE_REFS_TOKEN;
   if (!oracleToken) { res.status(503).json({ error: "SAMPLE_UNAVAILABLE" }); return; }
