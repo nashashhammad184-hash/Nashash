@@ -28,6 +28,7 @@ export default function CharactersTab({ project }: { project: Project }) {
 
   // Voice upload state
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [makeDefault, setMakeDefault] = useState(true);
   const [refText, setRefText] = useState("");
   const [dialect, setDialect] = useState("أردني");
   const [isUploading, setIsUploading] = useState(false);
@@ -85,6 +86,7 @@ export default function CharactersTab({ project }: { project: Project }) {
           refText,
           dialect,
           engine: "audar_flash",
+          makeDefault,
         });
         toast.success("تم حفظ الصوت بنجاح");
         refetchCast();
@@ -232,7 +234,11 @@ export default function CharactersTab({ project }: { project: Project }) {
               </Select>
             </div>
           </div>
-          <DialogFooter><Button onClick={uploadVoice} disabled={!voiceFile || !refText || isUploading}>{isUploading ? "جاري الحفظ..." : "حفظ الصوت"}</Button></DialogFooter>
+          <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+          <input id="make-default" type="checkbox" checked={makeDefault} onChange={e => setMakeDefault(e.target.checked)} className="h-4 w-4 accent-primary" />
+          <Label htmlFor="make-default" className="text-sm cursor-pointer">اجعله الصوت الافتراضي لهذا الممثل</Label>
+        </div>
+        <DialogFooter><Button onClick={uploadVoice} disabled={!voiceFile || !refText || isUploading}>{isUploading ? "جاري الحفظ..." : "حفظ الصوت"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

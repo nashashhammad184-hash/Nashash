@@ -67,7 +67,7 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
   };
   const reloadCharacters = async () => {
     try {
-      const r = await fetch(`/api/projects/${project.id}/characters`, { credentials: "include" });
+      const r = await fetch(`/api/projects/${project.id}/characters?includeAlternatives=true`, { credentials: "include" });
       const d = await r.json();
       setCharacters(d.characters || []);
     } catch {}
@@ -401,11 +401,15 @@ export default function VoiceRoomTab({ project }: { project: Project }) {
           <div className="flex gap-2 mt-1">
             <select value={selectedCharacterId ?? ""} onChange={e => updateShotCharacter(Number(e.target.value))} className="flex-1 h-9 rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white">
               <option value="">— اختر شخصية —</option>
-              {characters.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name}{c.roleName ? ` (${c.roleName})` : ''} — {c.dialect} ({ENGINE_LABELS[c.engine] || c.engine})
-                </option>
-              ))}
+              {characters.map(c => {
+                const sameActorCount = characters.filter(x => x.actorId === c.actorId && c.actorId).length;
+                const badge = sameActorCount > 1 ? (c.isDefault ? " [افتراضي]" : " [بديل]") : "";
+                return (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.roleName ? ` (${c.roleName})` : ''} — {c.dialect} ({ENGINE_LABELS[c.engine] || c.engine}){badge}
+                  </option>
+                );
+              })}
             </select>
             {selectedCharacter?.engine === "lahgtna" && (
               <Button size="sm" variant="outline" onClick={() => playCharacterSample(selectedCharacter)} className="gap-1">
