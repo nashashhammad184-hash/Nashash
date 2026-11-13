@@ -182,8 +182,39 @@ router.get("/:id/characters", requireProductionAuth, async (req: Request, res: R
     return;
   }
   try {
-    const characters = await db.select().from(characterVoiceProfilesTable)
-      .where(eq(characterVoiceProfilesTable.projectId, projectId));
+    const characters = await db
+      .select({
+        id: characterVoiceProfilesTable.id,
+        projectId: characterVoiceProfilesTable.projectId,
+        actorId: characterVoiceProfilesTable.actorId,
+        name: characterVoiceProfilesTable.name,
+        gender: characterVoiceProfilesTable.gender,
+        dialect: characterVoiceProfilesTable.dialect,
+        engine: characterVoiceProfilesTable.engine,
+        voiceGgufPath: characterVoiceProfilesTable.voiceGgufPath,
+        voiceConfig: characterVoiceProfilesTable.voiceConfig,
+        version: characterVoiceProfilesTable.version,
+        isDefault: characterVoiceProfilesTable.isDefault,
+        createdAt: characterVoiceProfilesTable.createdAt,
+        refWavPath: characterVoiceProfilesTable.refWavPath,
+        refText: characterVoiceProfilesTable.refText,
+        roleName: projectActorsTable.roleName,
+        roleType: projectActorsTable.roleType,
+      })
+      .from(characterVoiceProfilesTable)
+      .leftJoin(
+        projectActorsTable,
+        and(
+          eq(projectActorsTable.actorId, characterVoiceProfilesTable.actorId),
+          eq(projectActorsTable.projectId, projectId)
+        )
+      )
+      .where(
+        and(
+          eq(characterVoiceProfilesTable.projectId, projectId),
+          eq(characterVoiceProfilesTable.isDefault, true)
+        )
+      );
     res.json({ ok: true, characters });
   } catch (err: any) {
     res.status(500).json({ error: "INTERNAL_ERROR", detail: err.message });
