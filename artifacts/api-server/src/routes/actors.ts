@@ -55,7 +55,7 @@ function cleanImageUrl(url: string | null | undefined): string | null {
 type RefInfo = { total: number; has_primary: number };
 type VoiceInfo = { total: number; has_default: number };
 function computeCompleteness(actor: any, refInfo: RefInfo, voiceInfo: VoiceInfo) {
-  const hasIdentity = !!(actor.name && actor.age && actor.dialect);
+  const hasIdentity = !!(actor.name && actor.age && (actor.gender || actor.dialect));
   const hasDescription = !!(actor.description && String(actor.description).length > 10);
   const hasPrimaryVisual = !!actor.imageUrl || !!actor.canonicalFaceImagePath || (refInfo.has_primary > 0);
   const hasReferences = refInfo.total > 0;
