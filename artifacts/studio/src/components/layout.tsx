@@ -11,7 +11,7 @@ export function StudioLayout({ children }: { children: ReactNode }) {
   const navigation = [
     { name: "لوحة التحكم", href: "/", icon: LayoutDashboard },
     { name: "إدارة المشاريع", href: "/projects", icon: Film },
-    { name: "قسم الشخصيات", href: "/actors", icon: Users },
+    { name: "مكتبة الممثلين", href: "/actors", icon: Users },
     { name: "الأرشيف", href: "/archive", icon: Archive },
     { name: "محرك العوالم", href: "/worlds", icon: Globe },
   ];

@@ -53,7 +53,7 @@ export default function ProjectDetail() {
   const tabs = [
     { id: "overview", label: "إدارة المشروع", icon: Settings },
     { id: "world", label: "محرك العالم", icon: Globe },
-    { id: "characters", label: "قسم الشخصيات", icon: Users },
+    { id: "characters", label: "Cast الفيلم", icon: Users },
     { id: "writing", label: "غرفة الكتابة", icon: PenTool },
     { id: "directing", label: "غرفة الإخراج", icon: Clapperboard },
     { id: "voice-room", label: "غرفة الصوت", icon: Mic },
