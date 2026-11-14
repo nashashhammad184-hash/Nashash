@@ -33,6 +33,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
   const [voiceRefText, setVoiceRefText] = useState("");
   const [voiceDialect, setVoiceDialect] = useState("أردني");
   const [voiceProjectId, setVoiceProjectId] = useState<string>("");
+  const [voiceIsGlobal, setVoiceIsGlobal] = useState(true);
   const [voiceMakeDefault, setVoiceMakeDefault] = useState(true);
   const [isUploadingVoice, setIsUploadingVoice] = useState(false);
 
@@ -182,7 +183,8 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
 
   // ===== Voice handlers =====
   const handleUploadVoice = async () => {
-    if (!voiceFile || !voiceRefText || !actorId || !voiceProjectId) return;
+    if (!voiceFile || !voiceRefText || !actorId) return;
+    if (!voiceIsGlobal && !voiceProjectId) { toast.error("اختر مشروعاً أو اجعله صوتاً عالمياً"); return; }
     setIsUploadingVoice(true);
     try {
       const reader = new FileReader();
@@ -190,7 +192,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
       reader.onload = async () => {
         const base64 = (reader.result as string).split(",")[1];
         await axios.post(`/api/actors/${actorId}/voice`, {
-          projectId: parseInt(voiceProjectId),
+          projectId: voiceIsGlobal ? null : parseInt(voiceProjectId),
           audioBase64: base64,
           refText: voiceRefText,
           dialect: voiceDialect,
@@ -377,7 +379,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                     {data?.voices?.length > 0 && <span className="text-xs text-muted-foreground">({data.voices.length})</span>}
                   </h3>
                   {data?.projects?.length > 0 && (
-                    <Button size="sm" variant="outline" onClick={() => setIsUploadVoiceOpen(true)}><Plus className="w-3 h-3 ml-1" /> رفع صوت</Button>
+                    <Button size="sm" variant="outline" onClick={() => { setVoiceIsGlobal(true); setVoiceProjectId(""); setIsUploadVoiceOpen(true); }}><Plus className="w-3 h-3 ml-1" /> رفع صوت</Button>
                   )}
                 </div>
                 {data?.projects?.length === 0 && (
@@ -393,7 +395,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                             {v.isDefault && <span className="text-[10px] bg-primary text-primary-foreground px-1.5 py-0.5 rounded">افتراضي</span>}
                           </div>
                           <p className="text-xs text-muted-foreground truncate">{v.refText || "—"}</p>
-                          <p className="text-[10px] text-muted-foreground">{v.projectTitle ? v.projectTitle : `مشروع #${v.projectId}`}</p>
+                          <p className="text-[10px] text-muted-foreground">{v.projectId ? (v.projectTitle || `مشروع #${v.projectId}`) : "🌍 صوت عالمي"}</p>
                         </div>
                         <div className="flex gap-1">
                           {v.refWavPath && <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handlePlaySample(v.id)}><span className="text-xs">▶</span></Button>}
@@ -495,15 +497,21 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
         <DialogContent>
           <DialogHeader><DialogTitle>🎙️ رفع ملف صوتي</DialogTitle></DialogHeader>
           <div className="space-y-4 py-4">
-            <div>
-              <Label>المشروع</Label>
-              <select className="w-full h-9 rounded border border-input bg-background px-3 text-sm" value={voiceProjectId} onChange={(e) => setVoiceProjectId(e.target.value)}>
-                <option value="">— اختر مشروعاً —</option>
-                {(data?.projects || []).map((p: any) => (
-                  <option key={p.projectId} value={p.projectId}>مشروع #{p.projectId} ({p.roleName})</option>
-                ))}
-              </select>
+            <div className="flex items-center gap-2 p-2 rounded border border-border/30 bg-muted/20">
+              <input id="voice-global" type="checkbox" checked={voiceIsGlobal} onChange={(e) => setVoiceIsGlobal(e.target.checked)} className="h-4 w-4 accent-primary" />
+              <Label htmlFor="voice-global" className="text-sm cursor-pointer flex-1">صوت عالمي (يُستخدم في كل المشاريع)</Label>
             </div>
+            {!voiceIsGlobal && (
+              <div>
+                <Label>المشروع (تجاوز محدد)</Label>
+                <select className="w-full h-9 rounded border border-input bg-background px-3 text-sm" value={voiceProjectId} onChange={(e) => setVoiceProjectId(e.target.value)}>
+                  <option value="">— اختر مشروعاً —</option>
+                  {(data?.projects || []).map((p: any) => (
+                    <option key={p.projectId} value={p.projectId}>{p.projectTitle || `مشروع #${p.projectId}`} ({p.roleName})</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <Label>ملف الصوت (WAV / MP3)</Label>
               <Input type="file" accept="audio/wav,audio/mpeg" onChange={(e) => setVoiceFile(e.target.files?.[0] || null)} />
@@ -529,7 +537,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setIsUploadVoiceOpen(false)}>إلغاء</Button>
-            <Button onClick={handleUploadVoice} disabled={!voiceFile || !voiceRefText || !voiceProjectId || isUploadingVoice}>{isUploadingVoice ? "جاري الحفظ..." : "حفظ الصوت"}</Button>
+            <Button onClick={handleUploadVoice} disabled={!voiceFile || !voiceRefText || isUploadingVoice || (!voiceIsGlobal && !voiceProjectId)}>{isUploadingVoice ? "جاري الحفظ..." : "حفظ الصوت"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
