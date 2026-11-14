@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import ActorDnaModal from "@/components/actors/ActorDnaModal";
 
 function placeholder(id: number) {
   const colors = [["#171717", "#3f3f46"], ["#111827", "#374151"], ["#1e1b4b", "#4338ca"], ["#18181b", "#52525b"]];
@@ -27,6 +28,7 @@ export default function ActorsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedActor, setSelectedActor] = useState<any>(null);
+  const [dnaActorId, setDnaActorId] = useState<number | null>(null);
 
   const [name, setName] = useState("");
   const [actorType, setActorType] = useState("عربي");
@@ -212,6 +214,7 @@ export default function ActorsPage() {
                     <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
                     
                     <div className="absolute left-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 z-20">
+                      <Button size="icon" className="h-7 w-7 bg-primary text-primary-foreground hover:bg-primary/90" onClick={(e) => { e.stopPropagation(); setDnaActorId(actor.id); }} title="فتح Actor DNA"><span className="text-sm">🧬</span></Button>
                       <Button size="icon" className="h-7 w-7 bg-zinc-800 text-white hover:bg-zinc-700" onClick={() => openEditDialog(actor)}><Edit2 className="w-3.5 h-3.5" /></Button>
                       <Button size="icon" variant="destructive" className="h-7 w-7" onClick={() => confirm("هل أنت متأكد من حذف هذا الممثل تماماً؟") && deleteMutation.mutate(actor.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
@@ -286,6 +289,11 @@ export default function ActorsPage() {
           </DialogContent>
         </Dialog>
       </div>
+      <ActorDnaModal
+        actorId={dnaActorId}
+        open={dnaActorId !== null}
+        onClose={() => setDnaActorId(null)}
+      />
     </div>
   );
 }
