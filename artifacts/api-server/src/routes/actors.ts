@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, raw as expressRaw } from "express";
 import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
 import { eq, and, sql, desc } from "drizzle-orm";
@@ -7,6 +7,18 @@ import { assertSyntheticReference } from "../lib/legalGuard";
 import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
 import { requireProductionAuth } from "../lib/securityMiddleware";
+import {
+  uploadReference,
+  deleteReference,
+  createSignedUrlsForKeys,
+  generateStorageKey,
+  isStoragePath,
+  MAX_UPLOAD_BYTES,
+  MAX_STORED_BYTES,
+  MAX_OUTPUT_DIMENSION,
+  MAX_INPUT_PIXELS,
+  imageProcessingSemaphore,
+} from "../lib/storage/actorRefsStorage";
 import rateLimit from "express-rate-limit";
 
 const router: IRouter = Router();
@@ -178,9 +190,125 @@ router.get("/actors/:actorId/image", requireProductionAuth, async (req: Request,
 router.get("/actors/:actorId/references", requireProductionAuth, async (req, res): Promise<void> => {
   const actorId = parseInt(String(req.params.actorId), 10);
   if (isNaN(actorId)) { res.status(400).json({ error: "Invalid actorId" }); return; }
+  const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+  if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
   const refs = await db.select().from(characterReferencesTable).where(eq(characterReferencesTable.actorId, actorId)).orderBy(characterReferencesTable.id);
-  res.json(refs);
+  // Collect storage paths (non-external, non-legacy)
+  const storagePaths: string[] = [];
+  for (const r of refs) {
+    if (isStoragePath(r.assetUrl)) storagePaths.push(r.assetUrl);
+  }
+  // Bulk sign (one Supabase call)
+  const signedMap = storagePaths.length > 0 ? await createSignedUrlsForKeys(storagePaths) : {};
+  // Replace asset_url with signed URL; keep legacy external as-is
+  const enriched = refs.map((r) => {
+    if (!isStoragePath(r.assetUrl)) return r; // legacy external / absolute path — as-is
+    const signed = signedMap[r.assetUrl] || null;
+    return { ...r, assetUrl: signed };
+  });
+  res.json(enriched);
 });
+
+router.post(
+  "/actors/:actorId/references/upload",
+  requireProductionAuth,
+  expressRaw({
+    type: ["image/jpeg", "image/png", "image/webp"],
+    limit: "5mb",
+    inflate: false,
+  }),
+  async (req: Request, res: Response): Promise<void> => {
+    const actorId = parseInt(String(req.params.actorId), 10);
+    if (isNaN(actorId)) { res.status(400).json({ error: "INVALID_ACTOR_ID" }); return; }
+
+    const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+    if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
+
+    const buf = req.body as Buffer;
+    if (!Buffer.isBuffer(buf) || buf.length === 0) { res.status(400).json({ error: "EMPTY_BODY" }); return; }
+    if (buf.length > MAX_UPLOAD_BYTES) { res.status(413).json({ error: "TOO_LARGE" }); return; }
+
+    const referenceType = String(req.query.reference_type || "image").slice(0, 50);
+    const isPrimary = String(req.query.is_primary || "false").toLowerCase() === "true";
+    const projectIdRaw = req.query.project_id;
+    const projectId = projectIdRaw ? parseInt(String(projectIdRaw), 10) : null;
+    if (projectIdRaw && (isNaN(projectId as number) || (projectId as number) <= 0)) {
+      res.status(400).json({ error: "INVALID_PROJECT_ID" }); return;
+    }
+
+    let sharp: any;
+    try {
+      sharp = (await import("sharp")).default;
+    } catch (e: any) {
+      console.error("[refs-upload] sharp unavailable");
+      res.status(503).json({ error: "IMAGE_PROCESSOR_UNAVAILABLE" });
+      return;
+    }
+
+    let processed: Buffer;
+    let outputMime: string;
+    let outputExt: string;
+    await imageProcessingSemaphore.acquire();
+    try {
+      const image = sharp(buf, { limitInputPixels: MAX_INPUT_PIXELS, failOn: "error" });
+      const meta = await image.metadata();
+      if (!meta.width || !meta.height) { res.status(400).json({ error: "INVALID_IMAGE" }); return; }
+      let pipeline = image.rotate(); // auto-orient from EXIF, then strip
+      if ((meta.width || 0) > MAX_OUTPUT_DIMENSION || (meta.height || 0) > MAX_OUTPUT_DIMENSION) {
+        pipeline = pipeline.resize({
+          width: MAX_OUTPUT_DIMENSION,
+          height: MAX_OUTPUT_DIMENSION,
+          fit: "inside",
+          withoutEnlargement: true,
+        });
+      }
+      processed = await pipeline.webp({ quality: 85 }).toBuffer();
+      outputMime = "image/webp";
+      outputExt = "webp";
+      if (processed.length > MAX_STORED_BYTES) { res.status(413).json({ error: "PROCESSED_TOO_LARGE" }); return; }
+    } catch (e: any) {
+      res.status(400).json({ error: "INVALID_IMAGE", detail: String(e?.message || "").slice(0, 120) });
+      return;
+    } finally {
+      imageProcessingSemaphore.release();
+    }
+
+    const storageKey = generateStorageKey(actorId, outputExt);
+
+    try {
+      await uploadReference(storageKey, processed, outputMime);
+    } catch (e: any) {
+      console.error(`[refs-upload] storage failed actorId=${actorId}`);
+      res.status(503).json({ error: "STORAGE_UPLOAD_FAILED" });
+      return;
+    }
+
+    try {
+      if (isPrimary) {
+        await db.update(characterReferencesTable)
+          .set({ isPrimary: false })
+          .where(eq(characterReferencesTable.actorId, actorId));
+      }
+      const [newRef] = await db.insert(characterReferencesTable).values({
+        actorId,
+        projectId,
+        assetUrl: storageKey,
+        referenceType,
+        isPrimary,
+        metadata: { mime: outputMime, size: processed.length },
+      }).returning();
+
+      const signedMap = await createSignedUrlsForKeys([storageKey]);
+      const signedUrl = signedMap[storageKey] || null;
+      res.status(201).json({ ...newRef, assetUrl: signedUrl, isExternal: false });
+    } catch (e: any) {
+      // Rollback storage to avoid orphan
+      try { await deleteReference(storageKey); } catch {}
+      console.error(`[refs-upload] db insert failed actorId=${actorId}`);
+      res.status(500).json({ error: "DB_INSERT_FAILED" });
+    }
+  },
+);
 
 router.post("/actors/:actorId/references", requireProductionAuth, async (req, res): Promise<void> => {
   const actorId = parseInt(String(req.params.actorId), 10);
