@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
 import { Router, type IRouter, type Request, type Response, raw as expressRaw } from "express";
-import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable } from "@workspace/db";
+import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable, shotsTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
-import { eq, and, sql, desc, ne } from "drizzle-orm";
+import { eq, and, sql, desc, ne, inArray } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
 import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
@@ -47,6 +47,38 @@ function cleanImageUrl(url: string | null | undefined): string | null {
     return null;
   }
   return trimmed;
+}
+
+// ============================================================
+// Shared helper: compute DNA completeness (unified for library + dna endpoint)
+// ============================================================
+type RefInfo = { total: number; has_primary: number };
+type VoiceInfo = { total: number; has_default: number };
+function computeCompleteness(actor: any, refInfo: RefInfo, voiceInfo: VoiceInfo) {
+  const hasIdentity = !!(actor.name && actor.age && actor.dialect);
+  const hasDescription = !!(actor.description && String(actor.description).length > 10);
+  const hasPrimaryVisual = !!actor.imageUrl || !!actor.canonicalFaceImagePath || (refInfo.has_primary > 0);
+  const hasReferences = refInfo.total > 0;
+  const hasPrimaryVoice = voiceInfo.has_default > 0;
+  const hasPerformance = !!(
+    actor.personalityTraits || actor.speechStyle || actor.speakingStyle ||
+    actor.behavior || actor.psychologicalTraits || actor.background || actor.backstory
+  );
+  const missing: string[] = [];
+  if (!hasIdentity) missing.push("identity_core");
+  if (!hasDescription) missing.push("description");
+  if (!hasPrimaryVisual) missing.push("primary_visual");
+  if (!hasReferences) missing.push("reference_images");
+  if (!hasPrimaryVoice) missing.push("primary_voice");
+  if (!hasPerformance) missing.push("performance_dna");
+  const checks = [hasIdentity, hasDescription, hasPrimaryVisual, hasReferences, hasPrimaryVoice, hasPerformance];
+  const score = Math.round((checks.filter(Boolean).length / checks.length) * 100);
+  return {
+    identity: hasIdentity, description: hasDescription, visual: hasPrimaryVisual,
+    references: hasReferences, referenceCount: refInfo.total,
+    voice: hasPrimaryVoice, voiceCount: voiceInfo.total,
+    performance: hasPerformance, missing, score,
+  };
 }
 
 // 1. GET /api/actors - جلب القائمة وتصفيتها
@@ -391,10 +423,18 @@ router.delete("/references/:id", requireProductionAuth, async (req, res): Promis
     });
 
     if (!result.deleted) {
-      // Race: row disappeared between storage delete and DB delete.
-      // Storage is already gone (idempotent), so 204 is correct.
       res.status(204).send();
       return;
+    }
+    // If target was primary and no other refs remain, clear legacy image_url
+    if (target.isPrimary) {
+      try {
+        const remaining = await db.select({ id: characterReferencesTable.id })
+          .from(characterReferencesTable).where(eq(characterReferencesTable.actorId, target.actorId)).limit(1);
+        if (remaining.length === 0) {
+          await db.update(actorsTable).set({ imageUrl: null }).where(eq(actorsTable.id, target.actorId));
+        }
+      } catch {}
     }
     res.sendStatus(204);
   } catch (e: any) {
@@ -410,6 +450,12 @@ router.patch("/references/:id/primary", requireProductionAuth, async (req, res):
   if (!target) { res.status(404).json({ error: "Reference not found" }); return; }
   await db.update(characterReferencesTable).set({ isPrimary: false }).where(eq(characterReferencesTable.actorId, target.actorId));
   const [updated] = await db.update(characterReferencesTable).set({ isPrimary: true }).where(eq(characterReferencesTable.id, id)).returning();
+  // Sync actors.image_url for legacy consumers
+  try {
+    await db.update(actorsTable).set({ imageUrl: target.assetUrl }).where(eq(actorsTable.id, target.actorId));
+  } catch (e) {
+    console.error(`[refs-primary] image_url sync failed actorId=${target.actorId}`);
+  }
   res.json(updated);
 });
 
@@ -440,10 +486,58 @@ router.post(
 // 1. GET /actors/library
 router.get("/actors/library", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const actors = await db.select({
-    id: actorsTable.id, name: actorsTable.name, age: actorsTable.age,
+    id: actorsTable.id, name: actorsTable.name, age: actorsTable.age, type: actorsTable.type,
     dialect: actorsTable.dialect, description: actorsTable.description, imageUrl: actorsTable.imageUrl,
+    personalityTraits: actorsTable.personalityTraits, speechStyle: actorsTable.speechStyle,
+    speakingStyle: actorsTable.speakingStyle, behavior: actorsTable.behavior,
+    psychologicalTraits: actorsTable.psychologicalTraits, background: actorsTable.background,
+    backstory: actorsTable.backstory, canonicalFaceImagePath: actorsTable.canonicalFaceImagePath,
+    gender: actorsTable.gender,
   }).from(actorsTable).orderBy(actorsTable.name);
-  res.json({ ok: true, actors });
+
+  // Bulk aggregates (refs + voices + primary paths)
+  const refAgg: any = await db.execute(sql`
+    SELECT actor_id, COUNT(*)::int as total, COUNT(*) FILTER (WHERE is_primary = TRUE)::int as has_primary
+    FROM character_references WHERE actor_id IS NOT NULL GROUP BY actor_id
+  `);
+  const voiceAgg: any = await db.execute(sql`
+    SELECT actor_id, COUNT(*)::int as total, COUNT(*) FILTER (WHERE is_default = TRUE AND ref_wav_path IS NOT NULL)::int as has_default
+    FROM character_voice_profiles WHERE actor_id IS NOT NULL GROUP BY actor_id
+  `);
+  const primaryAgg: any = await db.execute(sql`
+    SELECT DISTINCT ON (actor_id) actor_id, asset_url
+    FROM character_references WHERE actor_id IS NOT NULL AND is_primary = TRUE
+    ORDER BY actor_id, id
+  `);
+
+  const refMap = new Map<number, RefInfo>();
+  for (const r of ((refAgg as any).rows || refAgg)) refMap.set(Number(r.actor_id), { total: Number(r.total) || 0, has_primary: Number(r.has_primary) || 0 });
+  const voiceMap = new Map<number, VoiceInfo>();
+  for (const v of ((voiceAgg as any).rows || voiceAgg)) voiceMap.set(Number(v.actor_id), { total: Number(v.total) || 0, has_default: Number(v.has_default) || 0 });
+  const primaryMap = new Map<number, string>();
+  for (const p of ((primaryAgg as any).rows || primaryAgg)) primaryMap.set(Number(p.actor_id), p.asset_url);
+
+  // Bulk sign primary paths
+  const storagePaths: string[] = [];
+  for (const path of primaryMap.values()) if (isStoragePath(path)) storagePaths.push(path);
+  const signedMap = storagePaths.length > 0 ? await createSignedUrlsForKeys(storagePaths) : {};
+
+  const enriched = actors.map((a) => {
+    const primaryPath = primaryMap.get(a.id);
+    let displayImage = a.imageUrl;
+    if (primaryPath) {
+      displayImage = isStoragePath(primaryPath) ? (signedMap[primaryPath] || a.imageUrl) : primaryPath;
+    }
+    const refInfo = refMap.get(a.id) || { total: 0, has_primary: 0 };
+    const voiceInfo = voiceMap.get(a.id) || { total: 0, has_default: 0 };
+    return {
+      ...a,
+      imageUrl: displayImage,
+      completeness: computeCompleteness(a, refInfo, voiceInfo),
+    };
+  });
+
+  res.json({ ok: true, actors: enriched });
 });
 
 // 2. GET /projects/:id/cast
@@ -569,9 +663,15 @@ router.patch("/actors/:id/voice/:voiceId", requireProductionAuth, async (req: Re
 // 8. DELETE /actors/:id/voice/:voiceId
 router.delete("/actors/:id/voice/:voiceId", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
   const voiceId = parseInt(String(req.params.voiceId));
-  const usage = await db.execute(sql`SELECT COUNT(*) as count FROM shots WHERE character_id = ${voiceId}`);
+  const usage = await db.execute(sql`SELECT COUNT(*)::int as count FROM shots WHERE character_id = ${voiceId}`);
   const row: any = (usage as any).rows ? (usage as any).rows[0] : (usage as any)[0];
-  if (parseInt(row?.count || '0') > 0) { res.status(409).json({ error: "VOICE_IN_USE_IN_SHOTS" }); return; }
+  const count = parseInt(row?.count || '0', 10);
+  if (count > 0) {
+    const affected = await db.select({ id: shotsTable.id, projectId: shotsTable.projectId, sceneNumber: shotsTable.sceneNumber })
+      .from(shotsTable).where(eq(shotsTable.characterId, voiceId)).limit(20);
+    res.status(409).json({ error: "VOICE_IN_USE_IN_SHOTS", count, shots: affected });
+    return;
+  }
   await db.delete(characterVoiceProfilesTable).where(eq(characterVoiceProfilesTable.id, voiceId));
   res.json({ ok: true });
 });
@@ -647,51 +747,41 @@ router.get("/actors/:id/dna", requireProductionAuth, async (req: Request, res: R
     .where(eq(characterVoiceProfilesTable.actorId, actorId))
     .orderBy(desc(characterVoiceProfilesTable.isDefault), desc(characterVoiceProfilesTable.id));
 
-  // --- Projects using this actor ---
+  // --- Projects using this actor (with title) ---
   const projects = await db.select({
     projectId: projectActorsTable.projectId,
     roleName: projectActorsTable.roleName,
     roleType: projectActorsTable.roleType,
-  }).from(projectActorsTable).where(eq(projectActorsTable.actorId, actorId));
+    projectTitle: projectsTable.title,
+  }).from(projectActorsTable)
+    .leftJoin(projectsTable, eq(projectActorsTable.projectId, projectsTable.id))
+    .where(eq(projectActorsTable.actorId, actorId));
 
-  // --- Completeness computation ---
-  const hasIdentity = !!(actor.name && actor.age && actor.gender);
-  const hasDescription = !!(actor.description && actor.description.length > 10);
-  const hasReferences = enrichedRefs.length > 0;
-  const hasPrimaryVisual = !!(actor.canonicalFaceImagePath) || enrichedRefs.some((r) => r.isPrimary);
-  const hasAnyVoice = voices.length > 0;
-  const hasPrimaryVoice = voices.some((v) => v.isDefault && v.refWavPath);
-  const hasPerformance = !!(actor.personalityTraits || actor.speechStyle || actor.behavior || actor.speakingStyle || actor.psychologicalTraits || actor.background || actor.backstory);
+  // --- Attach project titles to voices ---
+  const voiceProjectIds = Array.from(new Set(voices.map(v => v.projectId).filter((x): x is number => !!x)));
+  const voiceProjectTitles = new Map<number, string>();
+  if (voiceProjectIds.length > 0) {
+    const projs = await db.select({ id: projectsTable.id, title: projectsTable.title })
+      .from(projectsTable).where(inArray(projectsTable.id, voiceProjectIds));
+    for (const p of projs) voiceProjectTitles.set(p.id, p.title || "");
+  }
+  const enrichedVoices = voices.map(v => ({
+    ...v,
+    projectTitle: v.projectId ? (voiceProjectTitles.get(v.projectId) || null) : null,
+  }));
 
-  const missing: string[] = [];
-  if (!hasIdentity) missing.push("identity_core");
-  if (!hasDescription) missing.push("description");
-  if (!hasPrimaryVisual) missing.push("primary_visual");
-  if (!hasReferences) missing.push("reference_images");
-  if (!hasPrimaryVoice) missing.push("primary_voice");
-  if (!hasPerformance) missing.push("performance_dna");
-
-  const checks = [hasIdentity, hasDescription, hasPrimaryVisual, hasReferences, hasPrimaryVoice, hasPerformance];
-  const score = Math.round((checks.filter(Boolean).length / checks.length) * 100);
+  // --- Completeness (unified via helper) ---
+  const refInfo: RefInfo = { total: enrichedRefs.length, has_primary: enrichedRefs.filter(r => r.isPrimary).length };
+  const voiceInfo: VoiceInfo = { total: voices.length, has_default: voices.filter(v => v.isDefault && v.refWavPath).length };
+  const completeness = computeCompleteness(actor, refInfo, voiceInfo);
 
   res.json({
     ok: true,
     actor,
     references: enrichedRefs,
-    voices,
+    voices: enrichedVoices,
     projects,
-    completeness: {
-      identity: hasIdentity,
-      description: hasDescription,
-      visual: hasPrimaryVisual,
-      references: hasReferences,
-      referenceCount: enrichedRefs.length,
-      voice: hasPrimaryVoice,
-      voiceCount: voices.length,
-      performance: hasPerformance,
-      missing,
-      score,
-    },
+    completeness,
   });
 });
 
