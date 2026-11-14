@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { Router, type IRouter, type Request, type Response, raw as expressRaw } from "express";
 import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable, shotsTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
-import { eq, and, sql, desc, ne, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, ne, inArray, isNull } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
 import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
@@ -614,7 +614,8 @@ router.post("/actors/:id/voice", requireProductionAuth, async (req: Request, res
   const actorId = parseInt(String(req.params.id));
   const { projectId, audioBase64, refText, dialect, engine = 'audar_flash', makeDefault = true } = req.body;
   const shouldBeDefault = makeDefault === true;
-  if (!projectId || !refText || !audioBase64) { res.status(400).json({ error: "Missing required fields" }); return; }
+  const pid = projectId ? parseInt(String(projectId), 10) : null;
+  if ((projectId != null && (isNaN(pid as number) || (pid as number) <= 0)) || !refText || !audioBase64) { res.status(400).json({ error: "Missing or invalid fields" }); return; }
   if (refText.length < 5) { res.status(400).json({ error: "REF_TEXT_TOO_SHORT" }); return; }
   const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
   if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
@@ -644,12 +645,14 @@ router.post("/actors/:id/voice", requireProductionAuth, async (req: Request, res
   }
   
   if (shouldBeDefault) {
-    await db.update(characterVoiceProfilesTable).set({ isDefault: false })
-      .where(and(eq(characterVoiceProfilesTable.actorId, actorId), eq(characterVoiceProfilesTable.projectId, projectId), eq(characterVoiceProfilesTable.isDefault, true)));
+    const demoteCond = pid
+      ? and(eq(characterVoiceProfilesTable.actorId, actorId), eq(characterVoiceProfilesTable.projectId, pid), eq(characterVoiceProfilesTable.isDefault, true))
+      : and(eq(characterVoiceProfilesTable.actorId, actorId), isNull(characterVoiceProfilesTable.projectId), eq(characterVoiceProfilesTable.isDefault, true));
+    await db.update(characterVoiceProfilesTable).set({ isDefault: false }).where(demoteCond);
   }
   
   const [voice] = await db.insert(characterVoiceProfilesTable).values({
-    projectId, actorId, name: actor.name, gender: actor.gender, dialect: dialect || actor.dialect || 'أردني',
+    projectId: pid, actorId, name: actor.name, gender: actor.gender, dialect: dialect || actor.dialect || 'أردني',
     engine, refWavPath: oraclePath, refText, isDefault: shouldBeDefault,
   }).returning();
   res.json({ ok: true, voice });

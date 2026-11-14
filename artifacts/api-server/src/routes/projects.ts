@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { requireProductionAuth } from "../lib/securityMiddleware";
 import { db } from "@workspace/db";
 import { projectsTable, projectActorsTable, actorsTable, characterVoiceProfilesTable } from "@workspace/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql, or, isNull } from "drizzle-orm";
 import { UpdateProjectBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -212,9 +212,9 @@ router.get("/:id/characters", requireProductionAuth, async (req: Request, res: R
       )
       .where(
         includeAlternatives
-          ? eq(characterVoiceProfilesTable.projectId, projectId)
+          ? or(eq(characterVoiceProfilesTable.projectId, projectId), isNull(characterVoiceProfilesTable.projectId))
           : and(
-              eq(characterVoiceProfilesTable.projectId, projectId),
+              or(eq(characterVoiceProfilesTable.projectId, projectId), isNull(characterVoiceProfilesTable.projectId)),
               eq(characterVoiceProfilesTable.isDefault, true)
             )
       );
