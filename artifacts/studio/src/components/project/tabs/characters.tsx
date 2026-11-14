@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Project } from "@workspace/api-client-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
@@ -33,6 +33,13 @@ export default function CharactersTab({ project }: { project: Project }) {
   const [dialect, setDialect] = useState("أردني");
   const [isUploading, setIsUploading] = useState(false);
 
+  // P3: Reference images state
+  const [isUploadRefOpen, setIsUploadRefOpen] = useState(false);
+  const [refFile, setRefFile] = useState<File | null>(null);
+  const [refType, setRefType] = useState("primary_portrait");
+  const [refIsPrimary, setRefIsPrimary] = useState(false);
+  const [isUploadingRef, setIsUploadingRef] = useState(false);
+
   // --- Fetching ---
   const { data: castData, isLoading: castLoading, refetch: refetchCast } = useQuery({
     queryKey: ["cast", project.id],
@@ -49,6 +56,102 @@ export default function CharactersTab({ project }: { project: Project }) {
     queryFn: async () => (await axios.get(`/api/actors/${selectedActor.actorId}`)).data,
     enabled: !!selectedActor?.actorId && isDetailsOpen,
   });
+
+  // P3: references fetched separately (actor details endpoint doesn't return them)
+  const { data: references, refetch: refetchReferences, isLoading: refsLoading } = useQuery({
+    queryKey: ["actor-references", selectedActor?.actorId],
+    queryFn: async () => {
+      const r = await axios.get(`/api/actors/${selectedActor.actorId}/references`);
+      return Array.isArray(r.data) ? r.data : [];
+    },
+    enabled: !!selectedActor?.actorId && isDetailsOpen,
+    staleTime: 55 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    if (!isDetailsOpen) {
+      setIsUploadRefOpen(false);
+      setRefFile(null);
+      setRefIsPrimary(false);
+    }
+  }, [isDetailsOpen]);
+
+  const handleUploadRef = async () => {
+    if (!refFile || !selectedActor) return;
+    setIsUploadingRef(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("reference_type", refType);
+      if (refIsPrimary) params.set("is_primary", "true");
+      const r = await fetch(
+        `/api/actors/${selectedActor.actorId}/references/upload?${params.toString()}`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": refFile.type || "image/jpeg" },
+          body: refFile,
+        },
+      );
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({} as any));
+        const code = (err as any)?.error || `HTTP_${r.status}`;
+        const msg: Record<string, string> = {
+          TOO_LARGE: "حجم الصورة كبير جداً (الحد 5 ميجابايت)",
+          IMAGE_PROCESSOR_UNAVAILABLE: "خدمة معالجة الصور غير متاحة مؤقتاً",
+          STORAGE_UPLOAD_FAILED: "فشل رفع الصورة للتخزين، حاول مرة أخرى",
+          DB_INSERT_FAILED: "فشل حفظ سجل الصورة، حاول مرة أخرى",
+          ACTOR_NOT_FOUND: "الممثل غير موجود",
+          INVALID_IMAGE: "الملف ليس صورة صالحة (JPEG/PNG/WebP)",
+        };
+        throw new Error(msg[code] || `فشل الرفع (${r.status})`);
+      }
+      toast.success("تم رفع الصورة");
+      await refetchReferences();
+      setIsUploadRefOpen(false);
+      setRefFile(null);
+      setRefIsPrimary(false);
+    } catch (e: any) {
+      toast.error(e?.message || "فشل الرفع");
+    } finally {
+      setIsUploadingRef(false);
+    }
+  };
+
+  const handleDeleteRef = async (refId: number, isPrimary: boolean) => {
+    if (isPrimary && !confirm("هذه الصورة الرئيسية. هل أنت متأكد من الحذف؟")) return;
+    try {
+      const r = await axios.delete(`/api/references/${refId}`);
+      if (r.status === 204) {
+        toast.success("تم حذف الصورة");
+        await refetchReferences();
+      }
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const code = e?.response?.data?.error;
+      if (status === 409 && code === "CANNOT_DELETE_PRIMARY") {
+        const alt = e?.response?.data?.alternatives;
+        toast.error(`لا يمكن حذف الصورة الرئيسية — عيّن صورة أخرى رئيسية أولاً (${alt} بديل متاح)`);
+      } else if (status === 404) {
+        toast.error("الصورة غير موجودة");
+        await refetchReferences();
+      } else if (status === 503) {
+        toast.error("فشل حذف الملف من التخزين، حاول مرة أخرى");
+      } else {
+        toast.error(code || "فشل الحذف");
+      }
+    }
+  };
+
+  const handleSetPrimaryRef = async (refId: number) => {
+    try {
+      await axios.patch(`/api/references/${refId}/primary`);
+      toast.success("تم تعيين الصورة الرئيسية");
+      await refetchReferences();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "فشل التعيين");
+    }
+  };
 
   // --- Mutations ---
   const addToCast = useMutation({
@@ -260,18 +363,107 @@ export default function CharactersTab({ project }: { project: Project }) {
             </div>
 
             <div>
-              <h4 className="font-semibold mb-2 flex items-center gap-2"><ImageIcon className="w-4 h-4" /> الصور المرجعية</h4>
-              {actorDetails?.references?.length ? (
-                <div className="grid grid-cols-4 gap-2">
-                  {actorDetails.references.map((r: any) => (
-                    <img key={r.id} src={r.assetUrl} className={`w-full aspect-square object-cover rounded ${r.isPrimary ? 'ring-2 ring-primary' : ''}`} />
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-semibold flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4" /> الصور المرجعية
+                  {references && references.length > 0 && (
+                    <span className="text-xs text-muted-foreground">({references.length})</span>
+                  )}
+                </h4>
+                <Button size="sm" variant="outline" onClick={() => setIsUploadRefOpen(true)}>
+                  <Plus className="w-3 h-3 ml-1" /> رفع صورة
+                </Button>
+              </div>
+              {refsLoading ? (
+                <div className="flex justify-center py-4"><Loader2 className="animate-spin w-5 h-5" /></div>
+              ) : references && references.length > 0 ? (
+                <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
+                  {references.map((r: any) => (
+                    <div key={r.id} className="relative group aspect-square rounded overflow-hidden border border-border/30 bg-muted">
+                      {r.assetUrl ? (
+                        <img src={r.assetUrl} alt={r.referenceType || "reference"} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground text-center p-1">رابط منتهي</div>
+                      )}
+                      {r.isPrimary && (
+                        <span className="absolute top-1 right-1 bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">★ رئيسية</span>
+                      )}
+                      <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded">{r.referenceType || "other"}</span>
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 p-1">
+                        {!r.isPrimary && (
+                          <Button size="sm" variant="secondary" onClick={() => handleSetPrimaryRef(r.id)} className="h-7 text-xs w-full">تعيين رئيسية</Button>
+                        )}
+                        <Button size="sm" variant="destructive" onClick={() => handleDeleteRef(r.id, r.isPrimary)} className="h-7 text-xs w-full">
+                          <Trash2 className="w-3 h-3 ml-1" /> حذف
+                        </Button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">لا توجد صور مرجعية بعد.</p>
+                <p className="text-sm text-muted-foreground">لا توجد صور مرجعية بعد. اضغط "رفع صورة" للبدء.</p>
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* P3: Upload Reference Modal */}
+      <Dialog open={isUploadRefOpen} onOpenChange={setIsUploadRefOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>📷 رفع صورة مرجعية لـ {selectedActor?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label>ملف الصورة (JPEG, PNG, WebP — حد أقصى 5 ميجابايت)</Label>
+              <Input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => setRefFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            {refFile && (
+              <img
+                src={URL.createObjectURL(refFile)}
+                alt="preview"
+                className="max-h-48 mx-auto rounded border border-border/30"
+              />
+            )}
+            <div>
+              <Label>نوع الصورة</Label>
+              <Select value={refType} onValueChange={setRefType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="primary_portrait">وجه رئيسي (Primary Portrait)</SelectItem>
+                  <SelectItem value="front_view">أمامي (Front View)</SelectItem>
+                  <SelectItem value="three_quarter">ثلاثة أرباع (Three-Quarter)</SelectItem>
+                  <SelectItem value="side_view">جانبي (Side View)</SelectItem>
+                  <SelectItem value="full_body">جسم كامل (Full Body)</SelectItem>
+                  <SelectItem value="expression">تعبير (Expression)</SelectItem>
+                  <SelectItem value="other">أخرى (Other)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+              <input
+                id="ref-primary"
+                type="checkbox"
+                checked={refIsPrimary}
+                onChange={(e) => setRefIsPrimary(e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <Label htmlFor="ref-primary" className="text-sm cursor-pointer">
+                اجعلها الصورة الرئيسية للممثل
+              </Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsUploadRefOpen(false)}>إلغاء</Button>
+            <Button onClick={handleUploadRef} disabled={!refFile || isUploadingRef}>
+              {isUploadingRef ? "جاري الرفع..." : "رفع الصورة"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
