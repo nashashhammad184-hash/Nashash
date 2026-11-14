@@ -213,7 +213,7 @@ export default function ActorsPage() {
                     <img src={image} alt={actor.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" onError={e => { e.currentTarget.src = placeholder(actor.id); }} />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
                     
-                    <div className="absolute left-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 z-20">
+                    <div className="absolute left-3 top-3 flex items-center gap-1.5 z-20">
                       <Button size="icon" className="h-7 w-7 bg-primary text-primary-foreground hover:bg-primary/90" onClick={(e) => { e.stopPropagation(); setDnaActorId(actor.id); }} title="فتح Actor DNA"><span className="text-sm">🧬</span></Button>
                       <Button size="icon" className="h-7 w-7 bg-zinc-800 text-white hover:bg-zinc-700" onClick={() => openEditDialog(actor)}><Edit2 className="w-3.5 h-3.5" /></Button>
                       <Button size="icon" variant="destructive" className="h-7 w-7" onClick={() => confirm("هل أنت متأكد من حذف هذا الممثل تماماً؟") && deleteMutation.mutate(actor.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
