@@ -102,6 +102,15 @@ app.get("/*splat", (req, res) => {
 // ValidationError) so the connection never silently closes (HTTP 000).
 app.use((err: any, _req: any, res: any, next: any) => {
   if (res.headersSent) return next(err);
+
+  // G3-P3-P2: entity.too.large → 413 (not 500)
+  if (err?.type === "entity.too.large" || err?.status === 413 || err?.statusCode === 413) {
+    return res.status(413).json({
+      error: "TOO_LARGE",
+      message: "Request payload exceeds the size limit.",
+    });
+  }
+
   console.error("[kayan-error]", err?.message || err);
   res.status(500).json({
     error: "internal_error",

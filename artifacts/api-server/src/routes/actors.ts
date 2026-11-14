@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { Router, type IRouter, type Request, type Response, raw as expressRaw } from "express";
 import { db, actorsTable, characterReferencesTable, projectsTable, projectActorsTable, characterVoiceProfilesTable } from "@workspace/db";
 import { ListActorsResponse } from "@workspace/api-zod";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, ne } from "drizzle-orm";
 import { assertSyntheticReference } from "../lib/legalGuard";
 import { loadActorImageBytes } from "../lib/actorReference";
 import { generateCanonicalFaceImage } from "../lib/faceIdentity";
@@ -330,9 +330,65 @@ router.post("/actors/:actorId/references", requireProductionAuth, async (req, re
 
 router.delete("/references/:id", requireProductionAuth, async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid reference id" }); return; }
-  await db.delete(characterReferencesTable).where(eq(characterReferencesTable.id, id));
-  res.sendStatus(204);
+  if (isNaN(id)) { res.status(400).json({ error: "INVALID_REFERENCE_ID" }); return; }
+
+  // 1. Pre-check (no lock): does target exist?
+  const [target] = await db.select().from(characterReferencesTable).where(eq(characterReferencesTable.id, id));
+  if (!target) { res.status(404).json({ error: "REFERENCE_NOT_FOUND" }); return; }
+
+  // 2. Primary safety (no lock): if primary, require an alternative to exist
+  if (target.isPrimary) {
+    const siblings = await db.select({ id: characterReferencesTable.id })
+      .from(characterReferencesTable)
+      .where(and(
+        eq(characterReferencesTable.actorId, target.actorId),
+        ne(characterReferencesTable.id, id),
+      ));
+    if (siblings.length > 0) {
+      res.status(409).json({
+        error: "CANNOT_DELETE_PRIMARY",
+        message: "Set another reference as primary before deleting this one.",
+        alternatives: siblings.length,
+      });
+      return;
+    }
+  }
+
+  // 3. Storage delete FIRST (so DB is never left pointing to a deleted file)
+  const isInternalPath = isStoragePath(target.assetUrl);
+  if (isInternalPath) {
+    try {
+      await deleteReference(target.assetUrl);
+    } catch (e: any) {
+      console.error(`[refs-delete] storage failed actorId=${target.actorId} refId=${id}`);
+      res.status(503).json({ error: "STORAGE_DELETE_FAILED", retryable: true });
+      return;
+    }
+  }
+
+  // 4. DB delete in transaction with row lock (concurrency-safe)
+  try {
+    const result = await db.transaction(async (tx) => {
+      const lockRes: any = await tx.execute(sql`
+        SELECT id FROM character_references WHERE id = ${id} FOR UPDATE
+      `);
+      const lockedRows: any[] = Array.isArray(lockRes) ? lockRes : (lockRes?.rows || []);
+      if (lockedRows.length === 0) return { deleted: false };
+      const del = await tx.delete(characterReferencesTable).where(eq(characterReferencesTable.id, id)).returning();
+      return { deleted: del.length > 0 };
+    });
+
+    if (!result.deleted) {
+      // Race: row disappeared between storage delete and DB delete.
+      // Storage is already gone (idempotent), so 204 is correct.
+      res.status(204).send();
+      return;
+    }
+    res.sendStatus(204);
+  } catch (e: any) {
+    console.error(`[refs-delete] db failed actorId=${target.actorId} refId=${id}`);
+    res.status(500).json({ error: "DB_DELETE_FAILED_RETRYABLE", retryable: true });
+  }
 });
 
 router.patch("/references/:id/primary", requireProductionAuth, async (req, res): Promise<void> => {
