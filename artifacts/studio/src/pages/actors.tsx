@@ -215,13 +215,24 @@ export default function ActorsPage() {
                     
                     <div className="absolute left-3 top-3 flex items-center gap-1.5 z-20">
                       <Button size="icon" className="h-7 w-7 bg-primary text-primary-foreground hover:bg-primary/90" onClick={(e) => { e.stopPropagation(); setDnaActorId(actor.id); }} title="فتح Actor DNA"><span className="text-sm">🧬</span></Button>
-                      <Button size="icon" className="h-7 w-7 bg-zinc-800 text-white hover:bg-zinc-700" onClick={() => openEditDialog(actor)}><Edit2 className="w-3.5 h-3.5" /></Button>
+                      <Button size="icon" className="h-7 w-7 bg-zinc-800 text-white hover:bg-zinc-700" onClick={(e) => { e.stopPropagation(); setDnaActorId(actor.id); }} title="تعديل DNA"><Edit2 className="w-3.5 h-3.5" /></Button>
                       <Button size="icon" variant="destructive" className="h-7 w-7" onClick={() => confirm("هل أنت متأكد من حذف هذا الممثل تماماً؟") && deleteMutation.mutate(actor.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
 
                     <div className="absolute bottom-0 right-0 left-0 p-4">
                       <h2 className="text-lg font-bold text-white">{actor.name}</h2>
                       <p className="text-xs text-zinc-400 mt-1">العمر: {actor.age} سنة | {actor.type}</p>
+                    {(actor as any).completeness && (
+                      <div className="mt-2">
+                        <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                          <span>DNA</span>
+                          <span className="font-bold">{(actor as any).completeness.score || 0}%</span>
+                        </div>
+                        <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
+                          <div className="h-full transition-all" style={{ width: `${(actor as any).completeness.score || 0}%`, backgroundColor: ((actor as any).completeness.score || 0) === 100 ? "#22c55e" : ((actor as any).completeness.score || 0) >= 67 ? "#eab308" : "#ef4444" }} />
+                        </div>
+                      </div>
+                    )}
                     </div>
                   </div>
                   <CardContent className="p-3">
