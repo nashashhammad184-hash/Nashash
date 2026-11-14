@@ -107,12 +107,24 @@ router.patch("/actors/:id", requireProductionAuth, async (req: Request, res: Res
       res.status(400).json({ error: "معرف الممثل غير صالح." });
       return;
     }
-    const { name, type, age, style, imageUrl } = req.body;
+    const { name, type, age, style, imageUrl, description, dialect, gender, personalityTraits, speechStyle, behavior, psychologicalTraits, background, speakingStyle, clothingPrompt, appearance, wardrobe } = req.body;
     const updateData: Record<string, any> = {};
     if (name !== undefined) updateData.name = name.trim();
     if (type !== undefined) updateData.type = type.trim();
     if (age !== undefined) updateData.age = parseInt(String(age), 10) || 30;
     if (style !== undefined) updateData.style = style.trim();
+  if (description !== undefined) updateData.description = description == null ? null : String(description).trim();
+  if (dialect !== undefined) updateData.dialect = dialect == null ? null : String(dialect).trim();
+  if (gender !== undefined) updateData.gender = gender == null ? null : String(gender).trim();
+  if (personalityTraits !== undefined) updateData.personalityTraits = personalityTraits == null ? null : String(personalityTraits).trim();
+  if (speechStyle !== undefined) updateData.speechStyle = speechStyle == null ? null : String(speechStyle).trim();
+  if (speakingStyle !== undefined) updateData.speakingStyle = speakingStyle == null ? null : String(speakingStyle).trim();
+  if (behavior !== undefined) updateData.behavior = behavior == null ? null : String(behavior).trim();
+  if (psychologicalTraits !== undefined) updateData.psychologicalTraits = psychologicalTraits == null ? null : String(psychologicalTraits).trim();
+  if (background !== undefined) updateData.background = background == null ? null : String(background).trim();
+  if (clothingPrompt !== undefined) updateData.clothingPrompt = clothingPrompt == null ? null : String(clothingPrompt).trim();
+  if (appearance !== undefined) updateData.appearance = appearance == null ? null : String(appearance).trim();
+  if (wardrobe !== undefined) updateData.wardrobe = wardrobe == null ? null : String(wardrobe).trim();
     if (imageUrl !== undefined) {
       if (imageUrl != null && typeof imageUrl === "string" && imageUrl.trim() !== "") {
         assertSyntheticReference(imageUrl.trim(), req.body);
