@@ -611,4 +611,76 @@ router.get("/actors/:id/voice/:voiceId/sample", requireProductionAuth, async (re
   }
 });
 
+// ============================================================
+// GET /actors/:id/dna — Full Actor DNA aggregate + completeness
+// ============================================================
+router.get("/actors/:id/dna", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const actorId = parseInt(String(req.params.id), 10);
+  if (isNaN(actorId)) { res.status(400).json({ error: "INVALID_ACTOR_ID" }); return; }
+
+  const [actor] = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId));
+  if (!actor) { res.status(404).json({ error: "ACTOR_NOT_FOUND" }); return; }
+
+  // --- Visual references (P3) with signed URLs ---
+  const references = await db.select().from(characterReferencesTable)
+    .where(eq(characterReferencesTable.actorId, actorId))
+    .orderBy(desc(characterReferencesTable.isPrimary), desc(characterReferencesTable.id));
+  const storagePaths: string[] = [];
+  for (const r of references) if (isStoragePath(r.assetUrl)) storagePaths.push(r.assetUrl);
+  const signedMap = storagePaths.length > 0 ? await createSignedUrlsForKeys(storagePaths) : {};
+  const enrichedRefs = references.map((r) => isStoragePath(r.assetUrl) ? { ...r, assetUrl: signedMap[r.assetUrl] || null } : r);
+
+  // --- Voices (P1/P2) ---
+  const voices = await db.select().from(characterVoiceProfilesTable)
+    .where(eq(characterVoiceProfilesTable.actorId, actorId))
+    .orderBy(desc(characterVoiceProfilesTable.isDefault), desc(characterVoiceProfilesTable.id));
+
+  // --- Projects using this actor ---
+  const projects = await db.select({
+    projectId: projectActorsTable.projectId,
+    roleName: projectActorsTable.roleName,
+    roleType: projectActorsTable.roleType,
+  }).from(projectActorsTable).where(eq(projectActorsTable.actorId, actorId));
+
+  // --- Completeness computation ---
+  const hasIdentity = !!(actor.name && actor.age && actor.gender);
+  const hasDescription = !!(actor.description && actor.description.length > 10);
+  const hasReferences = enrichedRefs.length > 0;
+  const hasPrimaryVisual = !!(actor.canonicalFaceImagePath) || enrichedRefs.some((r) => r.isPrimary);
+  const hasAnyVoice = voices.length > 0;
+  const hasPrimaryVoice = voices.some((v) => v.isDefault && v.refWavPath);
+  const hasPerformance = !!(actor.personalityTraits || actor.speechStyle || actor.behavior || actor.speakingStyle || actor.psychologicalTraits || actor.background || actor.backstory);
+
+  const missing: string[] = [];
+  if (!hasIdentity) missing.push("identity_core");
+  if (!hasDescription) missing.push("description");
+  if (!hasPrimaryVisual) missing.push("primary_visual");
+  if (!hasReferences) missing.push("reference_images");
+  if (!hasPrimaryVoice) missing.push("primary_voice");
+  if (!hasPerformance) missing.push("performance_dna");
+
+  const checks = [hasIdentity, hasDescription, hasPrimaryVisual, hasReferences, hasPrimaryVoice, hasPerformance];
+  const score = Math.round((checks.filter(Boolean).length / checks.length) * 100);
+
+  res.json({
+    ok: true,
+    actor,
+    references: enrichedRefs,
+    voices,
+    projects,
+    completeness: {
+      identity: hasIdentity,
+      description: hasDescription,
+      visual: hasPrimaryVisual,
+      references: hasReferences,
+      referenceCount: enrichedRefs.length,
+      voice: hasPrimaryVoice,
+      voiceCount: voices.length,
+      performance: hasPerformance,
+      missing,
+      score,
+    },
+  });
+});
+
 export default router;
