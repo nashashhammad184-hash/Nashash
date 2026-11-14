@@ -26,7 +26,6 @@ export default function ActorsPage() {
   const [type, setType] = useState("الكل");
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedActor, setSelectedActor] = useState<any>(null);
   const [dnaActorId, setDnaActorId] = useState<number | null>(null);
 
@@ -100,15 +99,6 @@ export default function ActorsPage() {
     onError: () => toast.error("فشل إنشاء الممثل.")
   });
 
-  const editMutation = useMutation({
-    mutationFn: (data: any) => axios.patch(`/api/actors/${data.id}`, data.payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: getListActorsQueryKey() });
-      setIsEditOpen(false);
-      toast.success("تم تحديث أسلوب أداء الممثل بنجاح.");
-    },
-    onError: () => toast.error("فشل تعديل بيانات الممثل.")
-  });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => axios.delete(`/api/actors/${id}`),
@@ -134,12 +124,6 @@ export default function ActorsPage() {
     }
   };
 
-  const openEditDialog = (actor: any) => {
-    setSelectedActor(actor);
-    setName(actor.name); setActorType(actor.type); setAge(String(actor.age)); setStyle(actor.style); setImageUrl(actor.imageUrl || "");
-    setUploadError("");
-    setIsEditOpen(true);
-  };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,14 +133,6 @@ export default function ActorsPage() {
     createMutation.mutate(payload);
   };
 
-  const handleEditSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedActor || !name.trim() || !style.trim()) return;
-    editMutation.mutate({
-      id: selectedActor.id,
-      payload: { name, type: actorType, age: parseInt(age, 10), style, imageUrl: imageUrl.trim() || null }
-    });
-  };
 
   if (isLoading) {
     return (
@@ -276,29 +252,6 @@ export default function ActorsPage() {
           </DialogContent>
         </Dialog>
 
-        {/* Edit Form Modal */}
-        <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-          <DialogContent className="bg-zinc-900 border-zinc-800 text-white">
-            <DialogHeader><DialogTitle>تحديث أسلوب أداء الممثل</DialogTitle></DialogHeader>
-            <form onSubmit={handleEditSubmit} className="space-y-4 pt-2">
-              <div><Label>اسم الممثل</Label><Input value={name} onChange={e => setName(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>النوع</Label><select value={actorType} onChange={e => setActorType(e.target.value)} className="w-full h-9 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-xs text-white"><option value="عربي">عربي / شرقي</option><option value="عالمي">عالمي / غربي</option><option value="كرتوني">أنيميشن</option></select></div>
-                <div><Label>العمر</Label><Input type="number" value={age} onChange={e => setAge(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
-              </div>
-              <div><Label>رابط الصورة</Label><Input value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" /></div>
-              <div>
-                <Label>رفع صورة من الجهاز (PNG/JPEG، 10KB-5MB)</Label>
-                <input type="file" accept="image/png,image/jpeg" disabled={uploading} onChange={e => { const f = e.target.files?.[0]; if (f) void handleFileUpload(f); }} className="block w-full text-xs text-white bg-zinc-800 border border-zinc-700 rounded-md p-2" />
-                {uploading && <p className="text-xs text-blue-400 mt-1">جارٍ الرفع...</p>}
-                {uploadError && <p className="text-xs text-red-400 mt-1">{uploadError}</p>}
-                {imageUrl && !(imageUrl.startsWith("/uploads/") && !selectedActor) && <img src={imageUrl.startsWith("/uploads/") || imageUrl.startsWith("/api/storage/") ? (selectedActor ? "/api/actors/" + selectedActor.id + "/image" : imageUrl) : imageUrl} alt="preview" className="mt-2 h-20 w-20 object-cover rounded-md border border-zinc-700" onError={e => { (e.currentTarget as HTMLImageElement).src = placeholder(0); }} />}
-              </div>
-              <div><Label>أسلوب الأداء والوصف</Label><Input value={style} onChange={e => setStyle(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" required /></div>
-              <Button type="submit" disabled={editMutation.isPending || uploading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold mt-2">{editMutation.isPending ? "جاري التحديث..." : "تأكيد وحفظ التغييرات"}</Button>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
       <ActorDnaModal
         actorId={dnaActorId}
