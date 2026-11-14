@@ -379,19 +379,23 @@ export default function CharactersTab({ project }: { project: Project }) {
               ) : references && references.length > 0 ? (
                 <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
                   {references.map((r: any) => (
-                    <div key={r.id} className="relative group aspect-square rounded overflow-hidden border border-border/30 bg-muted">
-                      {r.assetUrl ? (
-                        <img src={r.assetUrl} alt={r.referenceType || "reference"} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground text-center p-1">رابط منتهي</div>
-                      )}
-                      {r.isPrimary && (
-                        <span className="absolute top-1 right-1 bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">★ رئيسية</span>
-                      )}
-                      <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded">{r.referenceType || "other"}</span>
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 p-1">
+                    <div key={r.id} className="rounded overflow-hidden border border-border/30 bg-muted flex flex-col">
+                      <div className="relative aspect-square">
+                        {r.assetUrl ? (
+                          <img src={r.assetUrl} alt={r.referenceType || "reference"} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground text-center p-1">رابط منتهي</div>
+                        )}
+                        {r.isPrimary && (
+                          <span className="absolute top-1 right-1 bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded-full font-bold">★ رئيسية</span>
+                        )}
+                        <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded">{r.referenceType || "other"}</span>
+                      </div>
+                      <div className="flex flex-col gap-1 p-1.5 bg-background/50">
                         {!r.isPrimary && (
-                          <Button size="sm" variant="secondary" onClick={() => handleSetPrimaryRef(r.id)} className="h-7 text-xs w-full">تعيين رئيسية</Button>
+                          <Button size="sm" variant="secondary" onClick={() => handleSetPrimaryRef(r.id)} className="h-7 text-xs w-full">
+                            تعيين رئيسية
+                          </Button>
                         )}
                         <Button size="sm" variant="destructive" onClick={() => handleDeleteRef(r.id, r.isPrimary)} className="h-7 text-xs w-full">
                           <Trash2 className="w-3 h-3 ml-1" /> حذف
