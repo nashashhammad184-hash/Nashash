@@ -56,6 +56,18 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
         behavior: data.actor.behavior || "",
         psychological_traits: data.actor.psychologicalTraits || "",
         background: data.actor.background || "",
+        backstory: data.actor.backstory || "",
+        physical_description: data.actor.physicalDescription || "",
+        body_description: data.actor.bodyDescription || "",
+        distinctive_features: data.actor.distinctiveFeatures || "",
+        skin_description: data.actor.skinDescription || "",
+        eyes: data.actor.eyes || "",
+        hair: data.actor.hair || "",
+        hairstyle: data.actor.hairstyle || "",
+        accessories: data.actor.accessories || "",
+        wardrobe: data.actor.wardrobe || "",
+        character_master_prompt: data.actor.characterMasterPrompt || "",
+        character_negative_prompt: data.actor.characterNegativePrompt || "",
       });
     }
     setEditMode(false);
@@ -69,6 +81,15 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
         age: parseInt(form.age) || 30,
         description: form.description,
         dialect: form.dialect,
+        physicalDescription: form.physical_description,
+        bodyDescription: form.body_description,
+        distinctiveFeatures: form.distinctive_features,
+        skinDescription: form.skin_description,
+        eyes: form.eyes,
+        hair: form.hair,
+        hairstyle: form.hairstyle,
+        accessories: form.accessories,
+        wardrobe: form.wardrobe,
       });
       toast.success("تم حفظ الهوية");
       setEditMode(false);
@@ -87,8 +108,12 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
         behavior: form.behavior,
         psychologicalTraits: form.psychological_traits,
         background: form.background,
+        backstory: form.backstory,
+        characterMasterPrompt: form.character_master_prompt,
+        characterNegativePrompt: form.character_negative_prompt,
       });
       toast.success("تم حفظ الأداء");
+      queryClient.invalidateQueries({ queryKey: ["library"] });
       setEditMode(false);
       await refetch();
     } catch (e: any) {
@@ -288,6 +313,20 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                   <div><Label>اللهجة</Label><Input value={form.dialect || ""} onChange={e => setForm({...form, dialect: e.target.value})} disabled={!editMode} placeholder="أردني / فصحى / خليجي..." /></div>
                 </div>
                 <div><Label>الوصف الأساسي</Label><Textarea rows={3} value={form.description || ""} onChange={e => setForm({...form, description: e.target.value})} disabled={!editMode} placeholder="وصف ثابت للشخصية، يظهر في تعليمات التوليد..." /></div>
+                <div className="pt-3 border-t border-border/30 space-y-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground">🧬 الهوية الجسدية</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label>لون العينين</Label><Input value={form.eyes || ""} onChange={e => setForm({...form, eyes: e.target.value})} disabled={!editMode} placeholder="بني، أخضر..." /></div>
+                    <div><Label>الشعر</Label><Input value={form.hair || ""} onChange={e => setForm({...form, hair: e.target.value})} disabled={!editMode} /></div>
+                    <div><Label>تسريحة الشعر</Label><Input value={form.hairstyle || ""} onChange={e => setForm({...form, hairstyle: e.target.value})} disabled={!editMode} /></div>
+                    <div><Label>لون البشرة</Label><Input value={form.skin_description || ""} onChange={e => setForm({...form, skin_description: e.target.value})} disabled={!editMode} /></div>
+                  </div>
+                  <div><Label>الوصف الجسدي</Label><Textarea rows={2} value={form.physical_description || ""} onChange={e => setForm({...form, physical_description: e.target.value})} disabled={!editMode} /></div>
+                  <div><Label>بنية الجسم</Label><Textarea rows={2} value={form.body_description || ""} onChange={e => setForm({...form, body_description: e.target.value})} disabled={!editMode} /></div>
+                  <div><Label>العلامات المميزة</Label><Input value={form.distinctive_features || ""} onChange={e => setForm({...form, distinctive_features: e.target.value})} disabled={!editMode} /></div>
+                  <div><Label>الإكسسوارات</Label><Input value={form.accessories || ""} onChange={e => setForm({...form, accessories: e.target.value})} disabled={!editMode} /></div>
+                  <div><Label>الملابس</Label><Input value={form.wardrobe || ""} onChange={e => setForm({...form, wardrobe: e.target.value})} disabled={!editMode} /></div>
+                </div>
               </TabsContent>
 
               {/* === VISUAL === */}
@@ -376,6 +415,12 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                 <div><Label>أسلوب الكلام</Label><Textarea rows={2} value={form.speech_style || ""} onChange={e => setForm({...form, speech_style: e.target.value})} disabled={!editMode} placeholder="بطيء، متحمس، هامس..." /></div>
                 <div><Label>السلوك</Label><Textarea rows={2} value={form.behavior || ""} onChange={e => setForm({...form, behavior: e.target.value})} disabled={!editMode} /></div>
                 <div><Label>الخلفية</Label><Textarea rows={3} value={form.background || ""} onChange={e => setForm({...form, background: e.target.value})} disabled={!editMode} /></div>
+                <div><Label>القصة الخلفية</Label><Textarea rows={3} value={form.backstory || ""} onChange={e => setForm({...form, backstory: e.target.value})} disabled={!editMode} placeholder="قصة الشخصية، الأحداث المهمة..." /></div>
+                <div className="pt-3 border-t border-border/30 space-y-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground">🎬 Prompts للتوليد</h4>
+                  <div><Label>Character Master Prompt</Label><Textarea rows={3} value={form.character_master_prompt || ""} onChange={e => setForm({...form, character_master_prompt: e.target.value})} disabled={!editMode} placeholder="البرومبت الأساسي لتوليد الشخصية..." /></div>
+                  <div><Label>Negative Prompt</Label><Textarea rows={2} value={form.character_negative_prompt || ""} onChange={e => setForm({...form, character_negative_prompt: e.target.value})} disabled={!editMode} placeholder="ما لا يجب توليده..." /></div>
+                </div>
               </TabsContent>
 
               {/* === PROJECTS === */}
