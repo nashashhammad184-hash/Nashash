@@ -139,7 +139,7 @@ router.patch("/actors/:id", requireProductionAuth, async (req: Request, res: Res
       res.status(400).json({ error: "معرف الممثل غير صالح." });
       return;
     }
-    const { name, type, age, style, imageUrl, description, dialect, gender, personalityTraits, speechStyle, behavior, psychologicalTraits, background, speakingStyle, clothingPrompt, appearance, wardrobe } = req.body;
+    const { name, type, age, style, imageUrl, description, dialect, gender, personalityTraits, speechStyle, behavior, psychologicalTraits, background, backstory, speakingStyle, clothingPrompt, appearance, wardrobe, physicalDescription, bodyDescription, distinctiveFeatures, skinDescription, eyes, hair, hairstyle, accessories, characterMasterPrompt, characterNegativePrompt, characterPrompt, negativePrompt } = req.body;
     const updateData: Record<string, any> = {};
     if (name !== undefined) updateData.name = name.trim();
     if (type !== undefined) updateData.type = type.trim();
@@ -157,6 +157,19 @@ router.patch("/actors/:id", requireProductionAuth, async (req: Request, res: Res
   if (clothingPrompt !== undefined) updateData.clothingPrompt = clothingPrompt == null ? null : String(clothingPrompt).trim();
   if (appearance !== undefined) updateData.appearance = appearance == null ? null : String(appearance).trim();
   if (wardrobe !== undefined) updateData.wardrobe = wardrobe == null ? null : String(wardrobe).trim();
+  if (backstory !== undefined) updateData.backstory = backstory == null ? null : String(backstory).trim();
+  if (physicalDescription !== undefined) updateData.physicalDescription = physicalDescription == null ? null : String(physicalDescription).trim();
+  if (bodyDescription !== undefined) updateData.bodyDescription = bodyDescription == null ? null : String(bodyDescription).trim();
+  if (distinctiveFeatures !== undefined) updateData.distinctiveFeatures = distinctiveFeatures == null ? null : String(distinctiveFeatures).trim();
+  if (skinDescription !== undefined) updateData.skinDescription = skinDescription == null ? null : String(skinDescription).trim();
+  if (eyes !== undefined) updateData.eyes = eyes == null ? null : String(eyes).trim();
+  if (hair !== undefined) updateData.hair = hair == null ? null : String(hair).trim();
+  if (hairstyle !== undefined) updateData.hairstyle = hairstyle == null ? null : String(hairstyle).trim();
+  if (accessories !== undefined) updateData.accessories = accessories == null ? null : String(accessories).trim();
+  if (characterMasterPrompt !== undefined) updateData.characterMasterPrompt = characterMasterPrompt == null ? null : String(characterMasterPrompt).trim();
+  if (characterNegativePrompt !== undefined) updateData.characterNegativePrompt = characterNegativePrompt == null ? null : String(characterNegativePrompt).trim();
+  if (characterPrompt !== undefined) updateData.characterPrompt = characterPrompt == null ? null : String(characterPrompt).trim();
+  if (negativePrompt !== undefined) updateData.negativePrompt = negativePrompt == null ? null : String(negativePrompt).trim();
     if (imageUrl !== undefined) {
       if (imageUrl != null && typeof imageUrl === "string" && imageUrl.trim() !== "") {
         assertSyntheticReference(imageUrl.trim(), req.body);
