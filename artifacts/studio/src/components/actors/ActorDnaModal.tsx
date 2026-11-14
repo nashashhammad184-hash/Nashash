@@ -142,6 +142,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
       }
       toast.success("تم رفع الصورة");
       await refetch();
+      queryClient.invalidateQueries({ queryKey: ["library"] });
       setIsUploadRefOpen(false);
       setRefFile(null);
       setRefIsPrimary(false);
@@ -159,6 +160,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
       if (r.status === 204) {
         toast.success("تم حذف الصورة");
         await refetch();
+        queryClient.invalidateQueries({ queryKey: ["library"] });
       }
     } catch (e: any) {
       const code = e?.response?.data?.error;
@@ -172,6 +174,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
       await axios.patch(`/api/references/${refId}/primary`);
       toast.success("تم تعيين الصورة الرئيسية");
       await refetch();
+      queryClient.invalidateQueries({ queryKey: ["library"] });
     } catch (e: any) {
       toast.error(e?.response?.data?.error || "فشل التعيين");
     }
@@ -213,10 +216,17 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
       await axios.delete(`/api/actors/${actorId}/voice/${voiceId}`);
       toast.success("تم حذف الصوت");
       await refetch();
+      queryClient.invalidateQueries({ queryKey: ["library"] });
     } catch (e: any) {
       const code = e?.response?.data?.error;
-      if (code === "VOICE_IN_USE_IN_SHOTS") toast.error("هذا الصوت مستخدم في مشاهد — لا يمكن حذفه");
-      else toast.error(code || "فشل الحذف");
+      if (code === "VOICE_IN_USE_IN_SHOTS") {
+        const cnt = e?.response?.data?.count || 0;
+        const shots = e?.response?.data?.shots || [];
+        const scenes = shots.map((s: any) => s.sceneNumber || s.id).join(", ");
+        toast.error(`الصوت مستخدم في ${cnt} مشهد${scenes ? " (مشاهد " + scenes + ")" : ""}. لا يمكن حذفه.`);
+      } else {
+        toast.error(code || "فشل الحذف");
+      }
     }
   };
 
@@ -335,6 +345,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                   <h3 className="font-semibold flex items-center gap-2">
                     <ImageIcon className="w-4 h-4" /> الصور المرجعية
                     {data?.references?.length > 0 && <span className="text-xs text-muted-foreground">({data.references.length})</span>}
+                    {data?.actor?.canonicalFaceImagePath && <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full">Canonical</span>}
                   </h3>
                   <Button size="sm" variant="outline" onClick={() => setIsUploadRefOpen(true)}><Plus className="w-3 h-3 ml-1" /> رفع صورة</Button>
                 </div>
@@ -383,7 +394,7 @@ export default function ActorDnaModal({ actorId, open, onClose }: ActorDnaModalP
                             {v.isDefault && <span className="text-[10px] bg-primary text-primary-foreground px-1.5 py-0.5 rounded">افتراضي</span>}
                           </div>
                           <p className="text-xs text-muted-foreground truncate">{v.refText || "—"}</p>
-                          <p className="text-[10px] text-muted-foreground">مشروع #{v.projectId}</p>
+                          <p className="text-[10px] text-muted-foreground">{v.projectTitle ? v.projectTitle : `مشروع #${v.projectId}`}</p>
                         </div>
                         <div className="flex gap-1">
                           {v.refWavPath && <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handlePlaySample(v.id)}><span className="text-xs">▶</span></Button>}
