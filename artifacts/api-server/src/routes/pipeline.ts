@@ -540,6 +540,20 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       logger.warn({ runId, err: e?.message }, "VIDEO_STAGE: failed to load World Profile");
     }
 
+    // Sprint 1 P4.3: Cost Guard — fail BEFORE any shot if estimated total exceeds limit
+    if (!input.skipVideo) {
+      const maxTotalCost = parseFloat(process.env.MAX_TOTAL_COST_PER_RUN || "5.00");
+      const perShotCeiling = parseFloat(process.env.MAX_VIDEO_COST_USD || "0.30");
+      const estTotal = shots.length * perShotCeiling;
+      if (estTotal > maxTotalCost) {
+        throw new Error(
+          `PIPELINE_COST_EXCEEDED: ${shots.length} shots × ~$${perShotCeiling.toFixed(2)} = $${estTotal.toFixed(2)} > limit $${maxTotalCost.toFixed(2)}. ` +
+          `Adjust MAX_TOTAL_COST_PER_RUN env or reduce shots. No generation performed.`
+        );
+      }
+      logger.info({ runId, shotsCount: shots.length, estTotal, maxTotalCost }, "VIDEO_STAGE: cost guard passed");
+    }
+
     const perShotVideo: Record<number, { videoPath: string; videoUrl: string }> = {};
     for (const shot of shots) {
       if (input.skipVideo) {
@@ -580,10 +594,12 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         const preferredRefType = pickReferenceType((shot as any).cameraMovement || null);
         const dnaNegative = buildNegativePrompt(shotActor, worldProfile);
 
-        // Sprint 1 DNA Wiring: resolve the correct reference image based on preferredRefType
-        // (only if actorId exists and no explicit reference was passed)
-        let resolvedRefB64: string | null = input.referenceImageBase64 || null;
-        if (shotActorId && !resolvedRefB64) {
+        // Sprint 1 P4.3: resolve reference image with correct priority
+        // Priority: per-shot actor reference > global fallback
+        let resolvedRefB64: string | null = null;
+
+        // 1. Per-shot actor reference (preferred)
+        if (shotActorId) {
           try {
             const actorRes = await resolveActorReference({
               actorId: shotActorId,
@@ -598,6 +614,17 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           } catch (e: any) {
             logger.warn({ runId, shotId: shot.id, err: e?.message }, "VIDEO_STAGE: actor ref resolution threw");
           }
+        }
+
+        // 2. Global fallback (only if per-shot resolution failed)
+        if (!resolvedRefB64 && input.referenceImageBase64) {
+          resolvedRefB64 = input.referenceImageBase64;
+          logger.warn({ runId, shotId: shot.id }, "VIDEO_STAGE: using global referenceImageBase64 fallback");
+        }
+
+        // 3. Fail-fast: i2v requires a reference
+        if (!resolvedRefB64) {
+          throw new Error(`VIDEO_REF_REQUIRED: shot ${shot.id} has no reference image (no actor_id resolved AND no global referenceImageBase64). i2v cannot proceed.`);
         }
 
         logger.info({ runId, shotId: shot.id, actorId: shotActorId, refType: preferredRefType, hasWorld: !!worldProfile, hasActor: !!shotActor, hasRef: !!resolvedRefB64 }, "VIDEO_STAGE: DNA context assembled");
