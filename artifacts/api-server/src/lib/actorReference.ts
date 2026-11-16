@@ -25,6 +25,7 @@ export interface ResolveActorRefInput {
   actorId: unknown;
   projectId: number;
   explicitReferenceImageBase64?: string | null;
+  preferredReferenceType?: string | null;
 }
 
 export interface ResolveActorRefResult {
@@ -79,20 +80,32 @@ export function detectImageMime(buf: Buffer): "image/png" | "image/jpeg" | null 
 // KAYAN-GUARD-30: fallback to character_references when actor columns are empty.
 // The upload endpoint POST /actors/:id/references writes there; resolveActorReference
 // must consult it or uploaded images are never used for video generation.
-async function _pickReferenceFromTable(actorId: number): Promise<string | null> {
+async function _pickReferenceFromTable(actorId: number, preferredType?: string | null): Promise<string | null> {
   try {
     const rows = await _deps.getDb()
       .select({ assetUrl: characterReferencesTable.assetUrl, isPrimary: characterReferencesTable.isPrimary, referenceType: characterReferencesTable.referenceType, id: characterReferencesTable.id })
       .from(characterReferencesTable)
       .where(eq(characterReferencesTable.actorId, actorId));
     if (!rows || rows.length === 0) return null;
-    // Prefer primary image, then any image, then anything.
-    const imgs = rows.filter((r: any) => r.referenceType === "image" || r.referenceType == null);
-    const primary = imgs.find((r: any) => r.isPrimary === true);
-    const chosen = primary || imgs[0] || rows[0];
-    if (chosen && typeof chosen.assetUrl === "string" && chosen.assetUrl.trim().length > 0) {
-      return chosen.assetUrl.trim();
+
+    // 1. Prefer the requested type (Sprint 1 DNA Wiring)
+    if (preferredType) {
+      const match = rows.find((r: any) => r.referenceType === preferredType);
+      if (match && typeof match.assetUrl === "string" && match.assetUrl.trim().length > 0) {
+        return match.assetUrl.trim();
+      }
     }
+
+    // 2. Prefer primary image
+    const primary = rows.find((r: any) => r.isPrimary === true);
+    if (primary && typeof primary.assetUrl === "string" && primary.assetUrl.trim().length > 0) {
+      return primary.assetUrl.trim();
+    }
+
+    // 3. Fallback to any valid image in the table
+    const imgs = rows.filter((r: any) => typeof r.assetUrl === "string" && r.assetUrl.trim().length > 0);
+    if (imgs.length > 0) return imgs[0].assetUrl.trim();
+    
     return null;
   } catch {
     return null;
@@ -167,11 +180,21 @@ export async function resolveActorReference(
     return { ok: false, status: 404, error: `actor ${n} not found` };
   }
 
-  // 3. Pick reference image URL (actor columns, then character_references fallback).
-  let imageUrl = pickActorImageUrl(actorRow);
+  // 3. Pick reference image URL.
+  // Sprint 1: If a specific type is requested, try character_references first.
+  let imageUrl = null;
+  if (input.preferredReferenceType) {
+    imageUrl = await _pickReferenceFromTable(n, input.preferredReferenceType);
+  }
+  // Fallback to legacy columns (canonical_face, image_url)
+  if (!imageUrl) {
+    imageUrl = pickActorImageUrl(actorRow);
+  }
+  // Final fallback: any image in character_references
   if (!imageUrl) {
     imageUrl = await _pickReferenceFromTable(n);
   }
+  
   if (!imageUrl) {
     return { ok: false, status: 400, error: `actor ${n} has no reference image` };
   }

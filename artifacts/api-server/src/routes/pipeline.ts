@@ -29,8 +29,13 @@ import {
   timelineItemsTable,
   editClipsTable,
   shotAudioAssetsTable,
+  worldProfilesTable,
+  actorsTable,
+  characterVoiceProfilesTable,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { resolveActorReference } from "../lib/actorReference";
+import { buildDnaPrompt, buildNegativePrompt, pickReferenceType } from "../lib/providers/video/dnaPromptBuilder";
 import {
   createProductionJob,
   getProductionJob,
@@ -522,6 +527,19 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         );
       }
     }
+    // Sprint 1 DNA Wiring: load World Profile once per run
+    let worldProfile: any = null;
+    try {
+      const wpRows = await db.select().from(worldProfilesTable)
+        .where(eq(worldProfilesTable.projectId, projectId)).limit(1);
+      worldProfile = wpRows[0] || null;
+      if (!worldProfile) {
+        logger.warn({ runId, projectId }, "VIDEO_STAGE: World Profile missing — prompt will omit visual context");
+      }
+    } catch (e: any) {
+      logger.warn({ runId, err: e?.message }, "VIDEO_STAGE: failed to load World Profile");
+    }
+
     const perShotVideo: Record<number, { videoPath: string; videoUrl: string }> = {};
     for (const shot of shots) {
       if (input.skipVideo) {
@@ -535,8 +553,54 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
         assertFile(vp, `existing shot ${shot.id} video`);
         perShotVideo[shot.id] = { videoPath: vp, videoUrl: shotVideo };
       } else {
-        const prompt = (shot.description || project.title || "").trim();
+        // Sprint 1 DNA Wiring: load actor via character_id (CVP)
+        let shotActor: any = null;
+        let shotActorId: number | null = null;
+        if ((shot as any).characterId) {
+          try {
+            const cvpRows = await db.select({ actorId: characterVoiceProfilesTable.actorId })
+              .from(characterVoiceProfilesTable)
+              .where(eq(characterVoiceProfilesTable.id, (shot as any).characterId))
+              .limit(1);
+            if (cvpRows[0]?.actorId) {
+              shotActorId = cvpRows[0].actorId;
+              const actorRows = await db.select().from(actorsTable)
+                .where(eq(actorsTable.id, shotActorId)).limit(1);
+              shotActor = actorRows[0] || null;
+            }
+          } catch (e: any) {
+            logger.warn({ runId, shotId: shot.id, err: e?.message }, "VIDEO_STAGE: failed to load actor DNA");
+          }
+        }
+
+        const dnaPrompt = buildDnaPrompt(shot, shotActor, worldProfile);
+        const prompt = dnaPrompt || (shot.description || project.title || "").trim();
         if (!prompt) throw new Error(`Video prompt is empty for shot ${shot.id}`);
+
+        const preferredRefType = pickReferenceType((shot as any).cameraMovement || null);
+        const dnaNegative = buildNegativePrompt(shotActor, worldProfile);
+
+        // Sprint 1 DNA Wiring: resolve the correct reference image based on preferredRefType
+        // (only if actorId exists and no explicit reference was passed)
+        let resolvedRefB64: string | null = input.referenceImageBase64 || null;
+        if (shotActorId && !resolvedRefB64) {
+          try {
+            const actorRes = await resolveActorReference({
+              actorId: shotActorId,
+              projectId,
+              preferredReferenceType: preferredRefType,
+            });
+            if (actorRes.ok === true && actorRes.referenceImageBase64) {
+              resolvedRefB64 = actorRes.referenceImageBase64;
+            } else if (actorRes.ok === false) {
+              logger.warn({ runId, shotId: shot.id, err: actorRes.error }, "VIDEO_STAGE: actor ref resolution failed");
+            }
+          } catch (e: any) {
+            logger.warn({ runId, shotId: shot.id, err: e?.message }, "VIDEO_STAGE: actor ref resolution threw");
+          }
+        }
+
+        logger.info({ runId, shotId: shot.id, actorId: shotActorId, refType: preferredRefType, hasWorld: !!worldProfile, hasActor: !!shotActor, hasRef: !!resolvedRefB64 }, "VIDEO_STAGE: DNA context assembled");
         // KAYAN-TASK-35: stage-level idempotent reuse.
         const videoDecision = await decideStageReuse({
           runId, stage: "VIDEO_GEN", shotId: shot.id,
@@ -559,7 +623,9 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
             prompt,
             shotId: shot.id,
             task: "i2v" as const,
-            referenceImageBase64: input.referenceImageBase64,
+            referenceImageBase64: resolvedRefB64,
+                ...(shotActorId ? { actorId: shotActorId } : {}),
+                ...(preferredRefType ? { preferredReferenceType: preferredRefType } : {}),
             ...(input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
             ...(input.fps != null ? { fps: input.fps } : {}),
             ...(input.durationSeconds != null ? { durationSeconds: input.durationSeconds } : {}),
