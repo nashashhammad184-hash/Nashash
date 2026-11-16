@@ -192,6 +192,8 @@ interface PipelineInput {
   skipLipSync?: boolean;
   skipVideo?: boolean;
   includeSubtitles?: boolean;
+  // Sprint 1 E2E: optional shot filter for testing single-shot runs
+  shotIds?: number[];
   // KAYAN-FACE-ROOT-02 — I2V pathway
   task?: "t2v" | "i2v";
   referenceImageBase64?: string;
@@ -296,11 +298,21 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // 3. Shots (must already exist with real duration)
     // ------------------------------------------------------------
     await beginStage("shots");
-    const shots = await db
+    let shots = await db
       .select()
       .from(shotsTable)
       .where(eq(shotsTable.projectId, projectId))
       .orderBy(asc(shotsTable.sceneNumber), asc(shotsTable.id));
+
+    // Sprint 1 E2E: optional shotIds filter for isolated testing
+    if (input.shotIds && Array.isArray(input.shotIds) && input.shotIds.length > 0) {
+      const allow = new Set(input.shotIds);
+      shots = shots.filter((s) => allow.has(s.id));
+      logger.info({ runId, original: "all", filtered: shots.length, shotIds: input.shotIds }, "PIPELINE: shotIds filter applied");
+      if (shots.length === 0) {
+        throw new Error(`PIPELINE_NO_SHOTS: shotIds filter matched 0 shots in project ${projectId}`);
+      }
+    }
     if (shots.length === 0) throw new Error("Shots stage requires at least one shot");
     await completeStage("shots", { count: shots.length, shotIds: shots.map((s) => s.id) });
 
