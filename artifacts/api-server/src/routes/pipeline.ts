@@ -35,7 +35,7 @@ import {
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { resolveActorReference } from "../lib/actorReference";
-import { buildDnaPrompt, buildNegativePrompt, pickReferenceType } from "../lib/providers/video/dnaPromptBuilder";
+import { buildDnaPromptAsync, buildNegativePrompt, pickReferenceType } from "../lib/providers/video/dnaPromptBuilder";
 import {
   createProductionJob,
   getProductionJob,
@@ -587,12 +587,15 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
           }
         }
 
-        const dnaPrompt = buildDnaPrompt(shot, shotActor, worldProfile);
-        const prompt = dnaPrompt || (shot.description || project.title || "").trim();
+        const dnaResult = await buildDnaPromptAsync(shot, shotActor, worldProfile);
+        const prompt = dnaResult.prompt || (shot.description || project.title || "").trim();
         if (!prompt) throw new Error(`Video prompt is empty for shot ${shot.id}`);
+        if (dnaResult.warnings.length > 0) {
+          logger.warn({ runId, shotId: shot.id, warnings: dnaResult.warnings }, "VIDEO_STAGE: DNA translation warnings");
+        }
 
         const preferredRefType = pickReferenceType((shot as any).cameraMovement || null);
-        const dnaNegative = buildNegativePrompt(shotActor, worldProfile);
+        const dnaNegative = dnaResult.negativePrompt || buildNegativePrompt(shotActor, worldProfile);
 
         // Sprint 1 P4.3: resolve reference image with correct priority
         // Priority: per-shot actor reference > global fallback

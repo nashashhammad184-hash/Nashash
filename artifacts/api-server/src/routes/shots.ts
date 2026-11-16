@@ -6,7 +6,7 @@ import { suggestAudio } from "../lib/voice/audioSuggestion";
 import { audioLibraryAssetsTable, shotAudioAssetsTable, actorsTable, characterVoiceProfilesTable, worldProfilesTable, characterReferencesTable, projectsTable } from "@workspace/db";
 import { mergeFields, buildResolvedText } from "../lib/voice/resolveInstruction";
 import { EMOTIONS, AUDAR_TAGS } from "../lib/voice/directorSchema";
-import { buildDnaPrompt, buildNegativePrompt, pickReferenceType, translateCamera } from "../lib/providers/video/dnaPromptBuilder";
+import { buildDnaPromptAsync, buildNegativePrompt, pickReferenceType, translateCamera } from "../lib/providers/video/dnaPromptBuilder";
 import { db, shotsTable } from "@workspace/db";
 import {
   ListProjectShotsParams, ListProjectShotsResponse,
@@ -632,10 +632,17 @@ router.get("/shots/:id/dna-preview", requireProductionAuth, async (req: Request,
   const descLen = (shot.description || "").length;
   if (descLen < 20) warnings.push("Shot description is short (" + descLen + " chars) — consider improving for better video quality");
 
-  // --- Build the prompt (same logic as pipeline) ---
-  const dnaPrompt = buildDnaPrompt(shot, actor, worldProfile);
-  const finalPrompt = dnaPrompt || (shot.description || "").trim();
-  const negativePrompt = buildNegativePrompt(actor, worldProfile);
+  // --- Build the prompt (same logic as pipeline) — async with translation ---
+  let dnaResult;
+  try {
+    dnaResult = await buildDnaPromptAsync(shot, actor, worldProfile);
+  } catch (e: any) {
+    res.status(500).json({ error: "DNA_PROMPT_FAILED", message: e?.message });
+    return;
+  }
+  const finalPrompt = dnaResult.prompt || (shot.description || "").trim();
+  const negativePrompt = dnaResult.negativePrompt || buildNegativePrompt(actor, worldProfile);
+  if (dnaResult.warnings.length > 0) warnings.push(...dnaResult.warnings);
 
   res.json({
     ok: true,
@@ -646,7 +653,8 @@ router.get("/shots/:id/dna-preview", requireProductionAuth, async (req: Request,
       final: finalPrompt,
       length: finalPrompt.length,
       breakdown: {
-        worldStyle: worldProfile?.visual_style || null,
+        worldStyle: worldProfile?.visualStyle || worldProfile?.visual_style || null,
+        worldMasterPrompt: worldProfile?.masterPrompt || worldProfile?.master_prompt || null,
         actorMaster: actor?.characterMasterPrompt || null,
         actorPhysical: actor?.physicalDescription || null,
         shotDescription: shot.description || null,
@@ -655,6 +663,7 @@ router.get("/shots/:id/dna-preview", requireProductionAuth, async (req: Request,
     },
     negativePrompt,
     referenceImage: checks.referenceImage,
+    translation: dnaResult.translation,
     warnings,
     costEstimate: "~$0.15 per 5s (UNCONFIRMED — WaveSpeed pricing may vary; no generation performed)",
     generated: false,
