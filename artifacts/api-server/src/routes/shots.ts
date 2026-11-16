@@ -3,9 +3,10 @@ import { requireProductionAuth } from "../lib/securityMiddleware";
 import { eq, asc, and } from "drizzle-orm";
 import { runDirector } from "../lib/voice/voiceDirector";
 import { suggestAudio } from "../lib/voice/audioSuggestion";
-import { audioLibraryAssetsTable, shotAudioAssetsTable } from "@workspace/db";
+import { audioLibraryAssetsTable, shotAudioAssetsTable, actorsTable, characterVoiceProfilesTable, worldProfilesTable, characterReferencesTable, projectsTable } from "@workspace/db";
 import { mergeFields, buildResolvedText } from "../lib/voice/resolveInstruction";
 import { EMOTIONS, AUDAR_TAGS } from "../lib/voice/directorSchema";
+import { buildDnaPrompt, buildNegativePrompt, pickReferenceType, translateCamera } from "../lib/providers/video/dnaPromptBuilder";
 import { db, shotsTable } from "@workspace/db";
 import {
   ListProjectShotsParams, ListProjectShotsResponse,
@@ -552,6 +553,112 @@ router.post("/shots/:id/suggest-audio", requireProductionAuth, async (req: Reque
   }
 
   res.json({ ok: true, suggestions: savedSuggestions, skipped });
+});
+
+// ============================================================
+// Sprint 1 P3: GET /api/shots/:id/dna-preview
+// Shows what WOULD be sent to WaveSpeed — without any paid generation.
+// ============================================================
+router.get("/shots/:id/dna-preview", requireProductionAuth, async (req: Request, res: Response): Promise<void> => {
+  const shotId = parseInt(String(req.params.id), 10);
+  if (isNaN(shotId)) { res.status(400).json({ error: "INVALID_SHOT_ID" }); return; }
+
+  const [shot] = await db.select().from(shotsTable).where(eq(shotsTable.id, shotId));
+  if (!shot) { res.status(404).json({ error: "SHOT_NOT_FOUND" }); return; }
+
+  const warnings: string[] = [];
+  const checks: Record<string, any> = {};
+
+  // --- World Profile ---
+  let worldProfile: any = null;
+  try {
+    const wpRows = await db.select().from(worldProfilesTable)
+      .where(eq(worldProfilesTable.projectId, shot.projectId)).limit(1);
+    worldProfile = wpRows[0] || null;
+  } catch {}
+  checks.world = { present: !!worldProfile, id: worldProfile?.id || null, name: worldProfile?.name || null };
+  if (!worldProfile) warnings.push("World Profile missing for project " + shot.projectId + " — prompt will omit visual context");
+
+  // --- Actor DNA (via CVP) ---
+  let actor: any = null;
+  let actorId: number | null = null;
+  if ((shot as any).characterId) {
+    const cvpRows = await db.select({ actorId: characterVoiceProfilesTable.actorId })
+      .from(characterVoiceProfilesTable)
+      .where(eq(characterVoiceProfilesTable.id, (shot as any).characterId))
+      .limit(1);
+    if (cvpRows[0]?.actorId) {
+      actorId = cvpRows[0].actorId;
+      const actorRows = await db.select().from(actorsTable).where(eq(actorsTable.id, actorId)).limit(1);
+      actor = actorRows[0] || null;
+    }
+  }
+  checks.actor = {
+    present: !!actor,
+    id: actorId,
+    name: actor?.name || null,
+    hasMasterPrompt: !!actor?.characterMasterPrompt,
+    hasPhysicalDesc: !!actor?.physicalDescription,
+  };
+  if (!shot.characterId) warnings.push("Shot has no character_id — no actor reference will be used");
+  else if (!actorId) warnings.push("character_id set but CVP has no actor_id — check Voice Profile linkage");
+
+  // --- Reference images available ---
+  let refImages: any[] = [];
+  if (actorId) {
+    try {
+      refImages = await db.select({
+        id: characterReferencesTable.id,
+        type: characterReferencesTable.referenceType,
+        isPrimary: characterReferencesTable.isPrimary,
+      }).from(characterReferencesTable).where(eq(characterReferencesTable.actorId, actorId));
+    } catch {}
+  }
+  const preferredRefType = pickReferenceType((shot as any).cameraMovement || null);
+  const matchRef = refImages.find((r) => r.type === preferredRefType);
+  const primaryRef = refImages.find((r) => r.isPrimary);
+  const chosenRef = matchRef || primaryRef || null;
+  checks.referenceImage = {
+    preferredType: preferredRefType,
+    availableTypes: refImages.map((r) => r.type),
+    chosenType: chosenRef?.type || null,
+    chosenId: chosenRef?.id || null,
+    source: matchRef ? "type_match" : (primaryRef ? "primary_fallback" : null),
+  };
+  if (refImages.length === 0) warnings.push("Actor has no reference images in character_references");
+  else if (!matchRef) warnings.push("No reference of type '" + preferredRefType + "' — falling back to " + (primaryRef ? "primary image" : "none"));
+
+  // --- Description length ---
+  const descLen = (shot.description || "").length;
+  if (descLen < 20) warnings.push("Shot description is short (" + descLen + " chars) — consider improving for better video quality");
+
+  // --- Build the prompt (same logic as pipeline) ---
+  const dnaPrompt = buildDnaPrompt(shot, actor, worldProfile);
+  const finalPrompt = dnaPrompt || (shot.description || "").trim();
+  const negativePrompt = buildNegativePrompt(actor, worldProfile);
+
+  res.json({
+    ok: true,
+    shotId,
+    projectId: shot.projectId,
+    checks,
+    prompt: {
+      final: finalPrompt,
+      length: finalPrompt.length,
+      breakdown: {
+        worldStyle: worldProfile?.visual_style || null,
+        actorMaster: actor?.characterMasterPrompt || null,
+        actorPhysical: actor?.physicalDescription || null,
+        shotDescription: shot.description || null,
+        camera: translateCamera((shot as any).cameraMovement) || null,
+      },
+    },
+    negativePrompt,
+    referenceImage: checks.referenceImage,
+    warnings,
+    costEstimate: "~$0.15 per 5s (UNCONFIRMED — WaveSpeed pricing may vary; no generation performed)",
+    generated: false,
+  });
 });
 
 export default router;
