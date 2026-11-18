@@ -522,23 +522,18 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
     // KAYAN-TASK-22: Full Pipeline video stage is I2V-only. Reject before
     // creating any VIDEO_GEN job — no T2V fallback, no reference-less I2V.
     if (!input.skipVideo) {
-      if (input.task !== "i2v") {
+      // Sprint 1 E2E-Fix-2: allow per-shot reference resolution.
+      // - task undefined → assume i2v (WaveSpeed supports i2v only)
+      // - task="t2v" explicitly → reject
+      // - referenceImageBase64 is resolved per-shot inside the loop (P4.3);
+      //   if no shot has a resolvable reference, the loop throws VIDEO_REF_REQUIRED.
+      if (input.task && input.task !== "i2v") {
         throw Object.assign(
           new Error(
-            "VIDEO_I2V_REQUIRED: Full Pipeline video stage requires task='i2v' " +
-            "(received " + JSON.stringify(input.task) + ")"
+            "VIDEO_T2V_UNSUPPORTED: Full Pipeline requires 'i2v'. " +
+            "Received: " + JSON.stringify(input.task)
           ),
-          { code: "VIDEO_I2V_REQUIRED" },
-        );
-      }
-      const refB64 = (input.referenceImageBase64 || "").trim();
-      if (!refB64 || refB64.length < 64) {
-        throw Object.assign(
-          new Error(
-            "I2V_REFERENCE_IMAGE_REQUIRED: Full Pipeline requires " +
-            "referenceImageBase64 (>=64 chars) when task='i2v'"
-          ),
-          { code: "I2V_REFERENCE_IMAGE_REQUIRED" },
+          { code: "VIDEO_T2V_UNSUPPORTED" },
         );
       }
     }
