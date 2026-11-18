@@ -393,7 +393,10 @@ async function executePipeline(runId: string, input: PipelineInput): Promise<voi
       let phoneDuration = 0;
       let phoneSizeBytes = 0;
 
-      if (shot.audioUrl && shot.audioUrl.startsWith('/api/storage/') && shot.audioStatus === 'PROCESSING') {
+      // Sprint 1 E2E-Fix: accept phone audio regardless of status when URL exists
+      // (PROCESSING = worker uploading, COMPLETED = ready, FAILED = stale status but URL valid)
+      if (shot.audioUrl && shot.audioUrl.startsWith('/api/storage/') && 
+          (shot.audioStatus === 'PROCESSING' || shot.audioStatus === 'COMPLETED' || shot.audioStatus === 'FAILED')) {
           try {
               phoneResolved = await resolveStorageUrlToLocal(shot.audioUrl);
               const probe = await assertRealAudioFile(phoneResolved.path, `phone audio shot ${shot.id}`);
