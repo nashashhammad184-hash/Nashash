@@ -20,6 +20,7 @@ import fs from "node:fs";
 import { eq, and } from "drizzle-orm";
 import { db, actorsTable, projectActorsTable, characterReferencesTable } from "@workspace/db";
 import { resolveStorageUrlToLocal } from "./storage/index";
+import { createSignedUrlsForKeys, isStoragePath } from "./storage/actorRefsStorage";
 
 export interface ResolveActorRefInput {
   actorId: unknown;
@@ -199,53 +200,75 @@ export async function resolveActorReference(
     return { ok: false, status: 400, error: `actor ${n} has no reference image` };
   }
 
-  // 4. Resolve to local file via storage layer.
-  let resolved: Awaited<ReturnType<typeof resolveStorageUrlToLocal>>;
-  try {
-    resolved = await _deps.resolveLocal(imageUrl);
-  } catch {
-    return { ok: false, status: 500, error: `failed to resolve actor ${n} reference image` };
+  // 4. Sprint 1 Fix: fetch image bytes (handles actor-refs + legacy buckets).
+  let imageBuf: Buffer | null = null;
+
+  if (isStoragePath(imageUrl) && imageUrl.startsWith("actors/")) {
+    // P3 uploaded refs → actor-refs bucket (WebP). Sign + fetch via Supabase.
+    try {
+      const signedMap = await createSignedUrlsForKeys([imageUrl]);
+      const signedUrl = signedMap[imageUrl];
+      if (!signedUrl) {
+        return { ok: false, status: 500, error: `failed to sign actor ${n} reference URL` };
+      }
+      const r = await fetch(signedUrl);
+      if (!r.ok) {
+        return { ok: false, status: 500, error: `failed to download actor ${n} reference (HTTP ${r.status})` };
+      }
+      imageBuf = Buffer.from(await r.arrayBuffer());
+    } catch (e: any) {
+      return { ok: false, status: 500, error: `failed to fetch actor ${n} reference: ${e?.message || "unknown"}` };
+    }
+  } else {
+    // Legacy path (uploads/*, /api/storage/*)
+    let resolved: Awaited<ReturnType<typeof resolveStorageUrlToLocal>>;
+    try {
+      resolved = await _deps.resolveLocal(imageUrl);
+    } catch {
+      return { ok: false, status: 500, error: `failed to resolve actor ${n} reference image` };
+    }
+    try {
+      imageBuf = _deps.readFile(resolved.path);
+    } finally {
+      try { await resolved.cleanup(); } catch { /* swallow */ }
+    }
   }
 
-  try {
-    // 5. Validate file size.
-    let size: number;
-    try {
-      const st = _deps.statFile(resolved.path);
-      size = st.size;
-    } catch {
-      return { ok: false, status: 500, error: `actor ${n} reference image is not readable` };
-    }
-    if (size < MIN_IMAGE_BYTES) {
-      return { ok: false, status: 400, error: `actor ${n} reference image too small (${size} bytes)` };
-    }
-    if (size > MAX_IMAGE_BYTES) {
-      return { ok: false, status: 400, error: `actor ${n} reference image too large (${size} bytes)` };
-    }
-
-    // 6. Read + validate type.
-    let buf: Buffer;
-    try {
-      buf = _deps.readFile(resolved.path);
-    } catch {
-      return { ok: false, status: 500, error: `failed to read actor ${n} reference image` };
-    }
-    const mime = detectImageMime(buf);
-    if (!mime) {
-      return { ok: false, status: 400, error: `actor ${n} reference image is not PNG/JPEG` };
-    }
-
-    const b64 = buf.toString("base64");
-    return {
-      ok: true,
-      task: "i2v",
-      referenceImageBase64: b64,
-      actorId: n,
-      source: "actor",
-    };
-  } finally {
-    try { await resolved.cleanup(); } catch { /* swallow */ }
+  if (!imageBuf || imageBuf.length === 0) {
+    return { ok: false, status: 400, error: `actor ${n} reference is empty` };
   }
+
+  // 5. Validate size.
+  if (imageBuf.length < MIN_IMAGE_BYTES) {
+    return { ok: false, status: 400, error: `actor ${n} reference image too small (${imageBuf.length} bytes)` };
+  }
+  if (imageBuf.length > MAX_IMAGE_BYTES) {
+    return { ok: false, status: 400, error: `actor ${n} reference image too large (${imageBuf.length} bytes)` };
+  }
+
+  // 6. Normalize to JPEG/PNG (Hunyuan accepts both; P3 uploads are WebP).
+  let finalBuf = imageBuf;
+  try {
+    const sharp = (await import("sharp")).default;
+    const meta = await sharp(imageBuf).metadata();
+    if (meta.format && meta.format !== "jpeg" && meta.format !== "png") {
+      finalBuf = await sharp(imageBuf).jpeg({ quality: 92 }).toBuffer();
+    }
+  } catch (e) {
+    const m = detectImageMime(imageBuf);
+    if (!m) {
+      return { ok: false, status: 400, error: `actor ${n} reference is not PNG/JPEG (sharp unavailable)` };
+    }
+  }
+
+  const b64 = finalBuf.toString("base64");
+  return {
+    ok: true,
+    task: "i2v",
+    referenceImageBase64: b64,
+    actorId: n,
+    source: "actor",
+  };
 }
 
 // ============================================================
